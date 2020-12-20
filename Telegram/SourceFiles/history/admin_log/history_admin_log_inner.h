@@ -10,10 +10,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_element.h"
 #include "history/admin_log/history_admin_log_item.h"
 #include "history/admin_log/history_admin_log_section.h"
-#include "ui/widgets/tooltip.h"
 #include "ui/rp_widget.h"
+#include "ui/effects/animations.h"
+#include "ui/widgets/tooltip.h"
 #include "mtproto/sender.h"
 #include "base/timer.h"
+
+namespace Data {
+class CloudImageView;
+} // namespace Data
+
+namespace Main {
+class Session;
+} // namespace Main
 
 namespace HistoryView {
 class Element;
@@ -28,7 +37,7 @@ class PopupMenu;
 } // namespace Ui
 
 namespace Window {
-class Controller;
+class SessionController;
 } // namespace Window
 
 namespace AdminLog {
@@ -39,19 +48,20 @@ class InnerWidget final
 	: public Ui::RpWidget
 	, public Ui::AbstractTooltipShower
 	, public HistoryView::ElementDelegate
-	, private MTP::Sender
 	, private base::Subscriber {
 public:
 	InnerWidget(
 		QWidget *parent,
-		not_null<Window::Controller*> controller,
+		not_null<Window::SessionController*> controller,
 		not_null<ChannelData*> channel);
 
-	base::Observable<void> showSearchSignal;
-	base::Observable<int> scrollToSignal;
-	base::Observable<void> cancelledSignal;
+	[[nodiscard]] Main::Session &session() const;
 
-	not_null<ChannelData*> channel() const {
+	[[nodiscard]] rpl::producer<> showSearchSignal() const;
+	[[nodiscard]] rpl::producer<int> scrollToSignal() const;
+	[[nodiscard]] rpl::producer<> cancelSignal() const;
+
+	[[nodiscard]] not_null<ChannelData*> channel() const {
 		return _channel;
 	}
 
@@ -74,20 +84,42 @@ public:
 	// Ui::AbstractTooltipShower interface.
 	QString tooltipText() const override;
 	QPoint tooltipPos() const override;
+	bool tooltipWindowActive() const override;
 
 	// HistoryView::ElementDelegate interface.
 	HistoryView::Context elementContext() override;
 	std::unique_ptr<HistoryView::Element> elementCreate(
-		not_null<HistoryMessage*> message) override;
+		not_null<HistoryMessage*> message,
+		HistoryView::Element *replacing = nullptr) override;
 	std::unique_ptr<HistoryView::Element> elementCreate(
-		not_null<HistoryService*> message) override;
+		not_null<HistoryService*> message,
+		HistoryView::Element *replacing = nullptr) override;
 	bool elementUnderCursor(
 		not_null<const HistoryView::Element*> view) override;
-	void elementAnimationAutoplayAsync(
-		not_null<const HistoryView::Element*> view) override;
-	TimeMs elementHighlightTime(
+	crl::time elementHighlightTime(
 		not_null<const HistoryView::Element*> element) override;
 	bool elementInSelectionMode() override;
+	bool elementIntersectsRange(
+		not_null<const HistoryView::Element*> view,
+		int from,
+		int till) override;
+	void elementStartStickerLoop(
+		not_null<const HistoryView::Element*> view) override;
+	void elementShowPollResults(
+		not_null<PollData*> poll,
+		FullMsgId context) override;
+	void elementShowTooltip(
+		const TextWithEntities &text,
+		Fn<void()> hiddenCallback) override;
+	bool elementIsGifPaused() override;
+	bool elementHideReply(
+		not_null<const HistoryView::Element*> view) override;
+	bool elementShownUnread(
+		not_null<const HistoryView::Element*> view) override;
+	void elementSendBotCommand(
+		const QString &command,
+		const FullMsgId &context) override;
+	void elementHandleViaClick(not_null<UserData*> bot) override;
 
 	~InnerWidget();
 
@@ -143,19 +175,19 @@ private:
 	QPoint mapPointToItem(QPoint point, const Element *view) const;
 
 	void showContextMenu(QContextMenuEvent *e, bool showFromTouch = false);
-	void savePhotoToFile(PhotoData *photo);
-	void saveDocumentToFile(DocumentData *document);
-	void copyContextImage(PhotoData *photo);
+	void savePhotoToFile(not_null<PhotoData*> photo);
+	void saveDocumentToFile(not_null<DocumentData*> document);
+	void copyContextImage(not_null<PhotoData*> photo);
 	void showStickerPackInfo(not_null<DocumentData*> document);
 	void cancelContextDownload(not_null<DocumentData*> document);
 	void showContextInFolder(not_null<DocumentData*> document);
 	void openContextGif(FullMsgId itemId);
 	void copyContextText(FullMsgId itemId);
 	void copySelectedText();
-	TextWithEntities getSelectedText() const;
+	TextForMimeData getSelectedText() const;
 	void suggestRestrictUser(not_null<UserData*> user);
-	void restrictUser(not_null<UserData*> user, const MTPChannelBannedRights &oldRights, const MTPChannelBannedRights &newRights);
-	void restrictUserDone(not_null<UserData*> user, const MTPChannelBannedRights &rights);
+	void restrictUser(not_null<UserData*> user, const MTPChatBannedRights &oldRights, const MTPChatBannedRights &newRights);
+	void restrictUserDone(not_null<UserData*> user, const MTPChatBannedRights &rights);
 
 	void requestAdmins();
 	void checkPreloadMore();
@@ -190,7 +222,7 @@ private:
 	// for each found userpic (from the top to the bottom) using enumerateItems() method.
 	//
 	// Method has "bool (*Method)(not_null<Element*> view, int userpicTop)" signature
-	// if it returns false the enumeration stops immidiately.
+	// if it returns false the enumeration stops immediately.
 	template <typename Method>
 	void enumerateUserpics(Method method);
 
@@ -198,16 +230,22 @@ private:
 	// for each found date element (from the bottom to the top) using enumerateItems() method.
 	//
 	// Method has "bool (*Method)(not_null<HistoryItem*> item, int itemtop, int dateTop)" signature
-	// if it returns false the enumeration stops immidiately.
+	// if it returns false the enumeration stops immediately.
 	template <typename Method>
 	void enumerateDates(Method method);
 
-	not_null<Window::Controller*> _controller;
-	not_null<ChannelData*> _channel;
-	not_null<History*> _history;
+	const not_null<Window::SessionController*> _controller;
+	const not_null<ChannelData*> _channel;
+	const not_null<History*> _history;
+	MTP::Sender _api;
+
 	std::vector<OwnedItem> _items;
-	std::map<uint64, not_null<Element*>> _itemsByIds;
-	std::map<not_null<HistoryItem*>, not_null<Element*>, std::less<>> _itemsByData;
+	std::set<uint64> _eventIds;
+	std::map<not_null<const HistoryItem*>, not_null<Element*>> _itemsByData;
+	base::flat_set<FullMsgId> _animatedStickersPlayed;
+	base::flat_map<
+		not_null<PeerData*>,
+		std::shared_ptr<Data::CloudImageView>> _userpics, _userpicsCache;
 	int _itemsTop = 0;
 	int _itemsWidth = 0;
 	int _itemsHeight = 0;
@@ -219,7 +257,7 @@ private:
 	int _visibleTopFromItem = 0;
 
 	bool _scrollDateShown = false;
-	Animation _scrollDateOpacity;
+	Ui::Animations::Simple _scrollDateOpacity;
 	SingleQueuedInvokation _scrollDateCheck;
 	base::Timer _scrollDateHideTimer;
 	Element *_scrollDateLastItem = nullptr;
@@ -235,7 +273,7 @@ private:
 	bool _upLoaded = true;
 	bool _downLoaded = true;
 	bool _filterChanged = false;
-	Text _emptyText;
+	Ui::Text::String _emptyText;
 
 	MouseAction _mouseAction = MouseAction::None;
 	TextSelectType _mouseSelectType = TextSelectType::Letters;
@@ -262,7 +300,9 @@ private:
 	std::vector<not_null<UserData*>> _adminsCanEdit;
 	Fn<void(FilterValue &&filter)> _showFilterCallback;
 
-	std::shared_ptr<LocalIdManager> _idManager;
+	rpl::event_stream<> _showSearchSignal;
+	rpl::event_stream<int> _scrollToSignal;
+	rpl::event_stream<> _cancelSignal;
 
 };
 

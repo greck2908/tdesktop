@@ -20,13 +20,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/dropdown_menu.h"
 #include "ui/wrap/fade_wrap.h"
 #include "ui/search_field_controller.h"
+#include "core/application.h"
 #include "calls/calls_instance.h"
-#include "window/window_controller.h"
+#include "core/shortcuts.h"
+#include "window/window_session_controller.h"
 #include "window/window_slide_animation.h"
 #include "window/window_peer_menu.h"
 #include "boxes/peer_list_box.h"
-#include "auth_session.h"
+#include "boxes/confirm_box.h"
+#include "main/main_session.h"
+#include "mtproto/mtproto_config.h"
 #include "data/data_session.h"
+#include "data/data_changes.h"
+#include "data/data_user.h"
 #include "mainwidget.h"
 #include "lang/lang_keys.h"
 #include "styles/style_info.h"
@@ -44,13 +50,13 @@ const style::InfoTopBar &TopBarStyle(Wrap wrap) {
 } // namespace
 
 struct WrapWidget::StackItem {
-	std::unique_ptr<ContentMemento> section;
-//	std::unique_ptr<ContentMemento> anotherTab;
+	std::shared_ptr<ContentMemento> section;
+//	std::shared_ptr<ContentMemento> anotherTab;
 };
 
 WrapWidget::WrapWidget(
 	QWidget *parent,
-	not_null<Window::Controller*> window,
+	not_null<Window::SessionController*> window,
 	Wrap wrap,
 	not_null<Memento*> memento)
 : SectionWidget(parent, window)
@@ -76,8 +82,21 @@ WrapWidget::WrapWidget(
 	restoreHistoryStack(memento->takeStack());
 }
 
+void WrapWidget::setupShortcuts() {
+	Shortcuts::Requests(
+	) | rpl::filter([=] {
+		return requireTopBarSearch();
+	}) | rpl::start_with_next([=](not_null<Shortcuts::Request*> request) {
+		using Command = Shortcuts::Command;
+		request->check(Command::Search) && request->handle([=] {
+			_topBar->showSearch();
+			return true;
+		});
+	}, lifetime());
+}
+
 void WrapWidget::restoreHistoryStack(
-		std::vector<std::unique_ptr<ContentMemento>> stack) {
+		std::vector<std::shared_ptr<ContentMemento>> stack) {
 	Expects(!stack.empty());
 	Expects(!hasStackHistory());
 
@@ -115,15 +134,15 @@ void WrapWidget::startInjectingActivePeerProfiles() {
 void WrapWidget::injectActiveProfile(Dialogs::Key key) {
 	if (const auto peer = key.peer()) {
 		injectActivePeerProfile(peer);
-	} else if (const auto feed = key.feed()) {
-		injectActiveFeedProfile(feed);
+	//} else if (const auto feed = key.feed()) { // #feed
+	//	injectActiveFeedProfile(feed);
 	}
 }
 
 void WrapWidget::injectActivePeerProfile(not_null<PeerData*> peer) {
-	const auto firstPeerId = hasStackHistory()
-		? _historyStack.front().section->peerId()
-		: _controller->peerId();
+	const auto firstPeer = hasStackHistory()
+		? _historyStack.front().section->peer()
+		: _controller->peer();
 	const auto firstSectionType = hasStackHistory()
 		? _historyStack.front().section->section().type()
 		: _controller->section().type();
@@ -135,41 +154,41 @@ void WrapWidget::injectActivePeerProfile(not_null<PeerData*> peer) {
 			? _historyStack.front().section->section().mediaType()
 			: _controller->section().mediaType();
 	}();
-	const auto expectedType = peer->isSelf()
+	const auto expectedType = peer->sharedMediaInfo()
 		? Section::Type::Media
 		: Section::Type::Profile;
-	const auto expectedMediaType = peer->isSelf()
+	const auto expectedMediaType = peer->sharedMediaInfo()
 		? Section::MediaType::Photo
 		: Section::MediaType::kCount;
 	if (firstSectionType != expectedType
 		|| firstSectionMediaType != expectedMediaType
-		|| firstPeerId != peer->id) {
-		auto section = peer->isSelf()
+		|| firstPeer != peer) {
+		auto section = peer->sharedMediaInfo()
 			? Section(Section::MediaType::Photo)
 			: Section(Section::Type::Profile);
 		injectActiveProfileMemento(std::move(
-			Memento(peer->id, section).takeStack().front()));
+			Memento(peer, section).takeStack().front()));
 	}
 }
-
-void WrapWidget::injectActiveFeedProfile(not_null<Data::Feed*> feed) {
-	const auto firstFeed = hasStackHistory()
-		? _historyStack.front().section->feed()
-		: _controller->feed();
-	const auto firstSectionType = hasStackHistory()
-		? _historyStack.front().section->section().type()
-		: _controller->section().type();
-	const auto expectedType = Section::Type::Profile;
-	if (firstSectionType != expectedType
-		|| firstFeed != feed) {
-		auto section = Section(Section::Type::Profile);
-		injectActiveProfileMemento(std::move(
-			Memento(feed, section).takeStack().front()));
-	}
-}
+// // #feed
+//void WrapWidget::injectActiveFeedProfile(not_null<Data::Feed*> feed) {
+//	const auto firstFeed = hasStackHistory()
+//		? _historyStack.front().section->feed()
+//		: _controller->feed();
+//	const auto firstSectionType = hasStackHistory()
+//		? _historyStack.front().section->section().type()
+//		: _controller->section().type();
+//	const auto expectedType = Section::Type::Profile;
+//	if (firstSectionType != expectedType
+//		|| firstFeed != feed) {
+//		auto section = Section(Section::Type::Profile);
+//		injectActiveProfileMemento(std::move(
+//			Memento(feed, section).takeStack().front()));
+//	}
+//}
 
 void WrapWidget::injectActiveProfileMemento(
-		std::unique_ptr<ContentMemento> memento) {
+		std::shared_ptr<ContentMemento> memento) {
 	auto injected = StackItem();
 	injected.section = std::move(memento);
 	_historyStack.insert(
@@ -182,7 +201,7 @@ void WrapWidget::injectActiveProfileMemento(
 }
 
 std::unique_ptr<Controller> WrapWidget::createController(
-		not_null<Window::Controller*> window,
+		not_null<Window::SessionController*> window,
 		not_null<ContentMemento*> memento) {
 	auto result = std::make_unique<Controller>(
 		this,
@@ -197,9 +216,11 @@ Key WrapWidget::key() const {
 
 Dialogs::RowDescriptor WrapWidget::activeChat() const {
 	if (const auto peer = key().peer()) {
-		return Dialogs::RowDescriptor(App::history(peer), FullMsgId());
-	} else if (const auto feed = key().feed()) {
-		return Dialogs::RowDescriptor(feed, FullMsgId());
+		return Dialogs::RowDescriptor(peer->owner().history(peer), FullMsgId());
+	//} else if (const auto feed = key().feed()) { // #feed
+	//	return Dialogs::RowDescriptor(feed, FullMsgId());
+	} else if (key().settingsSelf() || key().poll()) {
+		return Dialogs::RowDescriptor();
 	}
 	Unexpected("Owner in WrapWidget::activeChat().");
 }
@@ -209,8 +230,8 @@ Dialogs::RowDescriptor WrapWidget::activeChat() const {
 //void WrapWidget::createTabs() {
 //	_topTabs.create(this, st::infoTabs);
 //	auto sections = QStringList();
-//	sections.push_back(lang(lng_profile_info_section).toUpper());
-//	sections.push_back(lang(lng_info_tab_media).toUpper());
+//	sections.push_back(tr::lng_profile_info_section(tr::now).toUpper());
+//	sections.push_back(tr::lng_info_tab_media(tr::now).toUpper());
 //	_topTabs->setSections(sections);
 //	_topTabs->setActiveSection(static_cast<int>(_tab));
 //	_topTabs->finishAnimating();
@@ -335,7 +356,11 @@ void WrapWidget::createTopBar() {
 	auto selectedItems = _topBar
 		? _topBar->takeSelectedItems()
 		: SelectedItems(Section::MediaType::kCount);
-	_topBar.create(this, TopBarStyle(wrapValue), std::move(selectedItems));
+	_topBar.create(
+		this,
+		_controller.get(),
+		TopBarStyle(wrapValue),
+		std::move(selectedItems));
 	_topBar->cancelSelectionRequests(
 	) | rpl::start_with_next([this] {
 		_content->cancelSelection();
@@ -348,8 +373,8 @@ void WrapWidget::createTopBar() {
 	if (wrapValue == Wrap::Narrow || hasStackHistory()) {
 		_topBar->enableBackButton();
 		_topBar->backRequest(
-		) | rpl::start_with_next([this] {
-			_controller->showBackFromStack();
+		) | rpl::start_with_next([=] {
+			checkBeforeClose([=] { _controller->showBackFromStack(); });
 		}, _topBar->lifetime());
 	} else if (wrapValue == Wrap::Side) {
 		auto close = _topBar->addButton(
@@ -366,21 +391,32 @@ void WrapWidget::createTopBar() {
 				_topBar,
 				st::infoLayerTopBarClose));
 		close->addClickHandler([this] {
-			_controller->parentController()->hideSpecialLayer();
+			checkBeforeClose([=] {
+				_controller->parentController()->hideSpecialLayer();
+			});
 		});
 	} else if (requireTopBarSearch()) {
 		auto search = _controller->searchFieldController();
 		Assert(search != nullptr);
+		setupShortcuts();
 		_topBar->createSearchView(
 			search,
 			_controller->searchEnabledByContent(),
 			_controller->takeSearchStartsFocused());
 	}
-	if (_controller->section().type() == Section::Type::Profile
+	const auto section = _controller->section();
+	if (section.type() == Section::Type::Profile
 		&& (wrapValue != Wrap::Side || hasStackHistory())) {
-		addProfileMenuButton();
+		addTopBarMenuButton();
 		addProfileCallsButton();
 //		addProfileNotificationsButton();
+	} else if (section.type() == Section::Type::Settings
+		&& (section.settingsType() == Section::SettingsType::Main
+			|| section.settingsType() == Section::SettingsType::Chat)) {
+		addTopBarMenuButton();
+	} else if (section.type() == Section::Type::Settings
+		&& section.settingsType() == Section::SettingsType::Information) {
+		addContentSaveButton();
 	}
 
 	_topBar->lower();
@@ -389,7 +425,22 @@ void WrapWidget::createTopBar() {
 	_topBar->show();
 }
 
-void WrapWidget::addProfileMenuButton() {
+void WrapWidget::checkBeforeClose(Fn<void()> close) {
+	const auto confirmed = [=] {
+		Ui::hideLayer();
+		close();
+	};
+	if (_controller->canSaveChangesNow()) {
+		Ui::show(Box<ConfirmBox>(
+			tr::lng_settings_close_sure(tr::now),
+			tr::lng_close(tr::now),
+			confirmed));
+	} else {
+		confirmed();
+	}
+}
+
+void WrapWidget::addTopBarMenuButton() {
 	Expects(_topBar != nullptr);
 
 	_topBarMenuToggle.reset(_topBar->addButton(
@@ -399,8 +450,29 @@ void WrapWidget::addProfileMenuButton() {
 				? st::infoLayerTopBarMenu
 				: st::infoTopBarMenu))));
 	_topBarMenuToggle->addClickHandler([this] {
-		showProfileMenu();
+		showTopBarMenu();
 	});
+}
+
+void WrapWidget::addContentSaveButton() {
+	Expects(_topBar != nullptr);
+
+	_topBar->addButtonWithVisibility(
+		base::make_unique_q<Ui::IconButton>(
+			_topBar,
+			(wrap() == Wrap::Layer
+				? st::infoLayerTopBarSave
+				: st::infoTopBarSave)),
+		_controller->canSaveChanges()
+	)->addClickHandler([=] {
+		_content->saveChanges(crl::guard(_content.data(), [=] {
+			_controller->showBackFromStack();
+		}));
+	});
+}
+
+bool WrapWidget::closeByOutsideClick() const {
+	return !_controller->canSaveChangesNow();
 }
 
 void WrapWidget::addProfileCallsButton() {
@@ -408,13 +480,15 @@ void WrapWidget::addProfileCallsButton() {
 
 	const auto peer = key().peer();
 	const auto user = peer ? peer->asUser() : nullptr;
-	if (!user || user->isSelf() || !Global::PhoneCallsEnabled()) {
+	if (!user
+		|| user->sharedMediaInfo()
+		|| !user->session().serverConfig().phoneCallsEnabled.current()) {
 		return;
 	}
 
-	Notify::PeerUpdateValue(
+	user->session().changes().peerFlagsValue(
 		user,
-		Notify::PeerUpdate::Flag::UserHasCalls
+		Data::PeerUpdate::Flag::HasCalls
 	) | rpl::filter([=] {
 		return user->hasCalls();
 	}) | rpl::take(
@@ -427,7 +501,7 @@ void WrapWidget::addProfileCallsButton() {
 					? st::infoLayerTopBarCall
 					: st::infoTopBarCall))
 		)->addClickHandler([=] {
-			Calls::Current().startOutgoingCall(user);
+			Core::App().calls().startOutgoingCall(user, false);
 		});
 	}, _topBar->lifetime());
 
@@ -449,11 +523,11 @@ void WrapWidget::addProfileNotificationsButton() {
 			(wrap() == Wrap::Layer
 				? st::infoLayerTopBarNotifications
 				: st::infoTopBarNotifications)));
-	notifications->addClickHandler([peer] {
-		const auto muteForSeconds = Auth().data().notifyIsMuted(peer)
+	notifications->addClickHandler([=] {
+		const auto muteForSeconds = peer->owner().notifyIsMuted(peer)
 			? 0
 			: Data::NotifySettings::kDefaultMutePeriod;
-		Auth().data().updateNotifySettings(peer, muteForSeconds);
+		peer->owner().updateNotifySettings(peer, muteForSeconds);
 	});
 	Profile::NotificationsEnabledValue(
 		peer
@@ -469,7 +543,7 @@ void WrapWidget::addProfileNotificationsButton() {
 	}, notifications->lifetime());
 }
 
-void WrapWidget::showProfileMenu() {
+void WrapWidget::showTopBarMenu() {
 	if (_topBarMenu) {
 		_topBarMenu->hideAnimated(
 			Ui::InnerDropdown::HideOption::IgnoreShow);
@@ -501,17 +575,30 @@ void WrapWidget::showProfileMenu() {
 		return _topBarMenu->addAction(text, std::move(callback));
 	};
 	if (const auto peer = key().peer()) {
-		Window::FillPeerMenu(
+		Window::FillDialogsEntryMenu(
 			_controller->parentController(),
-			peer,
-			addAction,
-			Window::PeerMenuSource::Profile);
-	} else if (const auto feed = key().feed()) {
-		Window::FillFeedMenu(
+			Dialogs::EntryState{
+				.key = peer->owner().history(peer),
+				.section = Dialogs::EntryState::Section::Profile,
+			},
+			addAction);
+	//} else if (const auto feed = key().feed()) { // #feed
+	//	Window::FillFeedMenu(
+	//		_controller->parentController(),
+	//		feed,
+	//		addAction,
+	//		Window::PeerMenuSource::Profile);
+	} else if (const auto self = key().settingsSelf()) {
+		const auto showOther = [=](::Settings::Type type) {
+			const auto controller = _controller.get();
+			_topBarMenu = nullptr;
+			controller->showSettings(type);
+		};
+		::Settings::FillMenu(
 			_controller->parentController(),
-			feed,
-			addAction,
-			Window::PeerMenuSource::Profile);
+			_controller->section().settingsType(),
+			showOther,
+			addAction);
 	} else {
 		_topBarMenu = nullptr;
 		return;
@@ -564,7 +651,16 @@ not_null<Ui::RpWidget*> WrapWidget::topWidget() const {
 }
 
 void WrapWidget::showContent(object_ptr<ContentWidget> content) {
-	_content = std::move(content);
+	if (auto old = std::exchange(_content, std::move(content))) {
+		old->hide();
+
+		// Content destructor may invoke closeBox() that will try to
+		// start layer animation. If we won't detach old content from
+		// its parent WrapWidget layer animation will be started with a
+		// partially destructed grand-child widget and result in a crash.
+		old->setParent(nullptr);
+		old.destroy();
+	}
 	_content->show();
 	_additionalScroll = 0;
 	//_anotherTabMemento = nullptr;
@@ -616,13 +712,13 @@ rpl::producer<SelectedItems> WrapWidget::selectedListValue() const {
 
 // Was done for top level tabs support.
 //
-//std::unique_ptr<ContentMemento> WrapWidget::createTabMemento(
+//std::shared_ptr<ContentMemento> WrapWidget::createTabMemento(
 //		Tab tab) {
 //	switch (tab) {
-//	case Tab::Profile: return std::make_unique<Profile::Memento>(
+//	case Tab::Profile: return std::make_shared<Profile::Memento>(
 //		_controller->peerId(),
 //		_controller->migratedPeerId());
-//	case Tab::Media: return std::make_unique<Media::Memento>(
+//	case Tab::Media: return std::make_shared<Media::Memento>(
 //		_controller->peerId(),
 //		_controller->migratedPeerId(),
 //		Media::Type::Photo);
@@ -788,8 +884,8 @@ void WrapWidget::highlightTopBar() {
 	}
 }
 
-std::unique_ptr<Window::SectionMemento> WrapWidget::createMemento() {
-	auto stack = std::vector<std::unique_ptr<ContentMemento>>();
+std::shared_ptr<Window::SectionMemento> WrapWidget::createMemento() {
+	auto stack = std::vector<std::shared_ptr<ContentMemento>>();
 	stack.reserve(_historyStack.size() + 1);
 	for (auto &stackItem : base::take(_historyStack)) {
 		stack.push_back(std::move(stackItem.section));
@@ -799,7 +895,7 @@ std::unique_ptr<Window::SectionMemento> WrapWidget::createMemento() {
 	// We're not in valid state anymore and supposed to be destroyed.
 	_controller = nullptr;
 
-	return std::make_unique<Memento>(std::move(stack));
+	return std::make_shared<Memento>(std::move(stack));
 }
 
 rpl::producer<int> WrapWidget::desiredHeightValue() const {
@@ -817,9 +913,9 @@ bool WrapWidget::returnToFirstStackFrame(
 	if (!hasStackHistory()) {
 		return false;
 	}
-	auto firstPeerId = _historyStack.front().section->peerId();
+	auto firstPeer = _historyStack.front().section->peer();
 	auto firstSection = _historyStack.front().section->section();
-	if (firstPeerId == memento->peerId()
+	if (firstPeer == memento->peer()
 		&& firstSection.type() == memento->section().type()
 		&& firstSection.type() == Section::Type::Profile) {
 		_historyStack.resize(1);
@@ -915,9 +1011,9 @@ void WrapWidget::resizeEvent(QResizeEvent *e) {
 }
 
 void WrapWidget::keyPressEvent(QKeyEvent *e) {
-	if (e->key() == Qt::Key_Escape) {
+	if (e->key() == Qt::Key_Escape || e->key() == Qt::Key_Back) {
 		if (hasStackHistory() || wrap() != Wrap::Layer) {
-			_controller->showBackFromStack();
+			checkBeforeClose([=] { _controller->showBackFromStack(); });
 			return;
 		}
 	}
@@ -932,12 +1028,12 @@ void WrapWidget::updateContentGeometry() {
 	}
 }
 
-bool WrapWidget::wheelEventFromFloatPlayer(QEvent *e) {
-	return _content->wheelEventFromFloatPlayer(e);
+bool WrapWidget::floatPlayerHandleWheelEvent(QEvent *e) {
+	return _content->floatPlayerHandleWheelEvent(e);
 }
 
-QRect WrapWidget::rectForFloatPlayer() const {
-	return _content->rectForFloatPlayer();
+QRect WrapWidget::floatPlayerAvailableRect() {
+	return _content->floatPlayerAvailableRect();
 }
 
 object_ptr<Ui::RpWidget> WrapWidget::createTopBarSurrogate(
@@ -946,14 +1042,14 @@ object_ptr<Ui::RpWidget> WrapWidget::createTopBarSurrogate(
 		Assert(_topBar != nullptr);
 
 		auto result = object_ptr<Ui::AbstractButton>(parent);
-		result->addClickHandler([weak = make_weak(this)]{
+		result->addClickHandler([weak = Ui::MakeWeak(this)]{
 			if (weak) {
 				weak->_controller->showBackFromStack();
 			}
 		});
 		result->setGeometry(_topBar->geometry());
 		result->show();
-		return std::move(result);
+		return result;
 	}
 	return nullptr;
 }

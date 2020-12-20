@@ -11,8 +11,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/sender.h"
 #include "styles/style_widgets.h"
 
+#include <QtCore/QTimer>
+
 class ConfirmBox;
 class PeerListBox;
+
+namespace Window {
+class SessionNavigation;
+} // namespace Window
+
+namespace Main {
+class Session;
+} // namespace Main
 
 namespace Ui {
 class FlatLabel;
@@ -28,17 +38,33 @@ class LinkButton;
 class UserpicButton;
 } // namespace Ui
 
+constexpr auto kMaxBioLength = 70;
+
 enum class PeerFloodType {
 	Send,
 	InviteGroup,
 	InviteChannel,
 };
-QString PeerFloodErrorText(PeerFloodType type);
 
-class AddContactBox : public BoxContent, public RPCSender {
+[[nodiscard]] style::InputField CreateBioFieldStyle();
+
+[[nodiscard]] QString PeerFloodErrorText(
+	not_null<Main::Session*> session,
+	PeerFloodType type);
+void ShowAddParticipantsError(
+	const QString &error,
+	not_null<PeerData*> chat,
+	const std::vector<not_null<UserData*>> &users);
+
+class AddContactBox : public Ui::BoxContent {
 public:
-	AddContactBox(QWidget*, QString fname = QString(), QString lname = QString(), QString phone = QString());
-	AddContactBox(QWidget*, UserData *user);
+	AddContactBox(QWidget*, not_null<Main::Session*> session);
+	AddContactBox(
+		QWidget*,
+		not_null<Main::Session*> session,
+		QString fname,
+		QString lname,
+		QString phone);
 
 protected:
 	void prepare() override;
@@ -53,12 +79,8 @@ private:
 	void retry();
 	void save();
 	void updateButtons();
-	void onImportDone(const MTPcontacts_ImportedContacts &res);
 
-	void onSaveUserDone(const MTPcontacts_ImportedContacts &res);
-	bool onSaveUserFail(const RPCError &e);
-
-	UserData *_user = nullptr;
+	const not_null<Main::Session*> _session;
 
 	object_ptr<Ui::InputField> _first;
 	object_ptr<Ui::InputField> _last;
@@ -74,9 +96,19 @@ private:
 
 };
 
-class GroupInfoBox : public BoxContent, private MTP::Sender {
+class GroupInfoBox : public Ui::BoxContent {
 public:
-	GroupInfoBox(QWidget*, CreatingGroupType creating, bool fromTypeChoose);
+	enum class Type {
+		Group,
+		Channel,
+		Megagroup,
+	};
+	GroupInfoBox(
+		QWidget*,
+		not_null<Window::SessionNavigation*> navigation,
+		Type type,
+		const QString &title = QString(),
+		Fn<void(not_null<ChannelData*>)> channelDone = nullptr);
 
 protected:
 	void prepare() override;
@@ -92,10 +124,13 @@ private:
 
 	void descriptionResized();
 	void updateMaxHeight();
-	void updateSelected(const QPoint &cursorGlobalPosition);
 
-	CreatingGroupType _creating;
-	bool _fromTypeChoose = false;
+	const not_null<Window::SessionNavigation*> _navigation;
+	MTP::Sender _api;
+
+	Type _type = Type::Group;
+	QString _initialTitle;
+	Fn<void(not_null<ChannelData*>)> _channelDone;
 
 	object_ptr<Ui::UserpicButton> _photo = { nullptr };
 	object_ptr<Ui::InputField> _title = { nullptr };
@@ -107,9 +142,15 @@ private:
 
 };
 
-class SetupChannelBox : public BoxContent, public RPCSender {
+class SetupChannelBox final
+	: public Ui::BoxContent
+	, private base::Subscriber {
 public:
-	SetupChannelBox(QWidget*, ChannelData *channel, bool existing = false);
+	SetupChannelBox(
+		QWidget*,
+		not_null<Window::SessionNavigation*> navigation,
+		not_null<ChannelData*> channel,
+		bool existing = false);
 
 	void setInnerFocus() override;
 
@@ -130,30 +171,32 @@ private:
 	};
 	void privacyChanged(Privacy value);
 	void updateSelected(const QPoint &cursorGlobalPosition);
-	void showAddContactsToChannelBox() const;
 	void handleChange();
 	void check();
 	void save();
 
-	void onUpdateDone(const MTPBool &result);
-	bool onUpdateFail(const RPCError &error);
+	void updateDone(const MTPBool &result);
+	void updateFail(const RPCError &error);
 
-	void onCheckDone(const MTPBool &result);
-	bool onCheckFail(const RPCError &error);
-	bool onFirstCheckFail(const RPCError &error);
+	void checkDone(const MTPBool &result);
+	void checkFail(const RPCError &error);
+	void firstCheckFail(const RPCError &error);
 
 	void updateMaxHeight();
 
 	void showRevokePublicLinkBoxForEdit();
 
-	ChannelData *_channel = nullptr;
+	const not_null<Window::SessionNavigation*> _navigation;
+	const not_null<ChannelData*> _channel;
+	MTP::Sender _api;
+
 	bool _existing = false;
 
 	std::shared_ptr<Ui::RadioenumGroup<Privacy>> _privacyGroup;
 	object_ptr<Ui::Radioenum<Privacy>> _public;
 	object_ptr<Ui::Radioenum<Privacy>> _private;
 	int32 _aboutPublicWidth, _aboutPublicHeight;
-	Text _aboutPublic, _aboutPrivate;
+	Ui::Text::String _aboutPublic, _aboutPrivate;
 
 	object_ptr<Ui::UsernameInput> _link;
 
@@ -169,7 +212,7 @@ private:
 
 };
 
-class EditNameBox : public BoxContent, public RPCSender {
+class EditNameBox : public Ui::BoxContent {
 public:
 	EditNameBox(QWidget*, not_null<UserData*> user);
 
@@ -183,9 +226,10 @@ private:
 	void submit();
 	void save();
 	void saveSelfDone(const MTPUser &user);
-	bool saveSelfFail(const RPCError &error);
+	void saveSelfFail(const RPCError &error);
 
-	not_null<UserData*> _user;
+	const not_null<UserData*> _user;
+	MTP::Sender _api;
 
 	object_ptr<Ui::InputField> _first;
 	object_ptr<Ui::InputField> _last;
@@ -197,91 +241,14 @@ private:
 
 };
 
-class EditBioBox : public BoxContent, private MTP::Sender {
+class RevokePublicLinkBox final
+	: public Ui::BoxContent
+	, private base::Subscriber {
 public:
-	EditBioBox(QWidget*, not_null<UserData*> self);
-
-protected:
-	void setInnerFocus() override;
-	void prepare() override;
-
-	void resizeEvent(QResizeEvent *e) override;
-
-private:
-	void updateMaxHeight();
-	void handleBioUpdated();
-	void save();
-
-	style::InputField _dynamicFieldStyle;
-	not_null<UserData*> _self;
-
-	object_ptr<Ui::InputField> _bio;
-	object_ptr<Ui::FlatLabel> _countdown;
-	object_ptr<Ui::FlatLabel> _about;
-	mtpRequestId _requestId = 0;
-	QString _sentBio;
-
-};
-
-class EditChannelBox : public BoxContent, public RPCSender {
-public:
-	EditChannelBox(QWidget*, not_null<ChannelData*> channel);
-
-protected:
-	void prepare() override;
-	void setInnerFocus() override;
-
-	void keyPressEvent(QKeyEvent *e) override;
-	void resizeEvent(QResizeEvent *e) override;
-	void paintEvent(QPaintEvent *e) override;
-
-private:
-	void updateMaxHeight();
-	bool canEditSignatures() const;
-	bool canEditInvites() const;
-	void handleChannelNameChange();
-	void descriptionResized();
-	void setupPublicLink();
-	void save();
-
-	void onSaveTitleDone(const MTPUpdates &result);
-	void onSaveDescriptionDone(const MTPBool &result);
-	void onSaveSignDone(const MTPUpdates &result);
-	void onSaveInvitesDone(const MTPUpdates &result);
-	bool onSaveFail(const RPCError &error, mtpRequestId req);
-
-	void saveDescription();
-	void saveSign();
-	void saveInvites();
-
-	not_null<ChannelData*> _channel;
-
-	object_ptr<Ui::InputField> _title;
-	object_ptr<Ui::InputField> _description;
-	object_ptr<Ui::Checkbox> _sign;
-
-	enum class Invites {
-		Everybody,
-		OnlyAdmins,
-	};
-	std::shared_ptr<Ui::RadioenumGroup<Invites>> _inviteGroup;
-	object_ptr<Ui::Radioenum<Invites>> _inviteEverybody;
-	object_ptr<Ui::Radioenum<Invites>> _inviteOnlyAdmins;
-
-	object_ptr<Ui::LinkButton> _publicLink;
-
-	mtpRequestId _saveTitleRequestId = 0;
-	mtpRequestId _saveDescriptionRequestId = 0;
-	mtpRequestId _saveSignRequestId = 0;
-	mtpRequestId _saveInvitesRequestId = 0;
-
-	QString _sentTitle, _sentDescription;
-
-};
-
-class RevokePublicLinkBox : public BoxContent, public RPCSender {
-public:
-	RevokePublicLinkBox(QWidget*, Fn<void()> revokeCallback);
+	RevokePublicLinkBox(
+		QWidget*,
+		not_null<Main::Session*> session,
+		Fn<void()> revokeCallback);
 
 protected:
 	void prepare() override;
@@ -289,6 +256,8 @@ protected:
 	void resizeEvent(QResizeEvent *e) override;
 
 private:
+	const not_null<Main::Session*> _session;
+
 	object_ptr<Ui::FlatLabel> _aboutRevoke;
 
 	class Inner;

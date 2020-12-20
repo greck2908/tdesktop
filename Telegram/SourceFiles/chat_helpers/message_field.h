@@ -9,34 +9,45 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/widgets/input_fields.h"
 #include "base/timer.h"
+#include "base/qt_connection.h"
 
-class HistoryWidget;
+#ifndef TDESKTOP_DISABLE_SPELLCHECK
+#include "boxes/dictionaries_manager.h"
+#include "spellcheck/spelling_highlighter.h"
+#endif // TDESKTOP_DISABLE_SPELLCHECK
+
+#include <QtGui/QClipboard>
+
+namespace Main {
+class Session;
+} // namespace Main
+
 namespace Window {
-class Controller;
+class SessionController;
 } // namespace Window
 
-QString ConvertTagToMimeTag(const QString &tagId);
-QString PrepareMentionTag(not_null<UserData*> user);
+namespace Ui {
+class PopupMenu;
+} // namespace Ui
 
-EntitiesInText ConvertTextTagsToEntities(const TextWithTags::Tags &tags);
-TextWithTags::Tags ConvertEntitiesToTextTags(
-	const EntitiesInText &entities);
-std::unique_ptr<QMimeData> MimeDataFromTextWithEntities(
-	const TextWithEntities &forClipboard);
-void SetClipboardWithEntities(
-	const TextWithEntities &forClipboard,
-	QClipboard::Mode mode = QClipboard::Clipboard);
+QString PrepareMentionTag(not_null<UserData*> user);
+TextWithTags PrepareEditText(not_null<HistoryItem*> item);
 
 Fn<bool(
 	Ui::InputField::EditLinkSelection selection,
 	QString text,
 	QString link,
 	Ui::InputField::EditLinkAction action)> DefaultEditLinkCallback(
-		not_null<Window::Controller*> controller,
+		not_null<Window::SessionController*> controller,
 		not_null<Ui::InputField*> field);
 void InitMessageField(
-	not_null<Window::Controller*> controller,
+	not_null<Window::SessionController*> controller,
 	not_null<Ui::InputField*> field);
+
+void InitSpellchecker(
+	not_null<Window::SessionController*> controller,
+	not_null<Ui::InputField*> field);
+
 bool HasSendText(not_null<const Ui::InputField*> field);
 
 struct InlineBotQuery {
@@ -45,7 +56,9 @@ struct InlineBotQuery {
 	UserData *bot = nullptr;
 	bool lookingUpBot = false;
 };
-InlineBotQuery ParseInlineBotQuery(not_null<const Ui::InputField*> field);
+InlineBotQuery ParseInlineBotQuery(
+	not_null<Main::Session*> session,
+	not_null<const Ui::InputField*> field);
 
 struct AutocompleteQuery {
 	QString query;
@@ -53,20 +66,6 @@ struct AutocompleteQuery {
 };
 AutocompleteQuery ParseMentionHashtagBotCommandQuery(
 	not_null<const Ui::InputField*> field);
-
-class QtConnectionOwner {
-public:
-	QtConnectionOwner(QMetaObject::Connection connection = {});
-	QtConnectionOwner(QtConnectionOwner &&other);
-	QtConnectionOwner &operator=(QtConnectionOwner &&other);
-	~QtConnectionOwner();
-
-private:
-	void disconnect();
-
-	QMetaObject::Connection _data;
-
-};
 
 class MessageLinksParser : private QObject {
 public:
@@ -99,6 +98,6 @@ private:
 	rpl::variable<QStringList> _list;
 	int _lastLength = 0;
 	base::Timer _timer;
-	QtConnectionOwner _connection;
+	base::qt_connection _connection;
 
 };

@@ -11,8 +11,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/localstorage.h"
 #include "platform/win/windows_dlls.h"
 #include "lang/lang_keys.h"
-#include "messenger.h"
+#include "core/application.h"
 #include "core/crash_reports.h"
+#include "app.h"
+
+#include <QtWidgets/QFileDialog>
+#include <QtGui/QDesktopServices>
+#include <QtCore/QSettings>
 
 #include <Shlwapi.h>
 #include <Windowsx.h>
@@ -111,7 +116,13 @@ void UnsafeOpenEmailLink(const QString &email) {
 		auto wstringUrl = url.toString(QUrl::FullyEncoded).toStdWString();
 		if (Dlls::SHOpenWithDialog) {
 			OPENASINFO info;
-			info.oaifInFlags = OAIF_ALLOW_REGISTRATION | OAIF_REGISTER_EXT | OAIF_EXEC | OAIF_FILE_IS_URI | OAIF_URL_PROTOCOL;
+			info.oaifInFlags = OAIF_ALLOW_REGISTRATION
+				| OAIF_REGISTER_EXT
+				| OAIF_EXEC
+#if WINVER >= 0x0602
+				| OAIF_FILE_IS_URI
+#endif // WINVER >= 0x602
+				| OAIF_URL_PROTOCOL;
 			info.pcszClass = NULL;
 			info.pcszFile = wstringUrl.c_str();
 			Dlls::SHOpenWithDialog(0, &info);
@@ -203,7 +214,7 @@ bool UnsafeShowOpenWithDropdown(const QString &filepath, QPoint menuPosition) {
 			menuInfo.fType = MFT_STRING;
 			menuInfo.wID = handlers.size() + 1;
 
-			QString name = lang(lng_wnd_choose_program_menu);
+			QString name = tr::lng_wnd_choose_program_menu(tr::now);
 			if (name.size() > 512) name = name.mid(0, 512);
 			WCHAR nameArr[1024];
 			name.toWCharArray(nameArr);
@@ -252,19 +263,6 @@ bool UnsafeShowOpenWith(const QString &filepath) {
 void UnsafeLaunch(const QString &filepath) {
 	auto wstringPath = QDir::toNativeSeparators(filepath).toStdWString();
 	ShellExecute(0, L"open", wstringPath.c_str(), 0, 0, SW_SHOWNORMAL);
-}
-
-void UnsafeShowInFolder(const QString &filepath) {
-	auto nativePath = QDir::toNativeSeparators(filepath);
-	auto wstringPath = nativePath.toStdWString();
-	if (auto pidl = ILCreateFromPathW(wstringPath.c_str())) {
-		SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
-		ILFree(pidl);
-	} else {
-		auto pathEscaped = nativePath.replace('"', qsl("\"\""));
-		auto wstringParam = (qstr("/select,") + pathEscaped).toStdWString();
-		ShellExecute(0, 0, L"explorer", wstringParam.c_str(), 0, SW_SHOWNORMAL);
-	}
 }
 
 void PostprocessDownloaded(const QString &filepath) {
@@ -360,11 +358,7 @@ bool Get(
 		dialog.setAcceptMode(QFileDialog::AcceptOpen);
 	} else if (type == Type::ReadFolder) { // save dir
 		dialog.setAcceptMode(QFileDialog::AcceptOpen);
-
-		// We use "obsolete" value ::DirectoryOnly instead of ::Directory + ::ShowDirsOnly
-		// because in Windows XP native dialog this one works, while the "preferred" one
-		// shows a native file choose dialog where you can't choose a directory, only open one.
-		dialog.setFileMode(QFileDialog::DirectoryOnly);
+		dialog.setFileMode(QFileDialog::Directory);
 		dialog.setOption(QFileDialog::ShowDirsOnly);
 	} else { // save file
 		dialog.setFileMode(QFileDialog::AnyFile);
@@ -414,7 +408,7 @@ bool Get(
 		const auto path = dialog.directory().absolutePath();
 		if (path != cDialogLastPath()) {
 			cSetDialogLastPath(path);
-			Local::writeUserSettings();
+			Local::writeSettings();
 		}
 	}
 
@@ -424,9 +418,9 @@ bool Get(
 		} else {
 			files = dialog.selectedFiles().mid(0, 1);
 		}
-		if (type == Type::ReadFile || type == Type::ReadFiles) {
-			remoteContent = dialog.selectedRemoteContent();
-		}
+		//if (type == Type::ReadFile || type == Type::ReadFiles) {
+		//	remoteContent = dialog.selectedRemoteContent();
+		//}
 		return true;
 	}
 

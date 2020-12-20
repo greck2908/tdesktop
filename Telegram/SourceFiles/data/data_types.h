@@ -8,13 +8,33 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/value_ordering.h"
+#include "ui/text/text.h" // For QFIXED_MAX
 
 class HistoryItem;
 using HistoryItemsList = std::vector<not_null<HistoryItem*>>;
 
+class StorageImageLocation;
+class WebFileLocation;
+struct GeoPointLocation;
+
+namespace Storage {
+namespace Cache {
+struct Key;
+} // namespace Cache
+} // namespace Storage
+
 namespace Ui {
 class InputField;
 } // namespace Ui
+
+namespace Main {
+class Session;
+} // namespace Main
+
+namespace Images {
+enum class Option;
+using Options = base::flags<Option>;
+} // namespace Images
 
 namespace Data {
 
@@ -26,30 +46,46 @@ struct UploadState {
 	bool waitingForAlbum = false;
 };
 
+Storage::Cache::Key DocumentCacheKey(int32 dcId, uint64 id);
+Storage::Cache::Key DocumentThumbCacheKey(int32 dcId, uint64 id);
+Storage::Cache::Key WebDocumentCacheKey(const WebFileLocation &location);
+Storage::Cache::Key UrlCacheKey(const QString &location);
+Storage::Cache::Key GeoPointCacheKey(const GeoPointLocation &location);
+
+constexpr auto kImageCacheTag = uint8(0x01);
+constexpr auto kStickerCacheTag = uint8(0x02);
+constexpr auto kVoiceMessageCacheTag = uint8(0x03);
+constexpr auto kVideoMessageCacheTag = uint8(0x04);
+constexpr auto kAnimationCacheTag = uint8(0x05);
+
+struct FileOrigin;
+
 } // namespace Data
 
 struct MessageGroupId {
-	using Underlying = uint64;
+	uint64 peer = 0;
+	uint64 value = 0;
 
-	enum Type : Underlying {
-		None = 0,
-	} value;
-
-	MessageGroupId(Type value = None) : value(value) {
+	MessageGroupId() = default;
+	static MessageGroupId FromRaw(uint64 peer, uint64 value) {
+		auto result = MessageGroupId();
+		result.peer = peer;
+		result.value = value;
+		return result;
 	}
-	static MessageGroupId FromRaw(Underlying value) {
-		return static_cast<Type>(value);
-	}
 
+	bool empty() const {
+		return !value;
+	}
 	explicit operator bool() const {
-		return value != None;
+		return !empty();
 	}
-	Underlying raw() const {
-		return static_cast<Underlying>(value);
+	uint64 raw() const {
+		return value;
 	}
 
-	friend inline Type value_ordering_helper(MessageGroupId value) {
-		return value.value;
+	friend inline std::pair<uint64, uint64> value_ordering_helper(MessageGroupId value) {
+		return std::make_pair(value.value, value.peer);
 	}
 
 };
@@ -58,59 +94,67 @@ class PeerData;
 class UserData;
 class ChatData;
 class ChannelData;
+class BotCommand;
+struct BotInfo;
+
+namespace Data {
+class Folder;
+} // namespace Data
 
 using UserId = int32;
 using ChatId = int32;
 using ChannelId = int32;
-using FeedId = int32;
+using FolderId = int32;
+using FilterId = int32;
 
 constexpr auto NoChannel = ChannelId(0);
 
 using PeerId = uint64;
 
 constexpr auto PeerIdMask         = PeerId(0xFFFFFFFFULL);
-constexpr auto PeerIdTypeMask     = PeerId(0x300000000ULL);
+constexpr auto PeerIdTypeMask     = PeerId(0xF00000000ULL);
 constexpr auto PeerIdUserShift    = PeerId(0x000000000ULL);
 constexpr auto PeerIdChatShift    = PeerId(0x100000000ULL);
 constexpr auto PeerIdChannelShift = PeerId(0x200000000ULL);
+constexpr auto PeerIdFakeShift    = PeerId(0xF00000000ULL);
 
-inline bool peerIsUser(const PeerId &id) {
+inline constexpr bool peerIsUser(const PeerId &id) {
 	return (id & PeerIdTypeMask) == PeerIdUserShift;
 }
-inline bool peerIsChat(const PeerId &id) {
+inline constexpr bool peerIsChat(const PeerId &id) {
 	return (id & PeerIdTypeMask) == PeerIdChatShift;
 }
-inline bool peerIsChannel(const PeerId &id) {
+inline constexpr bool peerIsChannel(const PeerId &id) {
 	return (id & PeerIdTypeMask) == PeerIdChannelShift;
 }
-inline PeerId peerFromUser(UserId user_id) {
+inline constexpr PeerId peerFromUser(UserId user_id) {
 	return PeerIdUserShift | uint64(uint32(user_id));
 }
-inline PeerId peerFromChat(ChatId chat_id) {
+inline constexpr PeerId peerFromChat(ChatId chat_id) {
 	return PeerIdChatShift | uint64(uint32(chat_id));
 }
-inline PeerId peerFromChannel(ChannelId channel_id) {
+inline constexpr PeerId peerFromChannel(ChannelId channel_id) {
 	return PeerIdChannelShift | uint64(uint32(channel_id));
 }
-inline PeerId peerFromUser(const MTPint &user_id) {
+inline constexpr PeerId peerFromUser(const MTPint &user_id) {
 	return peerFromUser(user_id.v);
 }
-inline PeerId peerFromChat(const MTPint &chat_id) {
+inline constexpr PeerId peerFromChat(const MTPint &chat_id) {
 	return peerFromChat(chat_id.v);
 }
-inline PeerId peerFromChannel(const MTPint &channel_id) {
+inline constexpr PeerId peerFromChannel(const MTPint &channel_id) {
 	return peerFromChannel(channel_id.v);
 }
-inline int32 peerToBareInt(const PeerId &id) {
+inline constexpr int32 peerToBareInt(const PeerId &id) {
 	return int32(uint32(id & PeerIdMask));
 }
-inline UserId peerToUser(const PeerId &id) {
+inline constexpr UserId peerToUser(const PeerId &id) {
 	return peerIsUser(id) ? peerToBareInt(id) : 0;
 }
-inline ChatId peerToChat(const PeerId &id) {
+inline constexpr ChatId peerToChat(const PeerId &id) {
 	return peerIsChat(id) ? peerToBareInt(id) : 0;
 }
-inline ChannelId peerToChannel(const PeerId &id) {
+inline constexpr ChannelId peerToChannel(const PeerId &id) {
 	return peerIsChannel(id) ? peerToBareInt(id) : NoChannel;
 }
 inline MTPint peerToBareMTPInt(const PeerId &id) {
@@ -118,9 +162,9 @@ inline MTPint peerToBareMTPInt(const PeerId &id) {
 }
 inline PeerId peerFromMTP(const MTPPeer &peer) {
 	switch (peer.type()) {
-	case mtpc_peerUser: return peerFromUser(peer.c_peerUser().vuser_id);
-	case mtpc_peerChat: return peerFromChat(peer.c_peerChat().vchat_id);
-	case mtpc_peerChannel: return peerFromChannel(peer.c_peerChannel().vchannel_id);
+	case mtpc_peerUser: return peerFromUser(peer.c_peerUser().vuser_id());
+	case mtpc_peerChat: return peerFromChat(peer.c_peerChat().vchat_id());
+	case mtpc_peerChannel: return peerFromChannel(peer.c_peerChannel().vchannel_id());
 	}
 	return 0;
 }
@@ -206,48 +250,20 @@ struct FullMsgId {
 
 };
 
+Q_DECLARE_METATYPE(FullMsgId);
+
 using MessageIdsList = std::vector<FullMsgId>;
 
-inline PeerId peerFromMessage(const MTPmessage &msg) {
-	auto compute = [](auto &message) {
-		auto from_id = message.has_from_id() ? peerFromUser(message.vfrom_id) : 0;
-		auto to_id = peerFromMTP(message.vto_id);
-		auto out = message.is_out();
-		return (out || !peerIsUser(to_id)) ? to_id : from_id;
-	};
-	switch (msg.type()) {
-	case mtpc_message: return compute(msg.c_message());
-	case mtpc_messageService: return compute(msg.c_messageService());
-	}
-	return 0;
-}
-inline MTPDmessage::Flags flagsFromMessage(const MTPmessage &msg) {
-	switch (msg.type()) {
-	case mtpc_message: return msg.c_message().vflags.v;
-	case mtpc_messageService: return mtpCastFlags(msg.c_messageService().vflags.v);
-	}
-	return 0;
-}
-inline MsgId idFromMessage(const MTPmessage &msg) {
-	switch (msg.type()) {
-	case mtpc_messageEmpty: return msg.c_messageEmpty().vid.v;
-	case mtpc_message: return msg.c_message().vid.v;
-	case mtpc_messageService: return msg.c_messageService().vid.v;
-	}
-	Unexpected("Type in idFromMessage()");
-}
-inline TimeId dateFromMessage(const MTPmessage &msg) {
-	switch (msg.type()) {
-	case mtpc_message: return msg.c_message().vdate.v;
-	case mtpc_messageService: return msg.c_messageService().vdate.v;
-	}
-	return 0;
-}
+PeerId PeerFromMessage(const MTPmessage &message);
+MTPDmessage::Flags FlagsFromMessage(const MTPmessage &message);
+MsgId IdFromMessage(const MTPmessage &message);
+TimeId DateFromMessage(const MTPmessage &message);
 
 class DocumentData;
 class PhotoData;
 struct WebPageData;
 struct GameData;
+struct PollData;
 
 class AudioMsgId;
 class PhotoClickHandler;
@@ -258,7 +274,7 @@ class DocumentClickHandler;
 class DocumentSaveClickHandler;
 class DocumentOpenClickHandler;
 class DocumentCancelClickHandler;
-class GifOpenClickHandler;
+class DocumentWrappedClickHandler;
 class VoiceSeekClickHandler;
 
 using PhotoId = uint64;
@@ -267,19 +283,18 @@ using AudioId = uint64;
 using DocumentId = uint64;
 using WebPageId = uint64;
 using GameId = uint64;
+using PollId = uint64;
+using WallPaperId = uint64;
 constexpr auto CancelledWebPageId = WebPageId(0xFFFFFFFFFFFFFFFFULL);
 
-using PreparedPhotoThumbs = QMap<char, QPixmap>;
+struct PreparedPhotoThumb {
+	QImage image;
+	QByteArray bytes;
+};
+using PreparedPhotoThumbs = base::flat_map<char, PreparedPhotoThumb>;
 
 // [0] == -1 -- counting, [0] == -2 -- could not count
 using VoiceWaveform = QVector<signed char>;
-
-enum ActionOnLoad {
-	ActionOnLoadNone,
-	ActionOnLoadOpen,
-	ActionOnLoadOpenWith,
-	ActionOnLoadPlayInline
-};
 
 enum LocationType {
 	UnknownFileLocation = 0,
@@ -306,7 +321,16 @@ enum DocumentType {
 	AnimatedDocument = 4,
 	VoiceDocument = 5,
 	RoundVideoDocument = 6,
+	WallPaperDocument = 7,
 };
+
+inline constexpr auto kStickerSideSize = 512;
+
+[[nodiscard]] inline bool GoodStickerDimensions(int width, int height) {
+	return (width > 0 && width <= kStickerSideSize)
+		&& (height > 0 && height <= kStickerSideSize)
+		&& (width == kStickerSideSize || height == kStickerSideSize);
+}
 
 using MediaKey = QPair<uint64, uint64>;
 
@@ -321,30 +345,32 @@ public:
 
 	AudioMsgId() = default;
 	AudioMsgId(
-		DocumentData *audio,
-		const FullMsgId &msgId,
-		uint32 playId = 0)
+		not_null<DocumentData*> audio,
+		FullMsgId msgId,
+		uint32 externalPlayId = 0)
 	: _audio(audio)
 	, _contextId(msgId)
-	, _playId(playId) {
+	, _externalPlayId(externalPlayId) {
 		setTypeFromAudio();
 	}
 
-	Type type() const {
+	[[nodiscard]] static uint32 CreateExternalPlayId();
+	[[nodiscard]] static AudioMsgId ForVideo();
+
+	[[nodiscard]] Type type() const {
 		return _type;
 	}
-	DocumentData *audio() const {
+	[[nodiscard]] DocumentData *audio() const {
 		return _audio;
 	}
-	FullMsgId contextId() const {
+	[[nodiscard]] FullMsgId contextId() const {
 		return _contextId;
 	}
-	uint32 playId() const {
-		return _playId;
+	[[nodiscard]] uint32 externalPlayId() const {
+		return _externalPlayId;
 	}
-
-	explicit operator bool() const {
-		return _audio != nullptr;
+	[[nodiscard]] explicit operator bool() const {
+		return (_audio != nullptr) || (_externalPlayId != 0);
 	}
 
 private:
@@ -353,7 +379,7 @@ private:
 	DocumentData *_audio = nullptr;
 	Type _type = Type::Unknown;
 	FullMsgId _contextId;
-	uint32 _playId = 0;
+	uint32 _externalPlayId = 0;
 
 };
 
@@ -367,23 +393,17 @@ inline bool operator<(const AudioMsgId &a, const AudioMsgId &b) {
 	} else if (b.contextId() < a.contextId()) {
 		return false;
 	}
-	return (a.playId() < b.playId());
+	return (a.externalPlayId() < b.externalPlayId());
 }
 
 inline bool operator==(const AudioMsgId &a, const AudioMsgId &b) {
 	return (a.audio() == b.audio())
 		&& (a.contextId() == b.contextId())
-		&& (a.playId() == b.playId());
+		&& (a.externalPlayId() == b.externalPlayId());
 }
 
 inline bool operator!=(const AudioMsgId &a, const AudioMsgId &b) {
 	return !(a == b);
-}
-
-inline MsgId clientMsgId() {
-	static MsgId CurrentClientMsgId = StartClientMsgId;
-	Assert(CurrentClientMsgId < EndClientMsgId);
-	return CurrentClientMsgId++;
 }
 
 struct MessageCursor {
@@ -414,45 +434,30 @@ inline bool operator==(
 		&& (a.scroll == b.scroll);
 }
 
-struct SendAction {
-	enum class Type {
-		Typing,
-		RecordVideo,
-		UploadVideo,
-		RecordVoice,
-		UploadVoice,
-		RecordRound,
-		UploadRound,
-		UploadPhoto,
-		UploadFile,
-		ChooseLocation,
-		ChooseContact,
-		PlayGame,
-	};
-	SendAction(
-		Type type,
-		TimeMs until,
-		int progress = 0)
-	: type(type)
-	, until(until)
-	, progress(progress) {
-	}
-	Type type = Type::Typing;
-	TimeMs until = 0;
-	int progress = 0;
-
-};
+inline bool operator!=(
+		const MessageCursor &a,
+		const MessageCursor &b) {
+	return !(a == b);
+}
 
 class FileClickHandler : public LeftButtonClickHandler {
 public:
-	FileClickHandler(FullMsgId context) : _context(context) {
+	FileClickHandler(
+		not_null<Main::Session*> session,
+		FullMsgId context)
+	: _session(session)
+	, _context(context) {
+	}
+
+	[[nodiscard]] Main::Session &session() const {
+		return *_session;
 	}
 
 	void setMessageId(FullMsgId context) {
 		_context = context;
 	}
 
-	FullMsgId context() const {
+	[[nodiscard]] FullMsgId context() const {
 		return _context;
 	}
 
@@ -460,6 +465,7 @@ protected:
 	HistoryItem *getActionItem() const;
 
 private:
+	const not_null<Main::Session*> _session;
 	FullMsgId _context;
 
 };

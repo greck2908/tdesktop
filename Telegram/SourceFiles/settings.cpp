@@ -7,15 +7,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings.h"
 
-bool gRtl = false;
-Qt::LayoutDirection gLangDir = gRtl ? Qt::RightToLeft : Qt::LeftToRight;
+#include "ui/emoji_config.h"
 
-bool gAlphaVersion = AppAlphaVersion;
-uint64 gBetaVersion = AppBetaVersion;
-uint64 gRealBetaVersion = AppBetaVersion;
-QByteArray gBetaPrivateKey;
+namespace {
 
-bool gTestMode = false;
+constexpr auto kRecentEmojiLimit = 42;
+
+auto UpdatesRecentEmoji = rpl::event_stream<>();
+
+} // namespace
+
+Qt::LayoutDirection gLangDir = Qt::LeftToRight;
+
+bool gInstallBetaVersion = AppBetaVersion;
+uint64 gAlphaVersion = AppAlphaVersion;
+uint64 gRealAlphaVersion = AppAlphaVersion;
+QByteArray gAlphaPrivateKey;
+
 bool gManyInstance = false;
 QString gKeyFile;
 QString gWorkingDir, gExeDir, gExeName;
@@ -30,25 +38,22 @@ bool gStartInTray = false;
 bool gAutoStart = false;
 bool gSendToMenu = false;
 bool gUseExternalVideoPlayer = false;
+bool gUseFreeType = false;
 bool gAutoUpdate = true;
 TWindowPos gWindowPos;
 LaunchMode gLaunchMode = LaunchModeNormal;
-bool gSupportTray = true;
 bool gSeenTrayTooltip = false;
 bool gRestartingUpdate = false, gRestarting = false, gRestartingToSettings = false, gWriteProtected = false;
 int32 gLastUpdateCheck = 0;
 bool gNoStartUpdate = false;
 bool gStartToSettings = false;
-
-bool gCtrlEnter = false;
+bool gDebugMode = false;
 
 uint32 gConnectionsInSession = 1;
-QString gLoggedPhoneNumber;
 
 QByteArray gLocalSalt;
-DBIScale gRealScale = dbisAuto;
-DBIScale gScreenScale = dbisOne;
-DBIScale gConfigScale = dbisAuto;
+int gScreenScale = style::kScaleAuto;
+int gConfigScale = style::kScaleAuto;
 
 QString gTimeFormat = qsl("hh:mm");
 
@@ -65,37 +70,102 @@ RecentInlineBots gRecentInlineBots;
 
 bool gPasswordRecovered = false;
 int32 gPasscodeBadTries = 0;
-TimeMs gPasscodeLastTry = 0;
+crl::time gPasscodeLastTry = 0;
 
-bool gRetina = false;
 float64 gRetinaFactor = 1.;
 int32 gIntRetinaFactor = 1;
 
-#ifdef Q_OS_WIN
-DBIPlatform gPlatform = dbipWindows;
-#elif defined OS_MAC_OLD
-DBIPlatform gPlatform = dbipMacOld;
-#elif defined Q_OS_MAC
-DBIPlatform gPlatform = dbipMac;
-#elif defined Q_OS_LINUX64
-DBIPlatform gPlatform = dbipLinux64;
-#elif defined Q_OS_LINUX32
-DBIPlatform gPlatform = dbipLinux32;
-#else
-#error Unknown platform
-#endif
-QString gPlatformString;
-bool gIsElCapitan = false;
-bool gIsSnowLeopard = false;
-
 int gOtherOnline = 0;
-
-SavedPeers gSavedPeers;
-SavedPeersByTime gSavedPeersByTime;
-
-ReportSpamStatuses gReportSpamStatuses;
 
 int32 gAutoDownloadPhoto = 0; // all auto download
 int32 gAutoDownloadAudio = 0;
 int32 gAutoDownloadGif = 0;
-bool gAutoPlayGif = true;
+
+RecentEmojiPack &GetRecentEmoji() {
+	if (cRecentEmoji().isEmpty()) {
+		RecentEmojiPack result;
+		auto haveAlready = [&result](EmojiPtr emoji) {
+			for (auto &row : result) {
+				if (row.first->id() == emoji->id()) {
+					return true;
+				}
+			}
+			return false;
+		};
+		if (!cRecentEmojiPreload().isEmpty()) {
+			auto preload = cRecentEmojiPreload();
+			cSetRecentEmojiPreload(RecentEmojiPreload());
+			result.reserve(preload.size());
+			for (auto i = preload.cbegin(), e = preload.cend(); i != e; ++i) {
+				if (auto emoji = Ui::Emoji::Find(i->first)) {
+					if (!haveAlready(emoji)) {
+						result.push_back(qMakePair(emoji, i->second));
+					}
+				}
+			}
+		}
+		for (const auto emoji : Ui::Emoji::GetDefaultRecent()) {
+			if (result.size() >= kRecentEmojiLimit) break;
+
+			if (!haveAlready(emoji)) {
+				result.push_back(qMakePair(emoji, 1));
+			}
+		}
+		cSetRecentEmoji(result);
+	}
+	return cRefRecentEmoji();
+}
+
+EmojiPack GetRecentEmojiSection() {
+	const auto &recent = GetRecentEmoji();
+
+	auto result = EmojiPack();
+	result.reserve(recent.size());
+	for (const auto &item : recent) {
+		result.push_back(item.first);
+	}
+	return result;
+}
+
+void AddRecentEmoji(EmojiPtr emoji) {
+	auto &recent = GetRecentEmoji();
+	auto i = recent.begin(), e = recent.end();
+	for (; i != e; ++i) {
+		if (i->first == emoji) {
+			++i->second;
+			if (i->second > 0x8000) {
+				for (auto j = recent.begin(); j != e; ++j) {
+					if (j->second > 1) {
+						j->second /= 2;
+					} else {
+						j->second = 1;
+					}
+				}
+			}
+			for (; i != recent.begin(); --i) {
+				if ((i - 1)->second > i->second) {
+					break;
+				}
+				std::swap(*i, *(i - 1));
+			}
+			break;
+		}
+	}
+	if (i == e) {
+		while (recent.size() >= kRecentEmojiLimit) {
+			recent.pop_back();
+		}
+		recent.push_back(qMakePair(emoji, 1));
+		for (i = recent.end() - 1; i != recent.begin(); --i) {
+			if ((i - 1)->second > i->second) {
+				break;
+			}
+			std::swap(*i, *(i - 1));
+		}
+	}
+	UpdatesRecentEmoji.fire({});
+}
+
+rpl::producer<> UpdatedRecentEmoji() {
+	return UpdatesRecentEmoji.events();
+}

@@ -8,6 +8,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_section_widget.h"
 
 #include "window/window_connecting_widget.h"
+#include "window/window_session_controller.h"
+#include "main/main_session.h"
 #include "info/info_content_widget.h"
 #include "info/info_wrap_widget.h"
 #include "info/info_layer_widget.h"
@@ -18,7 +20,7 @@ namespace Info {
 
 SectionWidget::SectionWidget(
 	QWidget *parent,
-	not_null<Window::Controller*> window,
+	not_null<Window::SessionController*> window,
 	Wrap wrap,
 	not_null<Memento*> memento)
 : Window::SectionWidget(parent, window)
@@ -28,7 +30,7 @@ SectionWidget::SectionWidget(
 
 SectionWidget::SectionWidget(
 	QWidget *parent,
-	not_null<Window::Controller*> window,
+	not_null<Window::SessionController*> window,
 	Wrap wrap,
 	not_null<MoveMemento*> memento)
 : Window::SectionWidget(parent, window)
@@ -37,6 +39,8 @@ SectionWidget::SectionWidget(
 }
 
 void SectionWidget::init() {
+	Expects(_connecting == nullptr);
+
 	sizeValue(
 	) | rpl::start_with_next([wrap = _content.data()](QSize size) {
 		auto wrapGeometry = QRect{ { 0, 0 }, size };
@@ -44,8 +48,9 @@ void SectionWidget::init() {
 		wrap->updateGeometry(wrapGeometry, additionalScroll);
 	}, _content->lifetime());
 
-	_connecting = Window::ConnectingWidget::CreateDefaultWidget(
+	_connecting = std::make_unique<Window::ConnectionState>(
 		_content.data(),
+		&controller()->session().account(),
 		Window::AdaptiveIsOneColumn());
 
 	_content->contentChanged(
@@ -87,11 +92,11 @@ bool SectionWidget::showInternal(
 	return _content->showInternal(memento, params);
 }
 
-std::unique_ptr<Window::SectionMemento> SectionWidget::createMemento() {
+std::shared_ptr<Window::SectionMemento> SectionWidget::createMemento() {
 	return _content->createMemento();
 }
 
-object_ptr<Window::LayerWidget> SectionWidget::moveContentToLayer(
+object_ptr<Ui::LayerWidget> SectionWidget::moveContentToLayer(
 		QRect bodyGeometry) {
 	if (_content->controller()->wrap() != Wrap::Narrow
 		|| width() < LayerWidget::MinimalSupportedWidth()) {
@@ -103,12 +108,12 @@ object_ptr<Window::LayerWidget> SectionWidget::moveContentToLayer(
 			bodyGeometry);
 }
 
-bool SectionWidget::wheelEventFromFloatPlayer(QEvent *e) {
-	return _content->wheelEventFromFloatPlayer(e);
+bool SectionWidget::floatPlayerHandleWheelEvent(QEvent *e) {
+	return _content->floatPlayerHandleWheelEvent(e);
 }
 
-QRect SectionWidget::rectForFloatPlayer() const {
-	return _content->rectForFloatPlayer();
+QRect SectionWidget::floatPlayerAvailableRect() {
+	return _content->floatPlayerAvailableRect();
 }
 
 } // namespace Info

@@ -7,8 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "mtproto/connection_resolving.h"
 
+#include "mtproto/mtp_instance.h"
+
 namespace MTP {
-namespace internal {
+namespace details {
 namespace {
 
 constexpr auto kOneConnectionTimeout = 4000;
@@ -24,7 +26,7 @@ ResolvingConnection::ResolvingConnection(
 , _instance(instance)
 , _timeoutTimer([=] { handleError(kErrorCodeOther); }) {
 	setChild(std::move(child));
-	if (proxy.resolvedExpireAt < getms(true)) {
+	if (proxy.resolvedExpireAt < crl::now()) {
 		const auto host = proxy.host;
 		connect(
 			instance,
@@ -179,20 +181,26 @@ void ResolvingConnection::handleConnected() {
 	emit connected();
 }
 
-TimeMs ResolvingConnection::pingTime() const {
+crl::time ResolvingConnection::pingTime() const {
 	Expects(_child != nullptr);
 
 	return _child->pingTime();
 }
 
-TimeMs ResolvingConnection::fullConnectTimeout() const {
+crl::time ResolvingConnection::fullConnectTimeout() const {
 	return kOneConnectionTimeout * qMax(int(_proxy.resolvedIPs.size()), 1);
 }
 
-void ResolvingConnection::sendData(mtpBuffer &buffer) {
+void ResolvingConnection::sendData(mtpBuffer &&buffer) {
 	Expects(_child != nullptr);
 
-	_child->sendData(buffer);
+	_child->sendData(std::move(buffer));
+}
+
+bool ResolvingConnection::requiresExtendedPadding() const {
+	Expects(_child != nullptr);
+
+	return _child->requiresExtendedPadding();
 }
 
 void ResolvingConnection::disconnectFromServer() {
@@ -248,5 +256,5 @@ QString ResolvingConnection::tag() const {
 	return _child ? _child->tag() : QString();
 }
 
-} // namespace internal
+} // namespace details
 } // namespace MTP

@@ -7,6 +7,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <QtWidgets/QLabel>
+#include <QtWidgets/QLineEdit>
+#include <QtWidgets/QTextEdit>
+#include <QtWidgets/QPushButton>
+#include <QtWidgets/QCheckBox>
+#include <QtNetwork/QNetworkReply>
+#include <QtNetwork/QHttpMultiPart>
+#include <QtNetwork/QNetworkAccessManager>
+
+namespace MTP {
+struct ProxyData;
+} // namespace MTP
+
+namespace Core {
+class Launcher;
+} // namespace Core
+
 class PreLaunchWindow : public QWidget {
 public:
 	PreLaunchWindow(QString title = QString());
@@ -62,8 +79,8 @@ public:
 	NotStartedWindow();
 
 protected:
-	void closeEvent(QCloseEvent *e);
-	void resizeEvent(QResizeEvent *e);
+	void closeEvent(QCloseEvent *e) override;
+	void resizeEvent(QResizeEvent *e) override;
 
 private:
 	void updateControls();
@@ -78,7 +95,16 @@ class LastCrashedWindow : public PreLaunchWindow {
 	 Q_OBJECT
 
 public:
-	LastCrashedWindow();
+	LastCrashedWindow(
+		not_null<Core::Launcher*> launcher,
+		const QByteArray &crashdump,
+		Fn<void()> launch);
+
+	rpl::producer<MTP::ProxyData> proxyChanges() const;
+
+	rpl::lifetime &lifetime() {
+		return _lifetime;
+	}
 
 public slots:
 	void onViewReport();
@@ -95,7 +121,6 @@ public slots:
 	void onSendingFinished();
 	void onSendingProgress(qint64 uploaded, qint64 total);
 
-#ifndef TDESKTOP_DISABLE_AUTOUPDATE
 	void onUpdateRetry();
 	void onUpdateSkip();
 
@@ -104,13 +129,13 @@ public slots:
 	void onUpdateDownloading(qint64 ready, qint64 total);
 	void onUpdateReady();
 	void onUpdateFailed();
-#endif // !TDESKTOP_DISABLE_AUTOUPDATE
 
 protected:
-	void closeEvent(QCloseEvent *e);
-	void resizeEvent(QResizeEvent *e);
+	void closeEvent(QCloseEvent *e) override;
+	void resizeEvent(QResizeEvent *e) override;
 
 private:
+	void proxyUpdated();
 	QString minidumpFileName();
 	void updateControls();
 
@@ -118,6 +143,8 @@ private:
 
 	QString getReportField(const QLatin1String &name, const QLatin1String &prefix);
 	void addReportFieldPart(const QLatin1String &name, const QLatin1String &prefix, QHttpMultiPart *multipart);
+
+	QByteArray _dumpraw;
 
 	QString _host, _username, _password;
 	quint32 _port;
@@ -148,13 +175,13 @@ private:
 	SendingState _sendingState;
 
 	PreLaunchLabel _updating;
-	qint64 _sendingProgress, _sendingTotal;
+	qint64 _sendingProgress = 0;
+	qint64 _sendingTotal = 0;
 
 	QNetworkAccessManager _sendManager;
-	QNetworkReply *_checkReply, *_sendReply;
+	QNetworkReply *_checkReply = nullptr;
+	QNetworkReply *_sendReply = nullptr;
 
-#ifndef TDESKTOP_DISABLE_AUTOUPDATE
-	PreLaunchButton _updatingCheck, _updatingSkip;
 	enum UpdatingState {
 		UpdatingNone,
 		UpdatingCheck,
@@ -163,13 +190,20 @@ private:
 		UpdatingFail,
 		UpdatingReady
 	};
-	UpdatingState _updatingState;
-	QString _newVersionDownload;
+	struct UpdaterData {
+		UpdaterData(QWidget *buttonParent);
+
+		PreLaunchButton check, skip;
+		UpdatingState state;
+		QString newVersionDownload;
+	};
+	const std::unique_ptr<UpdaterData> _updaterData;
 
 	void setUpdatingState(UpdatingState state, bool force = false);
 	void setDownloadProgress(qint64 ready, qint64 total);
-#endif // !TDESKTOP_DISABLE_AUTOUPDATE
 
+	Fn<void()> _launch;
+	rpl::event_stream<MTP::ProxyData> _proxyChanges;
 	rpl::lifetime _lifetime;
 
 };
@@ -207,7 +241,7 @@ public:
 
 protected:
 	void resizeEvent(QResizeEvent *e);
-    void closeEvent(QCloseEvent *e);
+	void closeEvent(QCloseEvent *e);
 
 private:
 	PreLaunchLog _log;

@@ -11,16 +11,21 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "boxes/abstract_box.h"
 #include "core/click_handler_types.h"
+#include "data/data_user.h"
+#include "ui/effects/animations.h"
 #include "ui/widgets/shadow.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/labels.h"
+#include "ui/widgets/box_content_divider.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/fade_wrap.h"
 #include "ui/wrap/padding_wrap.h"
-#include "ui/text_options.h"
+#include "ui/text/text_utilities.h"
+#include "ui/text/text_options.h"
 #include "ui/special_buttons.h"
 #include "styles/style_passport.h"
+#include "styles/style_layers.h"
 #include "styles/style_boxes.h"
 
 namespace Passport {
@@ -45,13 +50,13 @@ private:
 	int countAvailableWidth() const;
 	int countAvailableWidth(int newWidth) const;
 
-	Text _title;
-	Text _description;
+	Ui::Text::String _title;
+	Ui::Text::String _description;
 	int _titleHeight = 0;
 	int _descriptionHeight = 0;
 	bool _ready = false;
 	bool _error = false;
-	Animation _errorAnimation;
+	Ui::Animations::Simple _errorAnimation;
 
 };
 
@@ -84,7 +89,7 @@ void PanelForm::Row::updateContent(
 	if (_error != error) {
 		_error = error;
 		if (animated == anim::type::instant) {
-			_errorAnimation.finish();
+			_errorAnimation.stop();
 		} else {
 			_errorAnimation.start(
 				[=] { update(); },
@@ -126,14 +131,13 @@ int PanelForm::Row::countAvailableWidth() const {
 void PanelForm::Row::paintEvent(QPaintEvent *e) {
 	Painter p(this);
 
-	const auto ms = getms();
-	paintRipple(p, 0, 0, ms);
+	paintRipple(p, 0, 0);
 
 	const auto left = st::passportRowPadding.left();
 	const auto availableWidth = countAvailableWidth();
 	auto top = st::passportRowPadding.top();
 
-	const auto error = _errorAnimation.current(ms, _error ? 1. : 0.);
+	const auto error = _errorAnimation.value(_error ? 1. : 0.);
 
 	p.setPen(st::passportRowTitleFg);
 	_title.drawLeft(p, left, top, availableWidth, width());
@@ -175,7 +179,7 @@ PanelForm::PanelForm(
 , _bottomShadow(this)
 , _submit(
 		this,
-		langFactory(lng_passport_authorize),
+		tr::lng_passport_authorize(),
 		st::passportPanelAuthorize) {
 	setupControls();
 }
@@ -230,8 +234,7 @@ not_null<Ui::RpWidget*> PanelForm::setupContent() {
 			inner,
 			object_ptr<Ui::FlatLabel>(
 				inner,
-				lng_passport_request1(lt_bot, App::peerName(bot)),
-				Ui::FlatLabel::InitType::Simple,
+				tr::lng_passport_request1(tr::now, lt_bot, bot->name),
 				st::passportPasswordLabelBold)),
 		st::passportFormAbout1Padding)->entity();
 
@@ -240,19 +243,17 @@ not_null<Ui::RpWidget*> PanelForm::setupContent() {
 			inner,
 			object_ptr<Ui::FlatLabel>(
 				inner,
-				lang(lng_passport_request2),
-				Ui::FlatLabel::InitType::Simple,
+				tr::lng_passport_request2(tr::now),
 				st::passportPasswordLabel)),
 		st::passportFormAbout2Padding)->entity();
 
-	inner->add(object_ptr<BoxContentDivider>(
+	inner->add(object_ptr<Ui::BoxContentDivider>(
 		inner,
 		st::passportFormDividerHeight));
 	inner->add(
 		object_ptr<Ui::FlatLabel>(
 			inner,
-			lang(lng_passport_header),
-			Ui::FlatLabel::InitType::Simple,
+			tr::lng_passport_header(tr::now),
 			st::passportFormHeader),
 		st::passportFormHeaderPadding);
 
@@ -293,24 +294,27 @@ not_null<Ui::RpWidget*> PanelForm::setupContent() {
 		});
 	}, lifetime());
 	const auto policyUrl = _controller->privacyPolicyUrl();
+	auto text = policyUrl.isEmpty()
+		? tr::lng_passport_allow(
+			lt_bot,
+			rpl::single('@' + bot->username)
+		) | Ui::Text::ToWithEntities()
+		: tr::lng_passport_accept_allow(
+			lt_policy,
+			tr::lng_passport_policy(
+				lt_bot,
+				rpl::single(bot->name)
+			) | Ui::Text::ToLink(policyUrl),
+			lt_bot,
+			rpl::single('@' + bot->username) | Ui::Text::ToWithEntities(),
+			Ui::Text::WithEntities);
 	const auto policy = inner->add(
 		object_ptr<Ui::FlatLabel>(
 			inner,
-			(policyUrl.isEmpty()
-				? lng_passport_allow(lt_bot, '@' + bot->username)
-				: lng_passport_accept_allow(
-					lt_policy,
-					textcmdLink(
-						1,
-						lng_passport_policy(lt_bot, App::peerName(bot))),
-					lt_bot,
-					'@' + bot->username)),
-			Ui::FlatLabel::InitType::Rich,
+			std::move(text),
 			st::passportFormPolicy),
 		st::passportFormPolicyPadding);
-	if (!policyUrl.isEmpty()) {
-		policy->setLink(1, std::make_shared<UrlClickHandler>(policyUrl));
-	}
+	policy->setLinksTrusted();
 
 	return inner;
 }

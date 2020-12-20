@@ -9,8 +9,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "mainwindow.h"
 #include "ui/widgets/shadow.h"
+#include "ui/image/image_prepare.h"
+#include "core/application.h"
 #include "styles/style_window.h"
-#include "styles/style_mediaview.h"
+#include "styles/style_media_view.h"
 #include "platform/platform_main_window.h"
 
 #include <Cocoa/Cocoa.h>
@@ -18,7 +20,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Platform {
 
-TitleWidget::TitleWidget(MainWindow *parent, int height) : Window::TitleWidget(parent)
+TitleWidget::TitleWidget(MainWindow *parent, int height)
+: Window::TitleWidget(parent)
 , _shadow(this, st::titleShadow) {
 	setAttribute(Qt::WA_OpaquePaintEvent);
 	resize(width(), height);
@@ -39,7 +42,10 @@ TitleWidget::TitleWidget(MainWindow *parent, int height) : Window::TitleWidget(p
 		_font = st::normalFont;
 	}
 
-	subscribe(Global::RefUnreadCounterUpdate(), [this] { update(); });
+	Core::App().unreadBadgeChanges(
+	) | rpl::start_with_next([=] {
+		update();
+	}, lifetime());
 }
 
 void TitleWidget::paintEvent(QPaintEvent *e) {
@@ -76,7 +82,7 @@ object_ptr<Window::TitleWidget> CreateTitleWidget(QWidget *parent) {
 }
 
 // All the window decorations preview is done without taking cScale() into
-// account, with dbisOne scale and without "px" dimensions, because thats
+// account, with 100% scale and without "px" dimensions, because thats
 // how it will look in real launched macOS app.
 int PreviewTitleHeight() {
 	if (auto window = qobject_cast<Platform::MainWindow*>(App::wnd())) {
@@ -183,9 +189,10 @@ void PreviewWindowFramePaint(QImage &preview, const style::palette &palette, QRe
 	corners[3] = roundMask.copy(retinaRadius, retinaRadius, retinaRadius, retinaRadius);
 	auto rounded = preview.copy(inner.x() * retina, inner.y() * retina, inner.width() * retina, inner.height() * retina);
 	Images::prepareRound(rounded, corners);
+	rounded.setDevicePixelRatio(cRetinaFactor());
 	preview.fill(st::themePreviewBg->c);
 
-	auto topLeft = st::macWindowShadowTopLeft.instance(QColor(0, 0, 0), dbisOne);
+	auto topLeft = st::macWindowShadowTopLeft.instance(QColor(0, 0, 0), 100);
 	auto topRight = topLeft.mirrored(true, false);
 	auto bottomLeft = topLeft.mirrored(false, true);
 	auto bottomRight = bottomLeft.mirrored(true, false);

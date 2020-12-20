@@ -7,11 +7,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "boxes/abstract_box.h"
 #include "base/timer.h"
+#include "base/object_ptr.h"
 #include "mtproto/connection_abstract.h"
+#include "mtproto/mtproto_proxy_data.h"
 
 namespace Ui {
+class BoxContent;
 class InputField;
 class PortInput;
 class PasswordInput;
@@ -22,46 +24,24 @@ template <typename Enum>
 class Radioenum;
 } // namespace Ui
 
-class AutoDownloadBox : public BoxContent {
-	Q_OBJECT
-
-public:
-	AutoDownloadBox(QWidget *parent);
-
-protected:
-	void prepare() override;
-
-	void paintEvent(QPaintEvent *e) override;
-	void resizeEvent(QResizeEvent *e) override;
-
-private slots:
-	void onSave();
-
-private:
-	object_ptr<Ui::Checkbox> _photoPrivate;
-	object_ptr<Ui::Checkbox> _photoGroups;
-	object_ptr<Ui::Checkbox> _audioPrivate;
-	object_ptr<Ui::Checkbox> _audioGroups;
-	object_ptr<Ui::Checkbox> _gifPrivate;
-	object_ptr<Ui::Checkbox> _gifGroups;
-	object_ptr<Ui::Checkbox> _gifPlay;
-
-	int _sectionHeight = 0;
-
-};
+namespace Main {
+class Account;
+} // namespace Main
 
 class ProxiesBoxController : public base::Subscriber {
 public:
+	using ProxyData = MTP::ProxyData;
 	using Type = ProxyData::Type;
 
-	ProxiesBoxController();
+	explicit ProxiesBoxController(not_null<Main::Account*> account);
 
 	static void ShowApplyConfirmation(
 		Type type,
 		const QMap<QString, QString> &fields);
 
-	static object_ptr<BoxContent> CreateOwningBox();
-	object_ptr<BoxContent> create();
+	static object_ptr<Ui::BoxContent> CreateOwningBox(
+		not_null<Main::Account*> account);
+	object_ptr<Ui::BoxContent> create();
 
 	enum class ItemState {
 		Connecting,
@@ -88,19 +68,19 @@ public:
 	void restoreItem(int id);
 	void shareItem(int id);
 	void applyItem(int id);
-	object_ptr<BoxContent> editItemBox(int id);
-	object_ptr<BoxContent> addNewItemBox();
-	bool setProxyEnabled(bool enabled);
+	object_ptr<Ui::BoxContent> editItemBox(int id);
+	object_ptr<Ui::BoxContent> addNewItemBox();
+	bool setProxySettings(ProxyData::Settings value);
 	void setProxyForCalls(bool enabled);
 	void setTryIPv6(bool enabled);
-	rpl::producer<bool> proxyEnabledValue() const;
+	rpl::producer<ProxyData::Settings> proxySettingsValue() const;
 
 	rpl::producer<ItemView> views() const;
 
 	~ProxiesBoxController();
 
 private:
-	using Checker = MTP::internal::ConnectionPointer;
+	using Checker = MTP::details::ConnectionPointer;
 	struct Item {
 		int id = 0;
 		ProxyData data;
@@ -129,11 +109,12 @@ private:
 		const ProxyData &proxy);
 	void addNewItem(const ProxyData &proxy);
 
+	const not_null<Main::Account*> _account;
 	int _idCounter = 0;
 	std::vector<Item> _list;
 	rpl::event_stream<ItemView> _views;
 	base::Timer _saveTimer;
-	rpl::event_stream<bool> _proxyEnabledChanges;
+	rpl::event_stream<ProxyData::Settings> _proxySettingsChanges;
 
 	ProxyData _lastSelectedProxy;
 	bool _lastSelectedProxyUsed = false;

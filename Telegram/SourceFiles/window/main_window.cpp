@@ -9,25 +9,46 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "storage/localstorage.h"
 #include "platform/platform_window_title.h"
+#include "base/platform/base_platform_info.h"
+#include "ui/platform/ui_platform_utility.h"
 #include "history/history.h"
 #include "window/themes/window_theme.h"
-#include "window/window_controller.h"
+#include "window/window_session_controller.h"
 #include "window/window_lock_widgets.h"
-#include "boxes/confirm_box.h"
-#include "core/click_handler_types.h"
+#include "window/window_outdated_bar.h"
+#include "window/window_controller.h"
+#include "main/main_account.h" // Account::sessionValue.
+#include "core/application.h"
+#include "core/sandbox.h"
 #include "lang/lang_keys.h"
-#include "mediaview.h"
-#include "auth_session.h"
+#include "data/data_session.h"
+#include "main/main_session.h"
+#include "main/main_session_settings.h"
+#include "base/crc32hash.h"
+#include "base/call_delayed.h"
+#include "ui/toast/toast.h"
+#include "ui/widgets/shadow.h"
+#include "ui/ui_utility.h"
 #include "apiwrap.h"
-#include "messenger.h"
 #include "mainwindow.h"
+#include "facades.h"
+#include "app.h"
 #include "styles/style_window.h"
-#include "styles/style_boxes.h"
+#include "styles/style_calls.h" // st::callShadow
+
+#include <QtWidgets/QDesktopWidget>
+#include <QtCore/QMimeData>
+#include <QtGui/QGuiApplication>
+#include <QtGui/QWindow>
+#include <QtGui/QScreen>
+#include <QtGui/QDrag>
 
 namespace Window {
+namespace {
 
-constexpr auto kInactivePressTimeout = TimeMs(200);
-constexpr auto kSaveWindowPositionTimeout = TimeMs(1000);
+constexpr auto kSaveWindowPositionTimeout = crl::time(1000);
+
+} // namespace
 
 QImage LoadLogo() {
 	return QImage(qsl(":/gui/art/logo_256.png"));
@@ -37,126 +58,113 @@ QImage LoadLogoNoMargin() {
 	return QImage(qsl(":/gui/art/logo_256_no_margin.png"));
 }
 
-QIcon CreateOfficialIcon() {
-	auto useNoMarginLogo = (cPlatform() == dbipMac);
-	if (auto messenger = Messenger::InstancePointer()) {
-		return QIcon(App::pixmapFromImageInPlace(useNoMarginLogo ? messenger->logoNoMargin() : messenger->logo()));
+void ConvertIconToBlack(QImage &image) {
+	if (image.format() != QImage::Format_ARGB32_Premultiplied) {
+		image = std::move(image).convertToFormat(
+			QImage::Format_ARGB32_Premultiplied);
 	}
-	return QIcon(App::pixmapFromImageInPlace(useNoMarginLogo ? LoadLogoNoMargin() : LoadLogo()));
+	//const auto gray = red * 0.299 + green * 0.587 + blue * 0.114;
+	//const auto result = (gray - 100 < 0) ? 0 : (gray - 100) * 255 / 155;
+	constexpr auto scale = 255 / 155.;
+	constexpr auto red = 0.299;
+	constexpr auto green = 0.587;
+	constexpr auto blue = 0.114;
+	static constexpr auto shift = (1 << 24);
+	auto shifter = [](double value) {
+		return uint32(value * shift);
+	};
+	constexpr auto iscale = shifter(scale);
+	constexpr auto ired = shifter(red);
+	constexpr auto igreen = shifter(green);
+	constexpr auto iblue = shifter(blue);
+	constexpr auto threshold = 100;
+	constexpr auto ithreshold = shifter(threshold);
+
+	const auto width = image.width();
+	const auto height = image.height();
+	const auto data = reinterpret_cast<uint32*>(image.bits());
+	const auto intsPerLine = image.bytesPerLine() / 4;
+	const auto intsPerLineAdded = intsPerLine - width;
+
+	auto pixel = data;
+	for (auto j = 0; j != height; ++j) {
+		for (auto i = 0; i != width; ++i) {
+			const auto value = *pixel;
+			const auto gray = (((value >> 16) & 0xFF) * ired
+				+ ((value >> 8) & 0xFF) * igreen
+				+ (value & 0xFF) * iblue) >> 24;
+			const auto small = gray - threshold;
+			const auto test = ~small;
+			const auto result = (test >> 31) * small * iscale;
+			const auto component = (result >> 24) & 0xFF;
+			*pixel++ = (value & 0xFF000000U)
+				| (component << 16)
+				| (component << 8)
+				| component;
+		}
+		pixel += intsPerLineAdded;
+	}
 }
 
-QIcon CreateIcon() {
-	auto result = CreateOfficialIcon();
-	if (cPlatform() == dbipLinux32 || cPlatform() == dbipLinux64) {
-		return QIcon::fromTheme("telegram", result);
+QIcon CreateOfficialIcon(Main::Session *session) {
+	auto image = Core::IsAppLaunched() ? Core::App().logo() : LoadLogo();
+	if (session && session->supportMode()) {
+		ConvertIconToBlack(image);
 	}
+	return QIcon(App::pixmapFromImageInPlace(std::move(image)));
+}
+
+QIcon CreateIcon(Main::Session *session) {
+	auto result = CreateOfficialIcon(session);
+#if defined Q_OS_UNIX && !defined Q_OS_MAC
+	return QIcon::fromTheme(Platform::GetIconName(), result);
+#endif
 	return result;
 }
 
-MainWindow::MainWindow()
-: _positionUpdatedTimer([=] { savePosition(); })
+MainWindow::MainWindow(not_null<Controller*> controller)
+: _controller(controller)
+, _positionUpdatedTimer([=] { savePosition(); })
+, _outdated(CreateOutdatedBar(this))
 , _body(this)
-, _icon(CreateIcon())
 , _titleText(qsl("Telegram")) {
-	subscribe(Theme::Background(), [this](const Theme::BackgroundUpdate &data) {
+	subscribe(Theme::Background(), [=](
+			const Theme::BackgroundUpdate &data) {
 		if (data.paletteChanged()) {
-			if (_title) {
-				_title->update();
-			}
 			updatePalette();
 		}
 	});
-	subscribe(Global::RefUnreadCounterUpdate(), [this] { updateUnreadCounter(); });
-	subscribe(Global::RefWorkMode(), [this](DBIWorkMode mode) { workmodeUpdated(mode); });
-	subscribe(Messenger::Instance().authSessionChanged(), [this] { checkAuthSession(); });
-	checkAuthSession();
 
-	Messenger::Instance().termsLockValue(
+	Core::App().unreadBadgeChanges(
 	) | rpl::start_with_next([=] {
-		checkLockByTerms();
+		updateUnreadCounter();
 	}, lifetime());
 
-	_isActiveTimer.setCallback([this] { updateIsActive(0); });
-	_inactivePressTimer.setCallback([this] { setInactivePress(false); });
-}
-
-void MainWindow::checkLockByTerms() {
-	const auto data = Messenger::Instance().termsLocked();
-	if (!data || !AuthSession::Exists()) {
-		if (_termsBox) {
-			_termsBox->closeBox();
-		}
-		return;
-	}
-	Ui::hideSettingsAndLayer(anim::type::instant);
-	const auto box = Ui::show(Box<TermsBox>(
-		*data,
-		langFactory(lng_terms_agree),
-		langFactory(lng_terms_decline)));
-
-	box->setCloseByEscape(false);
-	box->setCloseByOutsideClick(false);
-
-	const auto id = data->id;
-	box->agreeClicks(
-	) | rpl::start_with_next([=] {
-		const auto mention = box ? box->lastClickedMention() : QString();
-		if (AuthSession::Exists()) {
-			Auth().api().acceptTerms(id);
-			if (!mention.isEmpty()) {
-				MentionClickHandler(mention).onClick(Qt::LeftButton);
-			}
-		}
-		Messenger::Instance().unlockTerms();
-	}, box->lifetime());
-
-	box->cancelClicks(
-	) | rpl::start_with_next([=] {
-		showTermsDecline();
-	}, box->lifetime());
-
-	connect(box, &QObject::destroyed, [=] {
-		crl::on_main(this, [=] { checkLockByTerms(); });
+	subscribe(Global::RefWorkMode(), [=](DBIWorkMode mode) {
+		workmodeUpdated(mode);
 	});
 
-	_termsBox = box;
+	Ui::Toast::SetDefaultParent(_body.data());
+
+	if (_outdated) {
+		_outdated->heightValue(
+		) | rpl::filter([=] {
+			return window()->windowHandle() != nullptr;
+		}) | rpl::start_with_next([=](int height) {
+			if (!height) {
+				crl::on_main(this, [=] { _outdated.destroy(); });
+			}
+			updateControlsGeometry();
+		}, _outdated->lifetime());
+	}
 }
 
-void MainWindow::showTermsDecline() {
-	const auto box = Ui::show(
-		Box<Window::TermsBox>(
-			TextWithEntities{ lang(lng_terms_update_sorry) },
-			langFactory(lng_terms_decline_and_delete),
-			langFactory(lng_terms_back),
-			true),
-		LayerOption::KeepOther);
-
-	box->agreeClicks(
-	) | rpl::start_with_next([=] {
-		if (box) {
-			box->closeBox();
-		}
-		showTermsDelete();
-	}, box->lifetime());
-
-	box->cancelClicks(
-	) | rpl::start_with_next([=] {
-		if (box) {
-			box->closeBox();
-		}
-	}, box->lifetime());
+Main::Account &MainWindow::account() const {
+	return _controller->account();
 }
 
-void MainWindow::showTermsDelete() {
-	const auto box = std::make_shared<QPointer<BoxContent>>();
-	*box = Ui::show(
-		Box<ConfirmBox>(
-			lang(lng_terms_delete_warning),
-			lang(lng_terms_delete_now),
-			st::attentionBoxButton,
-			[=] { Messenger::Instance().termsDeleteNow(); },
-			[=] { if (*box) (*box)->closeBox(); }),
-		LayerOption::KeepOther);
+Window::SessionController *MainWindow::sessionController() const {
+	return _controller->sessionController();
 }
 
 bool MainWindow::hideNoQuit() {
@@ -165,29 +173,29 @@ bool MainWindow::hideNoQuit() {
 	}
 	if (Global::WorkMode().value() == dbiwmTrayOnly || Global::WorkMode().value() == dbiwmWindowAndTray) {
 		if (minimizeToTray()) {
-			Ui::showChatsList();
+			if (const auto controller = sessionController()) {
+				Ui::showChatsList(&controller->session());
+			}
 			return true;
 		}
-	} else if (cPlatform() == dbipMac || cPlatform() == dbipMacOld) {
+	} else if (Platform::IsMac()) {
 		closeWithoutDestroy();
-		updateIsActive(Global::OfflineBlurTimeout());
+		controller().updateIsActiveBlur();
 		updateGlobalMenu();
-		Ui::showChatsList();
+		if (const auto controller = sessionController()) {
+			Ui::showChatsList(&controller->session());
+		}
 		return true;
 	}
 	return false;
 }
 
 void MainWindow::clearWidgets() {
-	Ui::hideLayer(anim::type::instant);
 	clearWidgetsHook();
 	updateGlobalMenu();
 }
 
-void MainWindow::updateIsActive(int timeout) {
-	if (timeout > 0) {
-		return _isActiveTimer.callOnce(timeout);
-	}
+void MainWindow::updateIsActive() {
 	_isActive = computeIsActive();
 	updateIsActiveHook();
 }
@@ -197,6 +205,14 @@ bool MainWindow::computeIsActive() const {
 }
 
 void MainWindow::updateWindowIcon() {
+	const auto session = sessionController()
+		? &sessionController()->session()
+		: nullptr;
+	const auto supportIcon = session && session->supportMode();
+	if (supportIcon != _usingSupportIcon || _icon.isNull()) {
+		_icon = CreateIcon(session);
+		_usingSupportIcon = supportIcon;
+	}
 	setWindowIcon(_icon);
 }
 
@@ -208,14 +224,34 @@ void MainWindow::init() {
 	initHook();
 	updateWindowIcon();
 
-	connect(windowHandle(), &QWindow::activeChanged, this, [this] { handleActiveChanged(); }, Qt::QueuedConnection);
-	connect(windowHandle(), &QWindow::windowStateChanged, this, [this](Qt::WindowState state) { handleStateChanged(state); });
+	// Non-queued activeChanged handlers must use QtSignalProducer.
+	connect(
+		windowHandle(),
+		&QWindow::activeChanged,
+		this,
+		[=] { handleActiveChanged(); },
+		Qt::QueuedConnection);
+	connect(
+		windowHandle(),
+		&QWindow::windowStateChanged,
+		this,
+		[=](Qt::WindowState state) { handleStateChanged(state); });
+	connect(
+		windowHandle(),
+		&QWindow::visibleChanged,
+		this,
+		[=](bool visible) { handleVisibleChanged(visible); });
 
 	updatePalette();
 
-	if ((_title = Platform::CreateTitleWidget(this))) {
-		_title->init();
+	if (Platform::AllowNativeWindowFrameToggle()) {
+		Core::App().settings().nativeWindowFrameChanges(
+		) | rpl::start_with_next([=](bool native) {
+			refreshTitleWidget();
+			recountGeometryConstraints();
+		}, lifetime());
 	}
+	refreshTitleWidget();
 
 	initSize();
 	updateUnreadCounter();
@@ -223,8 +259,14 @@ void MainWindow::init() {
 
 void MainWindow::handleStateChanged(Qt::WindowState state) {
 	stateChangedHook(state);
-	updateIsActive((state == Qt::WindowMinimized) ? Global::OfflineBlurTimeout() : Global::OnlineFocusTimeout());
-	psUserActionDone();
+	updateShadowSize();
+	updateControlsGeometry();
+	if (state == Qt::WindowMinimized) {
+		controller().updateIsActiveBlur();
+	} else {
+		controller().updateIsActiveFocus();
+	}
+	Core::App().updateNonIdle();
 	if (state == Qt::WindowMinimized && Global::WorkMode().value() == dbiwmTrayOnly) {
 		minimizeToTray();
 	}
@@ -233,15 +275,30 @@ void MainWindow::handleStateChanged(Qt::WindowState state) {
 
 void MainWindow::handleActiveChanged() {
 	if (isActiveWindow()) {
-		Messenger::Instance().checkMediaViewActivation();
+		Core::App().checkMediaViewActivation();
 	}
-	App::CallDelayed(1, this, [this] {
+	base::call_delayed(1, this, [this] {
 		updateTrayMenu();
 		handleActiveChangedHook();
 	});
 }
 
+void MainWindow::handleVisibleChanged(bool visible) {
+	if (visible) {
+		if (_maximizedBeforeHide) {
+			DEBUG_LOG(("Window Pos: Window was maximized before hidding, setting maximized."));
+			setWindowState(Qt::WindowMaximized);
+		}
+	} else {
+		_maximizedBeforeHide = cWindowPos().maximized;
+	}
+
+	handleVisibleChangedHook(visible);
+}
+
 void MainWindow::updatePalette() {
+	Ui::ForceFullRepaint(this);
+
 	auto p = palette();
 	p.setColor(QPalette::Window, st::windowBg->c);
 	setPalette(p);
@@ -257,16 +314,106 @@ HitTestResult MainWindow::hitTest(const QPoint &p) const {
 	return Window::HitTestResult::None;
 }
 
+bool MainWindow::hasShadow() const {
+	const auto center = geometry().center();
+	return Platform::WindowsNeedShadow()
+		&& Ui::Platform::TranslucentWindowsSupported(center)
+		&& _title;
+}
+
+QRect MainWindow::inner() const {
+	return rect().marginsRemoved(_padding);
+}
+
+int MainWindow::computeMinWidth() const {
+	auto result = st::windowMinWidth;
+	if (const auto session = _controller->sessionController()) {
+		if (const auto add = session->filtersWidth()) {
+			result += add;
+		}
+	}
+	if (_rightColumn) {
+		result += _rightColumn->width();
+	}
+	return result + _padding.left() + _padding.right();
+}
+
+int MainWindow::computeMinHeight() const {
+	const auto title = _title ? _title->height() : 0;
+	const auto outdated = [&] {
+		if (!_outdated) {
+			return 0;
+		}
+		_outdated->resizeToWidth(st::windowMinWidth - _padding.left() - _padding.right());
+		return _outdated->height();
+	}();
+	return title + outdated + st::windowMinHeight + _padding.top() + _padding.bottom();
+}
+
+void MainWindow::refreshTitleWidget() {
+	if (Platform::AllowNativeWindowFrameToggle()
+		&& Core::App().settings().nativeWindowFrame()) {
+		_title.destroy();
+		if (Platform::NativeTitleRequiresShadow()) {
+			_titleShadow.create(this);
+			_titleShadow->show();
+		}
+	} else if ((_title = Platform::CreateTitleWidget(this))) {
+		_title->show();
+		_title->init();
+		_titleShadow.destroy();
+	}
+
+	const auto withShadow = hasShadow();
+	windowHandle()->setFlag(Qt::NoDropShadowWindowHint, withShadow);
+	setAttribute(Qt::WA_OpaquePaintEvent, !withShadow);
+}
+
+void MainWindow::updateMinimumSize() {
+	setMinimumWidth(computeMinWidth());
+	setMinimumHeight(computeMinHeight());
+}
+
+void MainWindow::updateShadowSize() {
+	_padding = hasShadow() && !isMaximized()
+		? st::callShadow.extend
+		: style::margins();
+}
+
+void MainWindow::recountGeometryConstraints() {
+	updateShadowSize();
+	updateMinimumSize();
+	updateControlsGeometry();
+	fixOrder();
+}
+
 void MainWindow::initSize() {
-	setMinimumWidth(st::windowMinWidth);
-	setMinimumHeight((_title ? _title->height() : 0) + st::windowMinHeight);
+	updateMinimumSize();
 
 	auto position = cWindowPos();
 	DEBUG_LOG(("Window Pos: Initializing first %1, %2, %3, %4 (maximized %5)").arg(position.x).arg(position.y).arg(position.w).arg(position.h).arg(Logs::b(position.maximized)));
 
-	auto avail = QDesktopWidget().availableGeometry();
+	const auto primaryScreen = QGuiApplication::primaryScreen();
+	auto geometryScreen = primaryScreen;
+	const auto available = primaryScreen
+		? primaryScreen->availableGeometry()
+		: QRect(0, 0, st::windowDefaultWidth, st::windowDefaultHeight);
 	bool maximized = false;
-	auto geom = QRect(avail.x() + (avail.width() - st::windowDefaultWidth) / 2, avail.y() + (avail.height() - st::windowDefaultHeight) / 2, st::windowDefaultWidth, st::windowDefaultHeight);
+	const auto initialWidth = Core::Settings::ThirdColumnByDefault()
+		? st::windowBigDefaultWidth
+		: st::windowDefaultWidth;
+	const auto initialHeight = Core::Settings::ThirdColumnByDefault()
+		? st::windowBigDefaultHeight
+		: st::windowDefaultHeight;
+	auto geometry = QRect(
+		available.x() + std::max(
+			(available.width() - initialWidth) / 2,
+			0),
+		available.y() + std::max(
+			(available.height() - initialHeight) / 2,
+			0),
+		initialWidth,
+		initialHeight);
 	if (position.w && position.h) {
 		for (auto screen : QGuiApplication::screens()) {
 			if (position.moncrc == screenNameChecksum(screen->name())) {
@@ -284,7 +431,8 @@ void MainWindow::initSize() {
 					if (position.x + st::windowMinWidth <= screenGeometry.x() + screenGeometry.width() &&
 						position.y + st::windowMinHeight <= screenGeometry.y() + screenGeometry.height()) {
 						DEBUG_LOG(("Window Pos: Resulting geometry is %1, %2, %3, %4").arg(position.x).arg(position.y).arg(position.w).arg(position.h));
-						geom = QRect(position.x, position.y, position.w, position.h);
+						geometry = QRect(position.x, position.y, position.w, position.h);
+						geometryScreen = screen;
 					}
 				}
 				break;
@@ -292,8 +440,8 @@ void MainWindow::initSize() {
 		}
 		maximized = position.maximized;
 	}
-	DEBUG_LOG(("Window Pos: Setting first %1, %2, %3, %4").arg(geom.x()).arg(geom.y()).arg(geom.width()).arg(geom.height()));
-	setGeometry(geom);
+	DEBUG_LOG(("Window Pos: Setting first %1, %2, %3, %4").arg(geometry.x()).arg(geometry.y()).arg(geometry.width()).arg(geometry.height()));
+	setGeometry(geometry);
 }
 
 void MainWindow::positionUpdated() {
@@ -313,15 +461,34 @@ void MainWindow::setTitleVisible(bool visible) {
 }
 
 int32 MainWindow::screenNameChecksum(const QString &name) const {
-	auto bytes = name.toUtf8();
-	return hashCrc32(bytes.constData(), bytes.size());
+	const auto bytes = name.toUtf8();
+	return base::crc32(bytes.constData(), bytes.size());
 }
 
 void MainWindow::setPositionInited() {
 	_positionInited = true;
 }
 
+void MainWindow::attachToTrayIcon(not_null<QSystemTrayIcon*> icon) {
+	icon->setToolTip(AppName.utf16());
+	connect(icon, &QSystemTrayIcon::activated, this, [=](
+			QSystemTrayIcon::ActivationReason reason) {
+		Core::Sandbox::Instance().customEnterFromEventLoop([&] {
+			handleTrayIconActication(reason);
+		});
+	});
+	App::wnd()->updateTrayMenu();
+}
+
+void MainWindow::paintEvent(QPaintEvent *e) {
+	if (hasShadow() && !isMaximized()) {
+		QPainter p(this);
+		Ui::Shadow::paint(p, inner(), width(), st::callShadow);
+	}
+}
+
 void MainWindow::resizeEvent(QResizeEvent *e) {
+	updateShadowSize();
 	updateControlsGeometry();
 }
 
@@ -334,37 +501,58 @@ void MainWindow::leaveEventHook(QEvent *e) {
 }
 
 void MainWindow::updateControlsGeometry() {
-	auto bodyTop = 0;
-	auto bodyWidth = width();
+	const auto inner = this->inner();
+	auto bodyLeft = inner.x();
+	auto bodyTop = inner.y();
+	auto bodyWidth = inner.width();
 	if (_title && !_title->isHidden()) {
-		_title->setGeometry(0, bodyTop, width(), _title->height());
+		_title->setGeometry(inner.x(), bodyTop, inner.width(), _title->height());
 		bodyTop += _title->height();
+	}
+	if (_titleShadow) {
+		_titleShadow->setGeometry(inner.x(), bodyTop, inner.width(), st::lineWidth);
+	}
+	if (_outdated) {
+		Ui::SendPendingMoveResizeEvents(_outdated.data());
+		_outdated->resizeToWidth(inner.width());
+		_outdated->moveToLeft(inner.x(), bodyTop);
+		bodyTop += _outdated->height();
 	}
 	if (_rightColumn) {
 		bodyWidth -= _rightColumn->width();
-		_rightColumn->setGeometry(bodyWidth, bodyTop, width() - bodyWidth, height() - bodyTop);
+		_rightColumn->setGeometry(bodyWidth, bodyTop, inner.width() - bodyWidth, inner.height() - (bodyTop - inner.y()));
 	}
-	_body->setGeometry(0, bodyTop, bodyWidth, height() - bodyTop);
+	_body->setGeometry(bodyLeft, bodyTop, bodyWidth, inner.height() - (bodyTop - inner.y()));
 }
 
 void MainWindow::updateUnreadCounter() {
-	if (!Global::started() || App::quitting()) return;
+	if (App::quitting()) {
+		return;
+	}
 
-	auto counter = App::histories().unreadBadge();
+	const auto counter = Core::App().unreadBadge();
 	_titleText = (counter > 0) ? qsl("Telegram (%1)").arg(counter) : qsl("Telegram");
 
 	unreadCounterChangedHook();
 }
 
 void MainWindow::savePosition(Qt::WindowState state) {
-	if (state == Qt::WindowActive) state = windowHandle()->windowState();
-	if (state == Qt::WindowMinimized || !positionInited()) return;
+	if (state == Qt::WindowActive) {
+		state = windowHandle()->windowState();
+	}
+
+	if (state == Qt::WindowMinimized
+		|| !isVisible()
+		|| !positionInited()) {
+		return;
+	}
 
 	auto savedPosition = cWindowPos();
 	auto realPosition = savedPosition;
 
 	if (state == Qt::WindowMaximized) {
 		realPosition.maximized = 1;
+		DEBUG_LOG(("Window Pos: Saving maximized position."));
 	} else {
 		auto r = geometry();
 		realPosition.x = r.x();
@@ -373,29 +561,29 @@ void MainWindow::savePosition(Qt::WindowState state) {
 		realPosition.h = r.height();
 		realPosition.maximized = 0;
 		realPosition.moncrc = 0;
-	}
-	DEBUG_LOG(("Window Pos: Saving position: %1, %2, %3, %4 (maximized %5)").arg(realPosition.x).arg(realPosition.y).arg(realPosition.w).arg(realPosition.h).arg(Logs::b(realPosition.maximized)));
 
-	auto centerX = realPosition.x + realPosition.w / 2;
-	auto centerY = realPosition.y + realPosition.h / 2;
-	int minDelta = 0;
-	QScreen *chosen = nullptr;
-	auto screens = QGuiApplication::screens();
-	for (auto screen : QGuiApplication::screens()) {
-		auto delta = (screen->geometry().center() - QPoint(centerX, centerY)).manhattanLength();
-		if (!chosen || delta < minDelta) {
-			minDelta = delta;
-			chosen = screen;
+		DEBUG_LOG(("Window Pos: Saving non-maximized position: %1, %2, %3, %4").arg(realPosition.x).arg(realPosition.y).arg(realPosition.w).arg(realPosition.h));
+
+		auto centerX = realPosition.x + realPosition.w / 2;
+		auto centerY = realPosition.y + realPosition.h / 2;
+		int minDelta = 0;
+		QScreen *chosen = nullptr;
+		auto screens = QGuiApplication::screens();
+		for (auto screen : QGuiApplication::screens()) {
+			auto delta = (screen->geometry().center() - QPoint(centerX, centerY)).manhattanLength();
+			if (!chosen || delta < minDelta) {
+				minDelta = delta;
+				chosen = screen;
+			}
+		}
+		if (chosen) {
+			auto screenGeometry = chosen->geometry();
+			DEBUG_LOG(("Window Pos: Screen found, geometry: %1, %2, %3, %4").arg(screenGeometry.x()).arg(screenGeometry.y()).arg(screenGeometry.width()).arg(screenGeometry.height()));
+			realPosition.x -= screenGeometry.x();
+			realPosition.y -= screenGeometry.y();
+			realPosition.moncrc = screenNameChecksum(chosen->name());
 		}
 	}
-	if (chosen) {
-		auto screenGeometry = chosen->geometry();
-		DEBUG_LOG(("Window Pos: Screen found, geometry: %1, %2, %3, %4").arg(screenGeometry.x()).arg(screenGeometry.y()).arg(screenGeometry.width()).arg(screenGeometry.height()));
-		realPosition.x -= screenGeometry.x();
-		realPosition.y -= screenGeometry.y();
-		realPosition.moncrc = screenNameChecksum(chosen->name());
-	}
-
 	if (realPosition.w >= st::windowMinWidth && realPosition.h >= st::windowMinHeight) {
 		if (realPosition.x != savedPosition.x
 			|| realPosition.y != savedPosition.y
@@ -414,7 +602,7 @@ bool MainWindow::minimizeToTray() {
 	if (App::quitting() || !hasTrayIcon()) return false;
 
 	closeWithoutDestroy();
-	updateIsActive(Global::OfflineBlurTimeout());
+	controller().updateIsActiveBlur();
 	updateTrayMenu();
 	updateGlobalMenu();
 	showTrayTooltip();
@@ -422,13 +610,12 @@ bool MainWindow::minimizeToTray() {
 }
 
 void MainWindow::reActivateWindow() {
-#if defined Q_OS_LINUX32 || defined Q_OS_LINUX64
+#if defined Q_OS_UNIX && !defined Q_OS_MAC
 	const auto reActivate = [=] {
 		if (const auto w = App::wnd()) {
 			if (auto f = QApplication::focusWidget()) {
 				f->clearFocus();
 			}
-			windowHandle()->requestActivate();
 			w->activate();
 			if (auto f = QApplication::focusWidget()) {
 				f->clearFocus();
@@ -437,13 +624,13 @@ void MainWindow::reActivateWindow() {
 		}
 	};
 	crl::on_main(this, reActivate);
-	App::CallDelayed(200, this, reActivate);
-#endif // Q_OS_LINUX32 || Q_OS_LINUX64
+	base::call_delayed(200, this, reActivate);
+#endif // Q_OS_UNIX && !Q_OS_MAC
 }
 
 void MainWindow::showRightColumn(object_ptr<TWidget> widget) {
-	auto wasWidth = width();
-	auto wasRightWidth = _rightColumn ? _rightColumn->width() : 0;
+	const auto wasWidth = width();
+	const auto wasRightWidth = _rightColumn ? _rightColumn->width() : 0;
 	_rightColumn = std::move(widget);
 	if (_rightColumn) {
 		_rightColumn->setParent(this);
@@ -452,23 +639,32 @@ void MainWindow::showRightColumn(object_ptr<TWidget> widget) {
 	} else if (App::wnd()) {
 		App::wnd()->setInnerFocus();
 	}
-	auto nowRightWidth = _rightColumn ? _rightColumn->width() : 0;
-	setMinimumWidth(st::windowMinWidth + nowRightWidth);
+	const auto nowRightWidth = _rightColumn ? _rightColumn->width() : 0;
+	const auto wasMaximized = isMaximized();
+	const auto wasMinimumWidth = minimumWidth();
+	const auto nowMinimumWidth = computeMinWidth();
+	const auto firstResize = (nowMinimumWidth < wasMinimumWidth);
+	if (firstResize) {
+		setMinimumWidth(nowMinimumWidth);
+	}
 	if (!isMaximized()) {
 		tryToExtendWidthBy(wasWidth + nowRightWidth - wasRightWidth - width());
 	} else {
 		updateControlsGeometry();
 	}
+	if (!firstResize) {
+		setMinimumWidth(nowMinimumWidth);
+	}
 }
 
 int MainWindow::maximalExtendBy() const {
 	auto desktop = QDesktopWidget().availableGeometry(this);
-	return std::max(desktop.width() - geometry().width(), 0);
+	return std::max(desktop.width() - inner().width(), 0);
 }
 
 bool MainWindow::canExtendNoMove(int extendBy) const {
 	auto desktop = QDesktopWidget().availableGeometry(this);
-	auto inner = geometry();
+	auto inner = geometry().marginsRemoved(_padding);
 	auto innerRight = (inner.x() + inner.width() + extendBy);
 	auto desktopRight = (desktop.x() + desktop.width());
 	return innerRight <= desktopRight;
@@ -505,23 +701,19 @@ void MainWindow::launchDrag(std::unique_ptr<QMimeData> data) {
 	}
 }
 
-void MainWindow::checkAuthSession() {
-	if (AuthSession::Exists()) {
-		_controller = std::make_unique<Window::Controller>(this);
-	} else {
-		_controller = nullptr;
-	}
-}
+MainWindow::~MainWindow() {
+	_title.destroy();
 
-void MainWindow::setInactivePress(bool inactive) {
-	_wasInactivePress = inactive;
-	if (_wasInactivePress) {
-		_inactivePressTimer.callOnce(kInactivePressTimeout);
-	} else {
-		_inactivePressTimer.cancel();
-	}
+	// Otherwise:
+	// ~QWidget
+	// QWidgetPrivate::close_helper
+	// QWidgetPrivate::setVisible
+	// QWidgetPrivate::hide_helper
+	// QWidgetPrivate::hide_sys
+	// QWindowPrivate::setVisible
+	// QMetaObject::activate
+	// Window::MainWindow::handleVisibleChanged on a destroyed MainWindow.
+	hide();
 }
-
-MainWindow::~MainWindow() = default;
 
 } // namespace Window

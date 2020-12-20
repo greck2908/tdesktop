@@ -8,9 +8,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "logs.h"
 
 #include "platform/platform_specific.h"
-#include "mtproto/connection.h"
 #include "core/crash_reports.h"
 #include "core/launcher.h"
+
+namespace {
+
+std::atomic<int> ThreadCounter/* = 0*/;
+
+} // namespace
 
 enum LogDataType {
 	LogDataMain,
@@ -45,11 +50,10 @@ QString _logsFilePath(LogDataType type, const QString &postfix = QString()) {
 
 int32 LogsStartIndexChosen = -1;
 QString _logsEntryStart() {
-	static int32 index = 0;
-	QDateTime tm(QDateTime::currentDateTime());
+	static thread_local auto threadId = ThreadCounter++;
+	static auto index = 0;
 
-	auto thread = qobject_cast<MTP::internal::Thread*>(QThread::currentThread());
-	auto threadId = thread ? thread->getThreadIndex() : 0;
+	const auto tm = QDateTime::currentDateTime();
 
 	return QString("[%1 %2-%3]").arg(tm.toString("hh:mm:ss.zzz")).arg(QString("%1").arg(threadId, 2, 10, QChar('0'))).arg(++index, 7, 10, QChar('0'));
 }
@@ -69,9 +73,9 @@ public:
 
 	void closeMain() {
 		QMutexLocker lock(_logsMutex(LogDataMain));
-		if (files[LogDataMain]) {
-			streams[LogDataMain].setDevice(0);
-			files[LogDataMain]->close();
+		const auto file = files[LogDataMain].get();
+		if (file && file->isOpen()) {
+			file->close();
 		}
 	}
 
@@ -80,11 +84,12 @@ public:
 	}
 
 	QString full() {
-		if (!streams[LogDataMain].device()) {
+		const auto file = files[LogDataMain].get();
+		if (!!file || !file->isOpen()) {
 			return QString();
 		}
 
-		QFile out(files[LogDataMain]->fileName());
+		QFile out(file->fileName());
 		if (out.open(QIODevice::ReadOnly)) {
 			return QString::fromUtf8(out.readAll());
 		}
@@ -93,27 +98,29 @@ public:
 
 	void write(LogDataType type, const QString &msg) {
 		QMutexLocker lock(_logsMutex(type));
-		if (type != LogDataMain) reopenDebug();
-		if (!streams[type].device()) return;
-
-		streams[type] << msg;
-		streams[type].flush();
+		if (type != LogDataMain) {
+			reopenDebug();
+		}
+		const auto file = files[type].get();
+		if (!file || !file->isOpen()) {
+			return;
+		}
+		file->write(msg.toUtf8());
+		file->flush();
 	}
 
 private:
 	std::unique_ptr<QFile> files[LogDataCount];
-	QTextStream streams[LogDataCount];
 
 	int32 part = -1;
 
 	bool reopen(LogDataType type, int32 dayIndex, const QString &postfix) {
-		if (streams[type].device()) {
+		if (files[type] && files[type]->isOpen()) {
 			if (type == LogDataMain) {
 				if (!postfix.isEmpty()) {
 					return true;
 				}
 			} else {
-				streams[type].setDevice(0);
 				files[type]->close();
 			}
 		}
@@ -134,8 +141,6 @@ private:
 				}
 				if (to->open(mode | QIODevice::Append)) {
 					std::swap(files[type], to);
-					streams[type].setDevice(files[type].get());
-					streams[type].setCodec("UTF-8");
 					LOG(("Moved logging from '%1' to '%2'!").arg(to->fileName()).arg(files[type]->fileName()));
 					to->remove();
 
@@ -192,17 +197,14 @@ private:
 			}
 		}
 		if (files[type]->open(mode)) {
-			streams[type].setDevice(files[type].get());
-			streams[type].setCodec("UTF-8");
-
 			if (type != LogDataMain) {
-				streams[type] << ((mode & QIODevice::Append)
+				files[type]->write(((mode & QIODevice::Append)
 					? qsl("\
 ----------------------------------------------------------------\n\
 NEW LOGGING INSTANCE STARTED!!!\n\
 ----------------------------------------------------------------\n")
-					: qsl("%1\n").arg(dayIndex));
-				streams[type].flush();
+					: qsl("%1\n").arg(dayIndex)).toUtf8());
+				files[type]->flush();
 			}
 
 			return true;
@@ -235,7 +237,7 @@ NEW LOGGING INSTANCE STARTED!!!\n\
 
 LogsDataFields *LogsData = 0;
 
-typedef QList<QPair<LogDataType, QString> > LogsInMemoryList;
+using LogsInMemoryList = QList<QPair<LogDataType, QString>>;
 LogsInMemoryList *LogsInMemory = 0;
 LogsInMemoryList *DeletedLogsInMemory = SharedMemoryLocation<LogsInMemoryList, 0>();
 
@@ -321,10 +323,15 @@ bool DebugEnabled() {
 #endif
 }
 
-void start(not_null<Core::Launcher*> launcher) {
-	Assert(LogsData == 0);
+QString ProfilePrefix() {
+	const auto now = crl::profile();
+	return '[' + QString::number(now / 1000., 'f', 3) + "] ";
+}
 
-	if (!Sandbox::CheckBetaVersionDir()) {
+void start(not_null<Core::Launcher*> launcher) {
+	Assert(LogsData == nullptr);
+
+	if (!launcher->checkPortableVersionFolder()) {
 		return;
 	}
 
@@ -332,46 +339,54 @@ void start(not_null<Core::Launcher*> launcher) {
 	auto moveOldDataFrom = QString();
 	auto workingDirChosen = false;
 
-	if (cBetaVersion()) {
-		SetDebugEnabled(true);
+	if (cAlphaVersion()) {
 		workingDirChosen = true;
-#if defined Q_OS_MAC || defined Q_OS_LINUX
 	} else {
-#ifdef _DEBUG
-		cForceWorkingDir(cExeDir());
-#else // _DEBUG
+
+#ifdef Q_OS_UNIX
+
 		if (!cWorkingDir().isEmpty()) {
-			// This value must come only from the "-workdir" argument.
+			// This value must come from TelegramForcePortable
+			// or from the "-workdir" command line argument.
 			cForceWorkingDir(cWorkingDir());
 		} else {
+#if defined _DEBUG && !defined OS_MAC_STORE
+			cForceWorkingDir(cExeDir());
+#else // _DEBUG
 			cForceWorkingDir(psAppDataPath());
-		}
 #endif // !_DEBUG
+		}
 		workingDirChosen = true;
 
-#if defined Q_OS_LINUX && !defined _DEBUG // fix first version
+#if !defined Q_OS_MAC && !defined _DEBUG // fix first version
 		moveOldDataFrom = initialWorkingDir;
-#endif // Q_OS_LINUX && !_DEBUG
+#endif // !Q_OS_MAC && !_DEBUG
 
-#elif defined Q_OS_WINRT // Q_OS_MAC || Q_OS_LINUX
-	} else {
+#elif defined Q_OS_WINRT // Q_OS_UNIX
+
 		cForceWorkingDir(psAppDataPath());
 		workingDirChosen = true;
-#elif defined OS_WIN_STORE // Q_OS_MAC || Q_OS_LINUX || Q_OS_WINRT
+
+#elif defined OS_WIN_STORE // Q_OS_UNIX || Q_OS_WINRT
+
 #ifdef _DEBUG
 		cForceWorkingDir(cExeDir());
 #else // _DEBUG
 		cForceWorkingDir(psAppDataPath());
 #endif // !_DEBUG
 		workingDirChosen = true;
+
 #elif defined Q_OS_WIN
-	} else {
+
 		if (!cWorkingDir().isEmpty()) {
-			// This value must come only from the "-workdir" argument.
+			// This value must come from TelegramForcePortable
+			// or from the "-workdir" command line argument.
 			cForceWorkingDir(cWorkingDir());
 			workingDirChosen = true;
 		}
-#endif // Q_OS_MAC || Q_OS_LINUX || Q_OS_WINRT || OS_WIN_STORE
+
+#endif // Q_OS_UNIX || Q_OS_WINRT || OS_WIN_STORE
+
 	}
 
 	LogsData = new LogsDataFields();
@@ -391,22 +406,27 @@ void start(not_null<Core::Launcher*> launcher) {
 
 	QDir().mkpath(cWorkingDir() + qstr("tdata"));
 
-	Sandbox::WorkingDirReady();
-	CrashReports::StartCatching();
+	launcher->workingFolderReady();
+	CrashReports::StartCatching(launcher);
 
 	if (!LogsData->openMain()) {
 		delete LogsData;
-		LogsData = 0;
+		LogsData = nullptr;
 	}
 
-	LOG(("Launched version: %1, alpha: %2, beta: %3, debug mode: %4, test dc: %5").arg(AppVersion).arg(Logs::b(cAlphaVersion())).arg(cBetaVersion()).arg(Logs::b(DebugEnabled())).arg(Logs::b(cTestMode())));
+	LOG(("Launched version: %1, install beta: %2, alpha: %3, debug mode: %4"
+		).arg(AppVersion
+		).arg(Logs::b(cInstallBetaVersion())
+		).arg(cAlphaVersion()
+		).arg(Logs::b(DebugEnabled())));
 	LOG(("Executable dir: %1, name: %2").arg(cExeDir()).arg(cExeName()));
 	LOG(("Initial working dir: %1").arg(initialWorkingDir));
 	LOG(("Working dir: %1").arg(cWorkingDir()));
 	LOG(("Command line: %1").arg(launcher->argumentsString()));
 
 	if (!LogsData) {
-		LOG(("FATAL: Could not open '%1' for writing log!").arg(_logsFilePath(LogDataMain, qsl("_startXX"))));
+		LOG(("FATAL: Could not open '%1' for writing log!"
+			).arg(_logsFilePath(LogDataMain, qsl("_startXX"))));
 		return;
 	}
 
@@ -536,7 +556,7 @@ void writeDebug(const char *file, int32 line, const QString &v) {
 	//OutputDebugString(reinterpret_cast<const wchar_t *>(msg.utf16()));
 #elif defined Q_OS_MAC
 	//objc_outputDebugString(msg);
-#elif defined Q_OS_LINUX && defined _DEBUG
+#elif defined Q_OS_UNIX && defined _DEBUG
 	//std::cout << msg.toUtf8().constData();
 #endif
 }

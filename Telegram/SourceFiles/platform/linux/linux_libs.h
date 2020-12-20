@@ -7,22 +7,35 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <QtCore/QLibrary>
+
 #ifndef TDESKTOP_DISABLE_GTK_INTEGRATION
+
 extern "C" {
 #undef signals
-#include <libappindicator/app-indicator.h>
 #include <gtk/gtk.h>
 #include <gdk/gdk.h>
 #define signals public
 } // extern "C"
 
-#ifndef TDESKTOP_DISABLE_UNITY_INTEGRATION
-#include <unity/unity/unity.h>
-#endif // !TDESKTOP_DISABLE_UNITY_INTEGRATION
+// present starting with gtk 3.0, we can build with gtk2 headers
+typedef struct _GtkAppChooser GtkAppChooser;
+
 #endif // !TDESKTOP_DISABLE_GTK_INTEGRATION
+
+#if defined DESKTOP_APP_USE_PACKAGED && !defined DESKTOP_APP_USE_PACKAGED_LAZY
+#define LOAD_SYMBOL(lib, name, func) (func = ::func)
+#else // DESKTOP_APP_USE_PACKAGED && !DESKTOP_APP_USE_PACKAGED_LAZY
+#define LOAD_SYMBOL Platform::Libs::load
+#endif // !DESKTOP_APP_USE_PACKAGED || DESKTOP_APP_USE_PACKAGED_LAZY
 
 namespace Platform {
 namespace Libs {
+
+#ifndef TDESKTOP_DISABLE_GTK_INTEGRATION
+bool GtkLoaded();
+::GtkClipboard *GtkClipboard();
+#endif // !TDESKTOP_DISABLE_GTK_INTEGRATION
 
 void start();
 
@@ -45,23 +58,11 @@ bool load(QLibrary &lib, const char *name, Function &func) {
 typedef gboolean (*f_gtk_init_check)(int *argc, char ***argv);
 extern f_gtk_init_check gtk_init_check;
 
-typedef GtkWidget* (*f_gtk_menu_new)(void);
-extern f_gtk_menu_new gtk_menu_new;
+typedef const gchar* (*f_gtk_check_version)(guint required_major, guint required_minor, guint required_micro);
+extern f_gtk_check_version gtk_check_version;
 
-typedef GType (*f_gtk_menu_get_type)(void) G_GNUC_CONST;
-extern f_gtk_menu_get_type gtk_menu_get_type;
-
-typedef GtkWidget* (*f_gtk_menu_item_new_with_label)(const gchar *label);
-extern f_gtk_menu_item_new_with_label gtk_menu_item_new_with_label;
-
-typedef void (*f_gtk_menu_item_set_label)(GtkMenuItem *menu_item, const gchar *label);
-extern f_gtk_menu_item_set_label gtk_menu_item_set_label;
-
-typedef void (*f_gtk_menu_shell_append)(GtkMenuShell *menu_shell, GtkWidget *child);
-extern f_gtk_menu_shell_append gtk_menu_shell_append;
-
-typedef GType (*f_gtk_menu_shell_get_type)(void) G_GNUC_CONST;
-extern f_gtk_menu_shell_get_type gtk_menu_shell_get_type;
+typedef GtkSettings* (*f_gtk_settings_get_default)(void);
+extern f_gtk_settings_get_default gtk_settings_get_default;
 
 typedef void (*f_gtk_widget_show)(GtkWidget *widget);
 extern f_gtk_widget_show gtk_widget_show;
@@ -69,17 +70,8 @@ extern f_gtk_widget_show gtk_widget_show;
 typedef void (*f_gtk_widget_hide)(GtkWidget *widget);
 extern f_gtk_widget_hide gtk_widget_hide;
 
-typedef GtkWidget* (*f_gtk_widget_get_toplevel)(GtkWidget *widget);
-extern f_gtk_widget_get_toplevel gtk_widget_get_toplevel;
-
-typedef gboolean (*f_gtk_widget_get_visible)(GtkWidget *widget);
-extern f_gtk_widget_get_visible gtk_widget_get_visible;
-
 typedef GdkWindow* (*f_gtk_widget_get_window)(GtkWidget *widget);
 extern f_gtk_widget_get_window gtk_widget_get_window;
-
-typedef void (*f_gtk_widget_set_sensitive)(GtkWidget *widget, gboolean sensitive);
-extern f_gtk_widget_set_sensitive gtk_widget_set_sensitive;
 
 typedef void (*f_gtk_widget_realize)(GtkWidget *widget);
 extern f_gtk_widget_realize gtk_widget_realize;
@@ -90,11 +82,23 @@ extern f_gtk_widget_hide_on_delete gtk_widget_hide_on_delete;
 typedef void (*f_gtk_widget_destroy)(GtkWidget *widget);
 extern f_gtk_widget_destroy gtk_widget_destroy;
 
-typedef GtkClipboard* (*f_gtk_clipboard_get)(GdkAtom selection);
+typedef ::GtkClipboard* (*f_gtk_clipboard_get)(GdkAtom selection);
 extern f_gtk_clipboard_get gtk_clipboard_get;
 
-typedef void (*f_gtk_clipboard_store)(GtkClipboard *clipboard);
+typedef void (*f_gtk_clipboard_store)(::GtkClipboard *clipboard);
 extern f_gtk_clipboard_store gtk_clipboard_store;
+
+typedef GtkSelectionData* (*f_gtk_clipboard_wait_for_contents)(::GtkClipboard *clipboard, GdkAtom target);
+extern f_gtk_clipboard_wait_for_contents gtk_clipboard_wait_for_contents;
+
+typedef GdkPixbuf* (*f_gtk_clipboard_wait_for_image)(::GtkClipboard *clipboard);
+extern f_gtk_clipboard_wait_for_image gtk_clipboard_wait_for_image;
+
+typedef gboolean (*f_gtk_selection_data_targets_include_image)(const GtkSelectionData *selection_data, gboolean writable);
+extern f_gtk_selection_data_targets_include_image gtk_selection_data_targets_include_image;
+
+typedef void (*f_gtk_selection_data_free)(GtkSelectionData *data);
+extern f_gtk_selection_data_free gtk_selection_data_free;
 
 typedef GtkWidget* (*f_gtk_file_chooser_dialog_new)(const gchar *title, GtkWindow *parent, GtkFileChooserAction action, const gchar *first_button_text, ...) G_GNUC_NULL_TERMINATED;
 extern f_gtk_file_chooser_dialog_new gtk_file_chooser_dialog_new;
@@ -171,6 +175,12 @@ extern f_gtk_image_new gtk_image_new;
 typedef void (*f_gtk_image_set_from_pixbuf)(GtkImage *image, GdkPixbuf *pixbuf);
 extern f_gtk_image_set_from_pixbuf gtk_image_set_from_pixbuf;
 
+typedef GtkWidget* (*f_gtk_app_chooser_dialog_new)(GtkWindow *parent, GtkDialogFlags flags, GFile *file);
+extern f_gtk_app_chooser_dialog_new gtk_app_chooser_dialog_new;
+
+typedef GAppInfo* (*f_gtk_app_chooser_get_app_info)(GtkAppChooser *self);
+extern f_gtk_app_chooser_get_app_info gtk_app_chooser_get_app_info;
+
 typedef void (*f_gdk_set_allowed_backends)(const gchar *backends);
 extern f_gdk_set_allowed_backends gdk_set_allowed_backends;
 
@@ -180,22 +190,9 @@ extern f_gdk_window_set_modal_hint gdk_window_set_modal_hint;
 typedef void (*f_gdk_window_focus)(GdkWindow *window, guint32 timestamp);
 extern f_gdk_window_focus gdk_window_focus;
 
-typedef GTypeInstance* (*f_g_type_check_instance_cast)(GTypeInstance *instance, GType iface_type);
-extern f_g_type_check_instance_cast g_type_check_instance_cast;
-
 template <typename Result, typename Object>
 inline Result *g_type_cic_helper(Object *instance, GType iface_type) {
 	return reinterpret_cast<Result*>(g_type_check_instance_cast(reinterpret_cast<GTypeInstance*>(instance), iface_type));
-}
-
-template <typename Object>
-inline GtkMenu *gtk_menu_cast(Object *obj) {
-	return g_type_cic_helper<GtkMenu, Object>(obj, gtk_menu_get_type());
-}
-
-template <typename Object>
-inline GtkMenuShell *gtk_menu_shell_cast(Object *obj) {
-	return g_type_cic_helper<GtkMenuShell, Object>(obj, gtk_menu_get_type());
 }
 
 typedef GType (*f_gtk_dialog_get_type)(void) G_GNUC_CONST;
@@ -204,11 +201,6 @@ extern f_gtk_dialog_get_type gtk_dialog_get_type;
 template <typename Object>
 inline GtkDialog *gtk_dialog_cast(Object *obj) {
 	return g_type_cic_helper<GtkDialog, Object>(obj, gtk_dialog_get_type());
-}
-
-template <typename Object>
-inline GObject *g_object_cast(Object *obj) {
-	return g_type_cic_helper<GObject, Object>(obj, G_TYPE_OBJECT);
 }
 
 typedef GType (*f_gtk_file_chooser_get_type)(void) G_GNUC_CONST;
@@ -243,8 +235,21 @@ inline GtkWindow *gtk_window_cast(Object *obj) {
 	return g_type_cic_helper<GtkWindow, Object>(obj, gtk_window_get_type());
 }
 
-typedef gboolean (*f_g_type_check_instance_is_a)(GTypeInstance *instance, GType iface_type);
-extern f_g_type_check_instance_is_a g_type_check_instance_is_a;
+typedef GType (*f_gtk_widget_get_type)(void) G_GNUC_CONST;
+extern f_gtk_widget_get_type gtk_widget_get_type;
+
+template <typename Object>
+inline GtkWidget *gtk_widget_cast(Object *obj) {
+	return g_type_cic_helper<GtkWidget, Object>(obj, gtk_widget_get_type());
+}
+
+typedef GType (*f_gtk_app_chooser_get_type)(void) G_GNUC_CONST;
+extern f_gtk_app_chooser_get_type gtk_app_chooser_get_type;
+
+template <typename Object>
+inline GtkAppChooser *gtk_app_chooser_cast(Object *obj) {
+	return g_type_cic_helper<GtkAppChooser, Object>(obj, gtk_app_chooser_get_type());
+}
 
 template <typename Object>
 inline bool g_type_cit_helper(Object *instance, GType iface_type) {
@@ -254,123 +259,52 @@ inline bool g_type_cit_helper(Object *instance, GType iface_type) {
 	if (ginstance->g_class && ginstance->g_class->g_type == iface_type) {
 		return true;
 	}
-    return g_type_check_instance_is_a(ginstance, iface_type);
+	return g_type_check_instance_is_a(ginstance, iface_type);
 }
 
 typedef gint (*f_gtk_dialog_run)(GtkDialog *dialog);
 extern f_gtk_dialog_run gtk_dialog_run;
 
-typedef gulong (*f_g_signal_connect_data)(gpointer instance, const gchar *detailed_signal, GCallback c_handler, gpointer data, GClosureNotify destroy_data, GConnectFlags connect_flags);
-extern f_g_signal_connect_data g_signal_connect_data;
-
-inline gulong g_signal_connect_helper(gpointer instance, const gchar *detailed_signal, GCallback c_handler, gpointer data, GClosureNotify destroy_data = nullptr) {
-	return g_signal_connect_data(instance, detailed_signal, c_handler, data, destroy_data, (GConnectFlags)0);
-}
-
-inline gulong g_signal_connect_swapped_helper(gpointer instance, const gchar *detailed_signal, GCallback c_handler, gpointer data, GClosureNotify destroy_data = nullptr) {
-	return g_signal_connect_data(instance, detailed_signal, c_handler, data, destroy_data, G_CONNECT_SWAPPED);
-}
-
-typedef void (*f_g_signal_handler_disconnect)(gpointer instance, gulong handler_id);
-extern f_g_signal_handler_disconnect g_signal_handler_disconnect;
-
-typedef AppIndicator* (*f_app_indicator_new)(const gchar *id, const gchar *icon_name, AppIndicatorCategory category);
-extern f_app_indicator_new app_indicator_new;
-
-typedef void (*f_app_indicator_set_status)(AppIndicator *self, AppIndicatorStatus status);
-extern f_app_indicator_set_status app_indicator_set_status;
-
-typedef void (*f_app_indicator_set_menu)(AppIndicator *self, GtkMenu *menu);
-extern f_app_indicator_set_menu app_indicator_set_menu;
-
-typedef void (*f_app_indicator_set_icon_full)(AppIndicator *self, const gchar *icon_name, const gchar *icon_desc);
-extern f_app_indicator_set_icon_full app_indicator_set_icon_full;
-
-typedef gboolean (*f_gdk_init_check)(gint *argc, gchar ***argv);
-extern f_gdk_init_check gdk_init_check;
-
-typedef GdkPixbuf* (*f_gdk_pixbuf_new_from_data)(const guchar *data, GdkColorspace colorspace, gboolean has_alpha, int bits_per_sample, int width, int height, int rowstride, GdkPixbufDestroyNotify destroy_fn, gpointer destroy_fn_data);
-extern f_gdk_pixbuf_new_from_data gdk_pixbuf_new_from_data;
-
-typedef GdkPixbuf* (*f_gdk_pixbuf_new_from_file)(const gchar *filename, GError **error);
-extern f_gdk_pixbuf_new_from_file gdk_pixbuf_new_from_file;
+typedef GdkAtom (*f_gdk_atom_intern)(const gchar *atom_name, gboolean only_if_exists);
+extern f_gdk_atom_intern gdk_atom_intern;
 
 typedef GdkPixbuf* (*f_gdk_pixbuf_new_from_file_at_size)(const gchar *filename, int width, int height, GError **error);
 extern f_gdk_pixbuf_new_from_file_at_size gdk_pixbuf_new_from_file_at_size;
 
-typedef GtkStatusIcon* (*f_gtk_status_icon_new_from_pixbuf)(GdkPixbuf *pixbuf);
-extern f_gtk_status_icon_new_from_pixbuf gtk_status_icon_new_from_pixbuf;
+typedef gboolean (*f_gdk_pixbuf_get_has_alpha)(const GdkPixbuf *pixbuf);
+extern f_gdk_pixbuf_get_has_alpha gdk_pixbuf_get_has_alpha;
 
-typedef void (*f_gtk_status_icon_set_from_pixbuf)(GtkStatusIcon *status_icon, GdkPixbuf *pixbuf);
-extern f_gtk_status_icon_set_from_pixbuf gtk_status_icon_set_from_pixbuf;
+typedef guchar* (*f_gdk_pixbuf_get_pixels)(const GdkPixbuf *pixbuf);
+extern f_gdk_pixbuf_get_pixels gdk_pixbuf_get_pixels;
 
-typedef GtkStatusIcon* (*f_gtk_status_icon_new_from_file)(const gchar *filename);
-extern f_gtk_status_icon_new_from_file gtk_status_icon_new_from_file;
+typedef int (*f_gdk_pixbuf_get_width)(const GdkPixbuf *pixbuf);
+extern f_gdk_pixbuf_get_width gdk_pixbuf_get_width;
 
-typedef void (*f_gtk_status_icon_set_from_file)(GtkStatusIcon *status_icon, const gchar *filename);
-extern f_gtk_status_icon_set_from_file gtk_status_icon_set_from_file;
+typedef int (*f_gdk_pixbuf_get_height)(const GdkPixbuf *pixbuf);
+extern f_gdk_pixbuf_get_height gdk_pixbuf_get_height;
 
-typedef void (*f_gtk_status_icon_set_title)(GtkStatusIcon *status_icon, const gchar *title);
-extern f_gtk_status_icon_set_title gtk_status_icon_set_title;
+typedef int (*f_gdk_pixbuf_get_rowstride)(const GdkPixbuf *pixbuf);
+extern f_gdk_pixbuf_get_rowstride gdk_pixbuf_get_rowstride;
 
-typedef void (*f_gtk_status_icon_set_tooltip_text)(GtkStatusIcon *status_icon, const gchar *title);
-extern f_gtk_status_icon_set_tooltip_text gtk_status_icon_set_tooltip_text;
+inline bool GtkSettingSupported() {
+	return gtk_settings_get_default != nullptr;
+}
 
-typedef void (*f_gtk_status_icon_set_visible)(GtkStatusIcon *status_icon, gboolean visible);
-extern f_gtk_status_icon_set_visible gtk_status_icon_set_visible;
+template <typename T>
+inline T GtkSetting(const gchar *propertyName) {
+	GtkSettings *settings = gtk_settings_get_default();
+	T value;
+	g_object_get(settings, propertyName, &value, nullptr);
+	return value;
+}
 
-typedef gboolean (*f_gtk_status_icon_is_embedded)(GtkStatusIcon *status_icon);
-extern f_gtk_status_icon_is_embedded gtk_status_icon_is_embedded;
-
-typedef gboolean (*f_gtk_status_icon_get_geometry)(GtkStatusIcon *status_icon, GdkScreen **screen, GdkRectangle *area, GtkOrientation *orientation);
-extern f_gtk_status_icon_get_geometry gtk_status_icon_get_geometry;
-
-typedef void (*f_gtk_status_icon_position_menu)(GtkMenu *menu, gint *x, gint *y, gboolean *push_in, gpointer user_data);
-extern f_gtk_status_icon_position_menu gtk_status_icon_position_menu;
-
-typedef void (*f_gtk_menu_popup)(GtkMenu *menu, GtkWidget *parent_menu_shell, GtkWidget *parent_menu_item, GtkMenuPositionFunc func, gpointer data, guint button, guint32 activate_time);
-extern f_gtk_menu_popup gtk_menu_popup;
-
-typedef guint32 (*f_gtk_get_current_event_time)(void);
-extern f_gtk_get_current_event_time gtk_get_current_event_time;
-
-typedef gpointer (*f_g_object_ref_sink)(gpointer object);
-extern f_g_object_ref_sink g_object_ref_sink;
-
-typedef void (*f_g_object_unref)(gpointer object);
-extern f_g_object_unref g_object_unref;
-
-typedef guint (*f_g_idle_add)(GSourceFunc function, gpointer data);
-extern f_g_idle_add g_idle_add;
-
-typedef void (*f_g_free)(gpointer mem);
-extern f_g_free g_free;
-
-typedef void (*f_g_list_foreach)(GList *list, GFunc func, gpointer user_data);
-extern f_g_list_foreach g_list_foreach;
-
-typedef void (*f_g_list_free)(GList *list);
-extern f_g_list_free g_list_free;
-
-typedef void (*f_g_list_free_full)(GList *list, GDestroyNotify free_func);
-extern f_g_list_free_full g_list_free_full;
-
-typedef void (*f_g_error_free)(GError *error);
-extern f_g_error_free g_error_free;
-
-typedef void (*f_g_slist_free)(GSList *list);
-extern f_g_slist_free g_slist_free;
-
-#ifndef TDESKTOP_DISABLE_UNITY_INTEGRATION
-typedef void (*f_unity_launcher_entry_set_count)(UnityLauncherEntry* self, gint64 value);
-extern f_unity_launcher_entry_set_count unity_launcher_entry_set_count;
-
-typedef void (*f_unity_launcher_entry_set_count_visible)(UnityLauncherEntry* self, gboolean value);
-extern f_unity_launcher_entry_set_count_visible unity_launcher_entry_set_count_visible;
-
-typedef UnityLauncherEntry* (*f_unity_launcher_entry_get_for_desktop_id)(const gchar* desktop_id);
-extern f_unity_launcher_entry_get_for_desktop_id unity_launcher_entry_get_for_desktop_id;
-#endif // !TDESKTOP_DISABLE_UNITY_INTEGRATION
+inline QString GtkSetting(const gchar *propertyName) {
+	gchararray value = GtkSetting<gchararray>(propertyName);
+	QString str = QString::fromUtf8(value);
+	g_free(value);
+	DEBUG_LOG(("Getting GTK setting, %1: '%2'").arg(propertyName).arg(str));
+	return str;
+}
 #endif // !TDESKTOP_DISABLE_GTK_INTEGRATION
 
 } // namespace Libs

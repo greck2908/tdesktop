@@ -7,6 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "ui/effects/animations.h"
+#include "ui/rp_widget.h"
+
 namespace Profile {
 
 class CoverDropArea : public TWidget {
@@ -32,7 +35,7 @@ private:
 	int _titleWidth, _subtitleWidth;
 
 	QPixmap _cache;
-	Animation _a_appearance;
+	Ui::Animations::Simple _a_appearance;
 	bool _hiding = false;
 	HideFinishCallback _hideFinishCallback;
 

@@ -16,11 +16,8 @@ enum class LoadDirection : char {
 };
 
 struct MessagePosition {
-	constexpr MessagePosition() = default;
-	constexpr MessagePosition(TimeId date, FullMsgId fullId)
-	: fullId(fullId)
-	, date(date) {
-	}
+	FullMsgId fullId;
+	TimeId date = 0;
 
 	explicit operator bool() const {
 		return (fullId.msg != 0);
@@ -50,18 +47,11 @@ struct MessagePosition {
 	inline constexpr bool operator!=(const MessagePosition &other) const {
 		return !(*this == other);
 	}
-
-	FullMsgId fullId;
-	TimeId date = 0;
-
 };
 
 struct MessagesRange {
-	constexpr MessagesRange() = default;
-	constexpr MessagesRange(MessagePosition from, MessagePosition till)
-	: from(from)
-	, till(till) {
-	}
+	MessagePosition from;
+	MessagePosition till;
 
 	inline constexpr bool operator==(const MessagesRange &other) const {
 		return (from == other.from)
@@ -70,77 +60,76 @@ struct MessagesRange {
 	inline constexpr bool operator!=(const MessagesRange &other) const {
 		return !(*this == other);
 	}
-
-	MessagePosition from;
-	MessagePosition till;
-
 };
 
 constexpr auto MinDate = TimeId(0);
 constexpr auto MaxDate = std::numeric_limits<TimeId>::max();
-constexpr auto MinMessagePosition = MessagePosition(
-	MinDate,
-	FullMsgId(NoChannel, 1));
-constexpr auto MaxMessagePosition = MessagePosition(
-	MaxDate,
-	FullMsgId(NoChannel, ServerMaxMsgId - 1));
-constexpr auto FullMessagesRange = MessagesRange(
-	MinMessagePosition,
-	MaxMessagePosition);
-constexpr auto UnreadMessagePosition = MessagePosition(
-	MinDate,
-	FullMsgId(NoChannel, ShowAtUnreadMsgId));
+constexpr auto MinMessagePosition = MessagePosition{
+	.fullId = FullMsgId(NoChannel, 1),
+	.date = MinDate,
+};
+constexpr auto MaxMessagePosition = MessagePosition{
+	.fullId = FullMsgId(NoChannel, ServerMaxMsgId - 1),
+	.date = MaxDate,
+};
+constexpr auto FullMessagesRange = MessagesRange{
+	.from = MinMessagePosition,
+	.till = MaxMessagePosition,
+};
+constexpr auto UnreadMessagePosition = MessagePosition{
+	.fullId = FullMsgId(NoChannel, ShowAtUnreadMsgId),
+	.date = MinDate,
+};
 
 struct MessagesSlice {
 	std::vector<FullMsgId> ids;
-	base::optional<int> skippedBefore;
-	base::optional<int> skippedAfter;
-	base::optional<int> fullCount;
-
+	FullMsgId nearestToAround;
+	std::optional<int> skippedBefore;
+	std::optional<int> skippedAfter;
+	std::optional<int> fullCount;
 };
 
 struct MessagesQuery {
-	MessagesQuery(
-		MessagePosition aroundId,
-		int limitBefore,
-		int limitAfter)
-	: aroundId(aroundId)
-	, limitBefore(limitBefore)
-	, limitAfter(limitAfter) {
-	}
-
 	MessagePosition aroundId;
 	int limitBefore = 0;
 	int limitAfter = 0;
-
 };
 
 struct MessagesResult {
-	base::optional<int> count;
-	base::optional<int> skippedBefore;
-	base::optional<int> skippedAfter;
+	std::optional<int> count;
+	std::optional<int> skippedBefore;
+	std::optional<int> skippedAfter;
 	base::flat_set<MessagePosition> messageIds;
 };
 
 struct MessagesSliceUpdate {
 	const base::flat_set<MessagePosition> *messages = nullptr;
 	MessagesRange range;
-	base::optional<int> count;
+	std::optional<int> count;
 };
 
 class MessagesList {
 public:
+	void addOne(MessagePosition messageId);
 	void addNew(MessagePosition messageId);
 	void addSlice(
 		std::vector<MessagePosition> &&messageIds,
 		MessagesRange noSkipRange,
-		base::optional<int> count);
+		std::optional<int> count);
 	void removeOne(MessagePosition messageId);
 	void removeAll(ChannelId channelId);
+	void removeLessThan(MessagePosition messageId);
 	void invalidate();
 	void invalidateBottom();
-	rpl::producer<MessagesResult> query(MessagesQuery &&query) const;
-	rpl::producer<MessagesSliceUpdate> sliceUpdated() const;
+	[[nodiscard]] rpl::producer<MessagesResult> query(
+		MessagesQuery &&query) const;
+	[[nodiscard]] rpl::producer<MessagesSliceUpdate> sliceUpdated() const;
+
+	[[nodiscard]] MessagesResult snapshot(MessagesQuery &&query) const;
+	[[nodiscard]] rpl::producer<MessagesResult> viewer(
+		MessagesQuery &&query) const;
+
+	[[nodiscard]] bool empty() const;
 
 private:
 	struct Slice {
@@ -178,14 +167,15 @@ private:
 	void addRange(
 		const Range &messages,
 		MessagesRange noSkipRange,
-		base::optional<int> count,
+		std::optional<int> count,
 		bool incrementCount = false);
 
 	MessagesResult queryFromSlice(
 		const MessagesQuery &query,
 		const Slice &slice) const;
+	MessagesResult queryCurrent(const MessagesQuery &query) const;
 
-	base::optional<int> _count;
+	std::optional<int> _count;
 	base::flat_set<Slice> _slices;
 
 	rpl::event_stream<MessagesSliceUpdate> _sliceUpdated;
@@ -234,17 +224,17 @@ private:
 	void sliceToLimits();
 
 	void mergeSliceData(
-		base::optional<int> count,
+		std::optional<int> count,
 		const base::flat_set<MessagePosition> &messageIds,
-		base::optional<int> skippedBefore = base::none,
-		base::optional<int> skippedAfter = base::none);
+		std::optional<int> skippedBefore = std::nullopt,
+		std::optional<int> skippedAfter = std::nullopt);
 
 	MessagePosition _key;
 	base::flat_set<MessagePosition> _ids;
 	MessagesRange _range;
-	base::optional<int> _fullCount;
-	base::optional<int> _skippedBefore;
-	base::optional<int> _skippedAfter;
+	std::optional<int> _fullCount;
+	std::optional<int> _skippedBefore;
+	std::optional<int> _skippedAfter;
 	int _limitBefore = 0;
 	int _limitAfter = 0;
 

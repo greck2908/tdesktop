@@ -25,6 +25,7 @@ struct SharedMediaRemoveOne;
 struct SharedMediaRemoveAll;
 struct SharedMediaInvalidateBottom;
 struct SharedMediaQuery;
+struct SharedMediaKey;
 using SharedMediaResult = SparseIdsListResult;
 struct SharedMediaSliceUpdate;
 
@@ -36,15 +37,15 @@ struct UserPhotosQuery;
 struct UserPhotosResult;
 struct UserPhotosSliceUpdate;
 
-struct FeedMessagesAddNew;
-struct FeedMessagesAddSlice;
-struct FeedMessagesRemoveOne;
-struct FeedMessagesRemoveAll;
-struct FeedMessagesInvalidate;
-struct FeedMessagesInvalidateBottom;
-struct FeedMessagesQuery;
-using FeedMessagesResult = Data::MessagesResult;
-struct FeedMessagesSliceUpdate;
+//struct FeedMessagesAddNew; // #feed
+//struct FeedMessagesAddSlice;
+//struct FeedMessagesRemoveOne;
+//struct FeedMessagesRemoveAll;
+//struct FeedMessagesInvalidate;
+//struct FeedMessagesInvalidateBottom;
+//struct FeedMessagesQuery;
+//using FeedMessagesResult = Data::MessagesResult;
+//struct FeedMessagesSliceUpdate;
 
 class Facade {
 public:
@@ -58,6 +59,8 @@ public:
 	void invalidate(SharedMediaInvalidateBottom &&query);
 
 	rpl::producer<SharedMediaResult> query(SharedMediaQuery &&query) const;
+	SharedMediaResult snapshot(const SharedMediaQuery &query) const;
+	bool empty(const SharedMediaKey &key) const;
 	rpl::producer<SharedMediaSliceUpdate> sharedMediaSliceUpdated() const;
 	rpl::producer<SharedMediaRemoveOne> sharedMediaOneRemoved() const;
 	rpl::producer<SharedMediaRemoveAll> sharedMediaAllRemoved() const;
@@ -71,20 +74,20 @@ public:
 	rpl::producer<UserPhotosResult> query(UserPhotosQuery &&query) const;
 	rpl::producer<UserPhotosSliceUpdate> userPhotosSliceUpdated() const;
 
-	void add(FeedMessagesAddNew &&query);
-	void add(FeedMessagesAddSlice &&query);
-	void remove(FeedMessagesRemoveOne &&query);
-	void remove(FeedMessagesRemoveAll &&query);
-	void invalidate(FeedMessagesInvalidate &&query);
-	void invalidate(FeedMessagesInvalidateBottom &&query);
+	//void add(FeedMessagesAddNew &&query); // #feed
+	//void add(FeedMessagesAddSlice &&query);
+	//void remove(FeedMessagesRemoveOne &&query);
+	//void remove(FeedMessagesRemoveAll &&query);
+	//void invalidate(FeedMessagesInvalidate &&query);
+	//void invalidate(FeedMessagesInvalidateBottom &&query);
 
-	rpl::producer<FeedMessagesResult> query(
-		FeedMessagesQuery &&query) const;
-	rpl::producer<FeedMessagesSliceUpdate> feedMessagesSliceUpdated() const;
-	rpl::producer<FeedMessagesRemoveOne> feedMessagesOneRemoved() const;
-	rpl::producer<FeedMessagesRemoveAll> feedMessagesAllRemoved() const;
-	rpl::producer<FeedMessagesInvalidate> feedMessagesInvalidated() const;
-	rpl::producer<FeedMessagesInvalidateBottom> feedMessagesBottomInvalidated() const;
+	//rpl::producer<FeedMessagesResult> query(
+	//	FeedMessagesQuery &&query) const;
+	//rpl::producer<FeedMessagesSliceUpdate> feedMessagesSliceUpdated() const;
+	//rpl::producer<FeedMessagesRemoveOne> feedMessagesOneRemoved() const;
+	//rpl::producer<FeedMessagesRemoveAll> feedMessagesAllRemoved() const;
+	//rpl::producer<FeedMessagesInvalidate> feedMessagesInvalidated() const;
+	//rpl::producer<FeedMessagesInvalidateBottom> feedMessagesBottomInvalidated() const;
 
 	~Facade();
 

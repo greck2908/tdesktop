@@ -15,7 +15,7 @@ class SettingsSlider;
 } // namespace Ui
 
 namespace Window {
-class ConnectingWidget;
+class ConnectionState;
 } // namespace Window
 
 namespace Info {
@@ -30,12 +30,12 @@ class SectionWidget final : public Window::SectionWidget {
 public:
 	SectionWidget(
 		QWidget *parent,
-		not_null<Window::Controller*> window,
+		not_null<Window::SessionController*> window,
 		Wrap wrap,
 		not_null<Memento*> memento);
 	SectionWidget(
 		QWidget *parent,
-		not_null<Window::Controller*> window,
+		not_null<Window::SessionController*> window,
 		Wrap wrap,
 		not_null<MoveMemento*> memento);
 
@@ -48,14 +48,14 @@ public:
 	bool showInternal(
 		not_null<Window::SectionMemento*> memento,
 		const Window::SectionShow &params) override;
-	std::unique_ptr<Window::SectionMemento> createMemento() override;
+	std::shared_ptr<Window::SectionMemento> createMemento() override;
 
-	object_ptr<Window::LayerWidget> moveContentToLayer(
+	object_ptr<Ui::LayerWidget> moveContentToLayer(
 		QRect bodyGeometry) override;
 
 	// Float player interface.
-	bool wheelEventFromFloatPlayer(QEvent *e) override;
-	QRect rectForFloatPlayer() const override;
+	bool floatPlayerHandleWheelEvent(QEvent *e) override;
+	QRect floatPlayerAvailableRect() override;
 
 protected:
 	void doSetInnerFocus() override;
@@ -69,7 +69,7 @@ private:
 
 	object_ptr<WrapWidget> _content;
 	object_ptr<Ui::RpWidget> _topBarSurrogate = { nullptr };
-	base::unique_qptr<Window::ConnectingWidget> _connecting;
+	std::unique_ptr<Window::ConnectionState> _connecting;
 
 };
 

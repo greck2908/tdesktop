@@ -7,23 +7,29 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "ui/widgets/tooltip.h"
 #include "ui/rp_widget.h"
+#include "ui/effects/animations.h"
+#include "ui/widgets/tooltip.h"
 #include "mtproto/sender.h"
 #include "base/timer.h"
 #include "data/data_messages.h"
 #include "history/view/history_view_element.h"
+
+namespace Main {
+class Session;
+} // namespace Main
 
 namespace Ui {
 class PopupMenu;
 } // namespace Ui
 
 namespace Window {
-class Controller;
+class SessionController;
 } // namespace Window
 
 namespace Data {
 struct Group;
+class CloudImageView;
 } // namespace Data
 
 namespace HistoryView {
@@ -41,7 +47,17 @@ struct SelectedItem {
 	FullMsgId msgId;
 	bool canDelete = false;
 	bool canForward = false;
+	bool canSendNow = false;
+};
 
+struct MessagesBar {
+	Element *element = nullptr;
+	bool focus = false;
+};
+
+struct MessagesBarData {
+	MessagesBar bar;
+	rpl::producer<QString> text;
 };
 
 using SelectedItems = std::vector<SelectedItem>;
@@ -57,21 +73,31 @@ public:
 		int limitBefore,
 		int limitAfter) = 0;
 	virtual bool listAllowsMultiSelect() = 0;
+	virtual bool listIsItemGoodForSelection(not_null<HistoryItem*> item) = 0;
 	virtual bool listIsLessInOrder(
 		not_null<HistoryItem*> first,
 		not_null<HistoryItem*> second) = 0;
 	virtual void listSelectionChanged(SelectedItems &&items) = 0;
 	virtual void listVisibleItemsChanged(HistoryItemsList &&items) = 0;
-	virtual base::optional<int> listUnreadBarView(
+	virtual MessagesBarData listMessagesBar(
 		const std::vector<not_null<Element*>> &elements) = 0;
 	virtual void listContentRefreshed() = 0;
 	virtual ClickHandlerPtr listDateLink(not_null<Element*> view) = 0;
+	virtual bool listElementHideReply(not_null<const Element*> view) = 0;
+	virtual bool listElementShownUnread(not_null<const Element*> view) = 0;
+	virtual bool listIsGoodForAroundPosition(
+		not_null<const Element*> view) = 0;
+	virtual void listSendBotCommand(
+		const QString &command,
+		const FullMsgId &context) = 0;
+	virtual void listHandleViaClick(not_null<UserData*> bot) = 0;
 
 };
 
 struct SelectionData {
 	bool canDelete = false;
 	bool canForward = false;
+	bool canSendNow = false;
 
 };
 
@@ -87,7 +113,8 @@ public:
 		int shift = 0;
 	};
 
-	explicit ListMemento(Data::MessagePosition position)
+	explicit ListMemento(
+		Data::MessagePosition position = Data::UnreadMessagePosition)
 	: _aroundPosition(position) {
 	}
 	void setAroundPosition(Data::MessagePosition position) {
@@ -124,10 +151,12 @@ class ListWidget final
 public:
 	ListWidget(
 		QWidget *parent,
-		not_null<Window::Controller*> controller,
+		not_null<Window::SessionController*> controller,
 		not_null<ListDelegate*> delegate);
 
-	not_null<ListDelegate*> delegate() const;
+	[[nodiscard]] Main::Session &session() const;
+	[[nodiscard]] not_null<Window::SessionController*> controller() const;
+	[[nodiscard]] not_null<ListDelegate*> delegate() const;
 
 	// Set the correct scroll position after being resized.
 	void restoreScrollPosition();
@@ -136,24 +165,31 @@ public:
 
 	void saveState(not_null<ListMemento*> memento);
 	void restoreState(not_null<ListMemento*> memento);
-	base::optional<int> scrollTopForPosition(
+	std::optional<int> scrollTopForPosition(
 		Data::MessagePosition position) const;
-	base::optional<int> scrollTopForView(not_null<Element*> view) const;
+	Element *viewByPosition(Data::MessagePosition position) const;
+	std::optional<int> scrollTopForView(not_null<Element*> view) const;
 	enum class AnimatedScroll {
 		Full,
 		Part,
+		None,
 	};
-	void animatedScrollTo(
+	void scrollTo(
 		int scrollTop,
 		Data::MessagePosition attachPosition,
 		int delta,
 		AnimatedScroll type);
+	[[nodiscard]] bool animatedScrolling() const;
 	bool isAbovePosition(Data::MessagePosition position) const;
 	bool isBelowPosition(Data::MessagePosition position) const;
 	void highlightMessage(FullMsgId itemId);
+	void showAroundPosition(
+		Data::MessagePosition position,
+		Fn<bool()> overrideInitialScroll);
 
-	TextWithEntities getSelectedText() const;
-	MessageIdsList getSelectedItems() const;
+	[[nodiscard]] TextForMimeData getSelectedText() const;
+	[[nodiscard]] MessageIdsList getSelectedIds() const;
+	[[nodiscard]] SelectedItems getSelectedItems() const;
 	void cancelSelection();
 	void selectItem(not_null<HistoryItem*> item);
 	void selectItemAsGroup(not_null<HistoryItem*> item);
@@ -167,18 +203,44 @@ public:
 	// AbstractTooltipShower interface
 	QString tooltipText() const override;
 	QPoint tooltipPos() const override;
+	bool tooltipWindowActive() const override;
+
+	[[nodiscard]] rpl::producer<FullMsgId> editMessageRequested() const;
+	void editMessageRequestNotify(FullMsgId item);
+	[[nodiscard]] rpl::producer<FullMsgId> replyToMessageRequested() const;
+	void replyToMessageRequestNotify(FullMsgId item);
+	[[nodiscard]] rpl::producer<FullMsgId> readMessageRequested() const;
 
 	// ElementDelegate interface.
 	Context elementContext() override;
 	std::unique_ptr<Element> elementCreate(
-		not_null<HistoryMessage*> message) override;
+		not_null<HistoryMessage*> message,
+		Element *replacing = nullptr) override;
 	std::unique_ptr<Element> elementCreate(
-		not_null<HistoryService*> message) override;
+		not_null<HistoryService*> message,
+		Element *replacing = nullptr) override;
 	bool elementUnderCursor(not_null<const Element*> view) override;
-	void elementAnimationAutoplayAsync(
-		not_null<const Element*> view) override;
-	TimeMs elementHighlightTime(not_null<const Element*> element) override;
+	crl::time elementHighlightTime(
+		not_null<const Element*> element) override;
 	bool elementInSelectionMode() override;
+	bool elementIntersectsRange(
+		not_null<const Element*> view,
+		int from,
+		int till) override;
+	void elementStartStickerLoop(not_null<const Element*> view) override;
+	void elementShowPollResults(
+		not_null<PollData*> poll,
+		FullMsgId context) override;
+	void elementShowTooltip(
+		const TextWithEntities &text,
+		Fn<void()> hiddenCallback) override;
+	bool elementIsGifPaused() override;
+	bool elementHideReply(not_null<const Element*> view) override;
+	bool elementShownUnread(not_null<const Element*> view) override;
+	void elementSendBotCommand(
+		const QString &command,
+		const FullMsgId &context) override;
+	void elementHandleViaClick(not_null<UserData*> bot) override;
 
 	~ListWidget();
 
@@ -253,7 +315,7 @@ private:
 	using CursorState = HistoryView::CursorState;
 
 	void refreshViewer();
-	void updateAroundPositionFromRows();
+	void updateAroundPositionFromNearest(int nearestIndex);
 	void refreshRows();
 	ScrollTopState countScrollState() const;
 	void saveScrollState();
@@ -285,11 +347,12 @@ private:
 
 	void showContextMenu(QContextMenuEvent *e, bool showFromTouch = false);
 
-	not_null<Element*> findItemByY(int y) const;
-	Element *strictFindItemByY(int y) const;
-	int findNearestItem(Data::MessagePosition position) const;
+	[[nodiscard]] int findItemIndexByY(int y) const;
+	[[nodiscard]] not_null<Element*> findItemByY(int y) const;
+	[[nodiscard]] Element *strictFindItemByY(int y) const;
+	[[nodiscard]] int findNearestItem(Data::MessagePosition position) const;
 	void viewReplaced(not_null<const Element*> was, Element *now);
-	HistoryItemsList collectVisibleItems() const;
+	[[nodiscard]] HistoryItemsList collectVisibleItems() const;
 
 	void checkMoveToOtherViewer();
 	void updateVisibleTopItem();
@@ -324,7 +387,6 @@ private:
 		TextSelection selection);
 	int itemMinimalHeight() const;
 
-	bool isGoodForSelection(not_null<HistoryItem*> item) const;
 	bool isGoodForSelection(
 		SelectedMap &applyTo,
 		not_null<HistoryItem*> item,
@@ -381,7 +443,7 @@ private:
 		not_null<const Element*> view) const;
 	void checkUnreadBarCreation();
 	void applyUpdatedScrollState();
-	void scrollToAnimationCallback(FullMsgId attachToId);
+	void scrollToAnimationCallback(FullMsgId attachToId, int relativeTo);
 
 	void updateHighlightedMessage();
 
@@ -409,10 +471,12 @@ private:
 	template <typename Method>
 	void enumerateDates(Method method);
 
+	ClickHandlerPtr hiddenUserpicLink(FullMsgId id);
+
 	static constexpr auto kMinimalIdsLimit = 24;
 
-	not_null<ListDelegate*> _delegate;
-	not_null<Window::Controller*> _controller;
+	const not_null<ListDelegate*> _delegate;
+	const not_null<Window::SessionController*> _controller;
 	Data::MessagePosition _aroundPosition;
 	Data::MessagePosition _shownAtPosition;
 	Context _context;
@@ -428,6 +492,10 @@ private:
 	int _itemsWidth = 0;
 	int _itemsHeight = 0;
 	int _itemAverageHeight = 0;
+	base::flat_set<FullMsgId> _animatedStickersPlayed;
+	base::flat_map<
+		not_null<PeerData*>,
+		std::shared_ptr<Data::CloudImageView>> _userpics, _userpicsCache;
 
 	int _minHeight = 0;
 	int _visibleTop = 0;
@@ -435,10 +503,12 @@ private:
 	Element *_visibleTopItem = nullptr;
 	int _visibleTopFromItem = 0;
 	ScrollTopState _scrollTopState;
-	Animation _scrollToAnimation;
+	Ui::Animations::Simple _scrollToAnimation;
+	Fn<bool()> _overrideInitialScroll;
 
+	bool _scrollInited = false;
 	bool _scrollDateShown = false;
-	Animation _scrollDateOpacity;
+	Ui::Animations::Simple _scrollDateOpacity;
 	SingleQueuedInvokation _scrollDateCheck;
 	base::Timer _scrollDateHideTimer;
 	Element *_scrollDateLastItem = nullptr;
@@ -446,7 +516,8 @@ private:
 	ClickHandlerPtr _scrollDateLink;
 	SingleQueuedInvokation _applyUpdatedScrollState;
 
-	Element *_unreadBarElement = nullptr;
+	MessagesBar _bar;
+	rpl::variable<QString> _barText;
 
 	MouseAction _mouseAction = MouseAction::None;
 	TextSelectType _mouseSelectType = TextSelectType::Letters;
@@ -463,7 +534,7 @@ private:
 	bool _selectEnabled = false;
 	HistoryItem *_selectedTextItem = nullptr;
 	TextSelection _selectedTextRange;
-	TextWithEntities _selectedText;
+	TextForMimeData _selectedText;
 	SelectedMap _selected;
 	base::flat_set<FullMsgId> _dragSelected;
 	DragSelectAction _dragSelectAction = DragSelectAction::None;
@@ -475,14 +546,31 @@ private:
 	base::unique_qptr<Ui::PopupMenu> _menu;
 
 	QPoint _trippleClickPoint;
-	TimeMs _trippleClickStartTime = 0;
+	crl::time _trippleClickStartTime = 0;
 
-	TimeMs _highlightStart = 0;
+	crl::time _highlightStart = 0;
 	FullMsgId _highlightedMessageId;
 	base::Timer _highlightTimer;
+
+	rpl::event_stream<FullMsgId> _requestedToEditMessage;
+	rpl::event_stream<FullMsgId> _requestedToReplyToMessage;
+	rpl::event_stream<FullMsgId> _requestedToReadMessage;
 
 	rpl::lifetime _viewerLifetime;
 
 };
+
+void ConfirmDeleteSelectedItems(not_null<ListWidget*> widget);
+void ConfirmForwardSelectedItems(not_null<ListWidget*> widget);
+void ConfirmSendNowSelectedItems(not_null<ListWidget*> widget);
+
+[[nodiscard]] QString WrapBotCommandInChat(
+	not_null<PeerData*> peer,
+	const QString &command,
+	const FullMsgId &context);
+[[nodiscard]] QString WrapBotCommandInChat(
+	not_null<PeerData*> peer,
+	const QString &command,
+	not_null<UserData*> bot);
 
 } // namespace HistoryView

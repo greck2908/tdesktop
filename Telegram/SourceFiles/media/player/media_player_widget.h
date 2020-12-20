@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "ui/rp_widget.h"
+#include "base/object_ptr.h"
 
 class AudioMsgId;
 
@@ -20,10 +21,16 @@ class FilledSlider;
 } // namespace Ui
 
 namespace Media {
-namespace Clip {
-class Playback;
+namespace View {
+class PlaybackProgress;
 } // namespace Clip
+} // namespace Media
 
+namespace Main {
+class Session;
+} // namespace Main
+
+namespace Media {
 namespace Player {
 
 class PlayButton;
@@ -32,7 +39,7 @@ struct TrackState;
 
 class Widget : public Ui::RpWidget, private base::Subscriber {
 public:
-	Widget(QWidget *parent);
+	Widget(QWidget *parent, not_null<Main::Session*> session);
 
 	void setCloseCallback(Fn<void()> callback);
 	void stopAndClose();
@@ -66,9 +73,11 @@ private:
 	void updatePlayPrevNextPositions();
 	void updateLabelsGeometry();
 	void updateRepeatTrackIcon();
+	void updatePlaybackSpeedIcon();
 	void createPrevNextButtons();
 	void destroyPrevNextButtons();
 
+	bool hasPlaybackSpeedControl() const;
 	void updateVolumeToggleIcon();
 
 	void checkForTypeChange();
@@ -80,8 +89,10 @@ private:
 	void updateTimeText(const TrackState &state);
 	void updateTimeLabel();
 
-	TimeMs _seekPositionMs = -1;
-	TimeMs _lastDurationMs = 0;
+	const not_null<Main::Session*> _session;
+
+	crl::time _seekPositionMs = -1;
+	crl::time _lastDurationMs = 0;
 	QString _time;
 
 	// We display all the controls according to _type.
@@ -89,6 +100,7 @@ private:
 	// We switch to Type::Song only if _voiceIsActive == false.
 	// We change _voiceIsActive to false only manually or from tracksFinished().
 	AudioMsgId::Type _type = AudioMsgId::Type::Unknown;
+	AudioMsgId _lastSongId;
 	bool _voiceIsActive = false;
 	Fn<void()> _closeCallback;
 
@@ -103,14 +115,15 @@ private:
 	object_ptr<Ui::IconButton> _nextTrack = { nullptr };
 	object_ptr<Ui::IconButton> _volumeToggle;
 	object_ptr<Ui::IconButton> _repeatTrack;
+	object_ptr<Ui::IconButton> _playbackSpeed;
 	object_ptr<Ui::IconButton> _close;
 	object_ptr<Ui::PlainShadow> _shadow = { nullptr };
 	object_ptr<Ui::FilledSlider> _playbackSlider;
-	std::unique_ptr<Clip::Playback> _playback;
+	std::unique_ptr<View::PlaybackProgress> _playbackProgress;
 
 	rpl::lifetime _playlistChangesLifetime;
 
 };
 
-} // namespace Clip
+} // namespace Player
 } // namespace Media

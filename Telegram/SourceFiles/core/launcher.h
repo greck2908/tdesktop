@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "core/base_integration.h"
+
 namespace Core {
 
 class Launcher {
@@ -24,9 +26,14 @@ public:
 	QString argumentsString() const;
 	bool customWorkingDir() const;
 
-	// Thread safe.
 	QString deviceModel() const;
 	QString systemVersion() const;
+	uint64 installationTag() const;
+
+	bool checkPortableVersionFolder();
+	void workingFolderReady();
+	void writeDebugModeSetting();
+	void writeInstallBetaVersionsSetting();
 
 	virtual ~Launcher() = default;
 
@@ -41,10 +48,10 @@ private:
 	void processArguments();
 
 	QStringList readArguments(int argc, char *argv[]) const;
-	virtual base::optional<QStringList> readArgumentsHook(
+	virtual std::optional<QStringList> readArgumentsHook(
 			int argc,
 			char *argv[]) const {
-		return base::none;
+		return std::nullopt;
 	}
 
 	void init();
@@ -58,6 +65,7 @@ private:
 	int _argc;
 	char **_argv;
 	QStringList _arguments;
+	BaseIntegration _baseIntegration;
 
 	const QString _deviceModel;
 	const QString _systemVersion;

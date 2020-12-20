@@ -9,14 +9,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "platform/platform_file_utilities.h"
 
-extern "C" {
-#undef signals
+#include <QtGui/QWindow>
+#include <QtWidgets/QFileDialog>
+
 #ifndef TDESKTOP_DISABLE_GTK_INTEGRATION
-#include <gtk/gtk.h>
-#include <gdk/gdk.h>
+typedef struct _GtkWidget GtkWidget;
+typedef struct _GtkDialog GtkDialog;
+typedef struct _GtkFileFilter GtkFileFilter;
 #endif // !TDESKTOP_DISABLE_GTK_INTEGRATION
-#define signals public
-} // extern "C"
 
 namespace Platform {
 namespace File {
@@ -30,20 +30,8 @@ inline QString UrlToLocal(const QUrl &url) {
 	return ::File::internal::UrlToLocalDefault(url);
 }
 
-inline void UnsafeOpenEmailLink(const QString &email) {
-	return ::File::internal::UnsafeOpenEmailLinkDefault(email);
-}
-
 inline bool UnsafeShowOpenWithDropdown(const QString &filepath, QPoint menuPosition) {
 	return false;
-}
-
-inline bool UnsafeShowOpenWith(const QString &filepath) {
-	return false;
-}
-
-inline void UnsafeLaunch(const QString &filepath) {
-	return ::File::internal::UnsafeLaunchDefault(filepath);
 }
 
 inline void PostprocessDownloaded(const QString &filepath) {
@@ -149,7 +137,7 @@ private:
 	void hideHelper();
 
 	// Options
-	QFileDialog::Options _options = { 0 };
+	QFileDialog::Options _options;
 	QString _windowTitle = "Choose file";
 	QString _initialDirectory;
 	QStringList _initialFiles;

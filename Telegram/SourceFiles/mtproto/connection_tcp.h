@@ -7,36 +7,42 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "mtproto/auth_key.h"
 #include "mtproto/connection_abstract.h"
-#include "base/timer.h"
+#include "mtproto/mtproto_auth_key.h"
 
 namespace MTP {
-namespace internal {
+namespace details {
+
+class AbstractSocket;
 
 class TcpConnection : public AbstractConnection {
 public:
 	TcpConnection(
+		not_null<Instance*> instance,
 		QThread *thread,
 		const ProxyData &proxy);
 
 	ConnectionPointer clone(const ProxyData &proxy) override;
 
-	TimeMs pingTime() const override;
-	TimeMs fullConnectTimeout() const override;
-	void sendData(mtpBuffer &buffer) override;
+	crl::time pingTime() const override;
+	crl::time fullConnectTimeout() const override;
+	void sendData(mtpBuffer &&buffer) override;
 	void disconnectFromServer() override;
 	void connectToServer(
 		const QString &address,
 		int port,
 		const bytes::vector &protocolSecret,
 		int16 protocolDcId) override;
+	void timedOut() override;
 	bool isConnected() const override;
+	bool requiresExtendedPadding() const override;
 
 	int32 debugState() const override;
 
 	QString transport() const override;
 	QString tag() const override;
+
+	~TcpConnection();
 
 private:
 	enum class Status {
@@ -44,51 +50,53 @@ private:
 		Ready,
 		Finished,
 	};
-	static constexpr auto kShortBufferSize = 65535; // Of ints, 256 kb.
 
 	void socketRead();
-	void writeConnectionStart();
+	bytes::const_span prepareConnectionStartPrefix(bytes::span buffer);
 
-	void socketPacket(const char *packet, uint32 length);
+	void socketPacket(bytes::const_span bytes);
 
 	void socketConnected();
 	void socketDisconnected();
-	void socketError(QAbstractSocket::SocketError e);
+	void socketError();
 
-	mtpBuffer handleResponse(const char *packet, uint32 length);
-	static void handleError(QAbstractSocket::SocketError e, QTcpSocket &sock);
+	mtpBuffer parsePacket(bytes::const_span bytes);
+	void ensureAvailableInBuffer(int amount);
 	static uint32 fourCharsToUInt(char ch1, char ch2, char ch3, char ch4) {
 		char ch[4] = { ch1, ch2, ch3, ch4 };
 		return *reinterpret_cast<uint32*>(ch);
 	}
 
-	void sendBuffer(mtpBuffer &buffer);
+	const not_null<Instance*> _instance;
+	std::unique_ptr<AbstractSocket> _socket;
+	bool _connectionStarted = false;
 
-	QTcpSocket _socket;
-	uint32 _packetIndex = 0; // sent packet number
-
-	uint32 _packetRead = 0;
-	uint32 _packetLeft = 0; // reading from socket
-	bool _readingToShort = true;
-	mtpBuffer _longBuffer;
-	mtpPrime _shortBuffer[kShortBufferSize];
-	char *_currentPosition = nullptr;
+	int _offsetBytes = 0;
+	int _readBytes = 0;
+	int _leftBytes = 0;
+	bytes::vector _smallBuffer;
+	bytes::vector _largeBuffer;
+	bool _usingLargeBuffer = false;
 
 	uchar _sendKey[CTRState::KeySize];
 	CTRState _sendState;
 	uchar _receiveKey[CTRState::KeySize];
 	CTRState _receiveState;
+	class Protocol;
+	std::unique_ptr<Protocol> _protocol;
 	int16 _protocolDcId = 0;
-	bytes::vector _protocolSecret;
 
 	Status _status = Status::Waiting;
 	MTPint128 _checkNonce;
 
 	QString _address;
 	int32 _port = 0;
-	TimeMs _pingTime = 0;
+	crl::time _pingTime = 0;
+
+	rpl::lifetime _connectedLifetime;
+	rpl::lifetime _lifetime;
 
 };
 
-} // namespace internal
+} // namespace details
 } // namespace MTP

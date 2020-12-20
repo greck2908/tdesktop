@@ -7,10 +7,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_drafts.h"
 
+#include "api/api_text_entities.h"
 #include "ui/widgets/input_fields.h"
 #include "chat_helpers/message_field.h"
 #include "history/history.h"
 #include "history/history_widget.h"
+#include "main/main_session.h"
+#include "data/data_session.h"
 #include "mainwidget.h"
 #include "storage/localstorage.h"
 
@@ -43,42 +46,44 @@ Draft::Draft(
 , previewCancelled(previewCancelled) {
 }
 
-void applyPeerCloudDraft(PeerId peerId, const MTPDdraftMessage &draft) {
-	auto history = App::history(peerId);
-	auto textWithTags = TextWithTags {
-		qs(draft.vmessage),
-		ConvertEntitiesToTextTags(
-			draft.has_entities()
-			? TextUtilities::EntitiesFromMTP(draft.ventities.v)
-			: EntitiesInText())
+void ApplyPeerCloudDraft(
+		not_null<Main::Session*> session,
+		PeerId peerId,
+		const MTPDdraftMessage &draft) {
+	const auto history = session->data().history(peerId);
+	const auto textWithTags = TextWithTags {
+		qs(draft.vmessage()),
+		TextUtilities::ConvertEntitiesToTextTags(
+			Api::EntitiesFromMTP(
+				session,
+				draft.ventities().value_or_empty()))
 	};
-	if (history->skipCloudDraft(textWithTags.text, draft.vdate.v)) {
+	const auto replyTo = draft.vreply_to_msg_id().value_or_empty();
+	if (history->skipCloudDraft(textWithTags.text, replyTo, draft.vdate().v)) {
 		return;
 	}
-	auto replyTo = draft.has_reply_to_msg_id() ? draft.vreply_to_msg_id.v : MsgId(0);
-	auto cloudDraft = std::make_unique<Draft>(textWithTags, replyTo, MessageCursor(QFIXED_MAX, QFIXED_MAX, QFIXED_MAX), draft.is_no_webpage());
-	cloudDraft->date = draft.vdate.v;
+	auto cloudDraft = std::make_unique<Draft>(
+		textWithTags,
+		replyTo,
+		MessageCursor(QFIXED_MAX, QFIXED_MAX, QFIXED_MAX),
+		draft.is_no_webpage());
+	cloudDraft->date = draft.vdate().v;
 
 	history->setCloudDraft(std::move(cloudDraft));
-	history->createLocalDraftFromCloud();
-	history->updateChatListSortPosition();
-
-	if (auto main = App::main()) {
-		main->applyCloudDraft(history);
-	}
+	history->applyCloudDraft();
 }
 
-void clearPeerCloudDraft(PeerId peerId) {
-	auto history = App::history(peerId);
+void ClearPeerCloudDraft(
+		not_null<Main::Session*> session,
+		PeerId peerId,
+		TimeId date) {
+	const auto history = session->data().history(peerId);
+	if (history->skipCloudDraft(QString(), MsgId(0), date)) {
+		return;
+	}
 
 	history->clearCloudDraft();
-	history->clearLocalDraft();
-
-	history->updateChatListSortPosition();
-
-	if (auto main = App::main()) {
-		main->applyCloudDraft(history);
-	}
+	history->applyCloudDraft();
 }
 
 } // namespace Data

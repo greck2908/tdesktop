@@ -5,7 +5,7 @@ the official desktop application for the Telegram messaging service.
 For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
-using "basic.style";
+using "ui/basic.style";
 
 using "ui/widgets/widgets.style";
 using "boxes/boxes.style";
@@ -123,7 +123,7 @@ passportRowTitleFg: windowFg;
 passportRowDescriptionFg: windowSubTextFg;
 
 passportScansHeaderPadding: margins(22px, 10px, 22px, 10px);
-passportUploadButton: InfoProfileButton {
+passportUploadButton: SettingsButton(defaultSettingsButton) {
 	textFg: windowActiveTextFg;
 	textFgOver: windowActiveTextFg;
 	textBg: windowBg;
@@ -139,7 +139,8 @@ passportUploadButton: InfoProfileButton {
 passportUploadButtonPadding: margins(0px, 10px, 0px, 10px);
 passportUploadHeaderPadding: margins(22px, 14px, 22px, 3px);
 passportUploadErrorPadding: margins(22px, 5px, 22px, 5px);
-passportDeleteButton: InfoProfileButton(passportUploadButton) {
+passportValueErrorPadding: passportUploadHeaderPadding;
+passportDeleteButton: SettingsButton(passportUploadButton) {
 	textFg: attentionButtonFg;
 	textFgOver: attentionButtonFgOver;
 }
@@ -199,3 +200,6 @@ passportPasswordAbout1Padding: margins(10px, 28px, 10px, 0px);
 passportPasswordAbout2Padding: margins(10px, 0px, 10px, 28px);
 passportPasswordIconHeight: 224px;
 passportPasswordIcon: icon {{ "passport_password_setup", windowSubTextFg }};
+
+passportNativeNameAboutMargin: margins(0px, 16px, 0px, 0px);
+passportNativeNameHeaderPadding: margins(22px, 28px, 33px, 10px);

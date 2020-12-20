@@ -17,10 +17,8 @@ DiscreteSlider::DiscreteSlider(QWidget *parent) : RpWidget(parent) {
 }
 
 void DiscreteSlider::setActiveSection(int index) {
-	if (_activeIndex != index) {
-		_activeIndex = index;
-		activateCallback();
-	}
+	_activeIndex = index;
+	activateCallback();
 	setSelectedSection(index);
 }
 
@@ -29,7 +27,7 @@ void DiscreteSlider::activateCallback() {
 		killTimer(_timerId);
 		_timerId = -1;
 	}
-	auto ms = getms();
+	auto ms = crl::now();
 	if (ms >= _callbackAfterMs) {
 		_sectionActivated.fire_copy(_activeIndex);
 	} else {
@@ -47,7 +45,7 @@ void DiscreteSlider::setActiveSectionFast(int index) {
 }
 
 void DiscreteSlider::finishAnimating() {
-	_a_left.finish();
+	_a_left.stop();
 	update();
 }
 
@@ -56,7 +54,7 @@ void DiscreteSlider::setSelectOnPress(bool selectOnPress) {
 }
 
 void DiscreteSlider::addSection(const QString &label) {
-	_sections.push_back(Section(label, getLabelFont()));
+	_sections.push_back(Section(label, getLabelStyle()));
 	resizeToWidth(width());
 }
 
@@ -64,8 +62,8 @@ void DiscreteSlider::setSections(const QStringList &labels) {
 	Assert(!labels.isEmpty());
 
 	_sections.clear();
-	for_const (auto &label, labels) {
-		_sections.push_back(Section(label, getLabelFont()));
+	for (const auto &label : labels) {
+		_sections.push_back(Section(label, getLabelStyle()));
 	}
 	stopAnimation();
 	if (_activeIndex >= _sections.size()) {
@@ -77,9 +75,9 @@ void DiscreteSlider::setSections(const QStringList &labels) {
 	resizeToWidth(width());
 }
 
-int DiscreteSlider::getCurrentActiveLeft(TimeMs ms) {
+int DiscreteSlider::getCurrentActiveLeft() {
 	const auto left = _sections.empty() ? 0 : _sections[_selected].left;
-	return _a_left.current(ms, left);
+	return _a_left.value(left);
 }
 
 template <typename Lambda>
@@ -140,7 +138,7 @@ void DiscreteSlider::setSelectedSection(int index) {
 		auto to = _sections[_selected].left;
 		auto duration = getAnimationDuration();
 		_a_left.start([this] { update(); }, from, to, duration);
-		_callbackAfterMs = getms() + duration;
+		_callbackAfterMs = crl::now() + duration;
 	}
 }
 
@@ -154,12 +152,16 @@ int DiscreteSlider::getIndexFromPosition(QPoint pos) {
 	return count - 1;
 }
 
-DiscreteSlider::Section::Section(const QString &label, const style::font &font)
-: label(label)
-, labelWidth(font->width(label)) {
+DiscreteSlider::Section::Section(
+	const QString &label,
+	const style::TextStyle &st)
+: label(st, label) {
 }
 
-SettingsSlider::SettingsSlider(QWidget *parent, const style::SettingsSlider &st) : DiscreteSlider(parent)
+SettingsSlider::SettingsSlider(
+	QWidget *parent,
+		const style::SettingsSlider &st)
+: DiscreteSlider(parent)
 , _st(st) {
 	setSelectOnPress(_st.ripple.showDuration == 0);
 }
@@ -168,8 +170,8 @@ void SettingsSlider::setRippleTopRoundRadius(int radius) {
 	_rippleTopRoundRadius = radius;
 }
 
-const style::font &SettingsSlider::getLabelFont() const {
-	return _st.labelFont;
+const style::TextStyle &SettingsSlider::getLabelStyle() const {
+	return _st.labelStyle;
 }
 
 int SettingsSlider::getAnimationDuration() const {
@@ -208,8 +210,8 @@ std::vector<float64> SettingsSlider::countSectionsWidths(
 	auto labelsWidth = 0;
 	auto commonWidth = true;
 	enumerateSections([&](const Section &section) {
-		labelsWidth += section.labelWidth;
-		if (section.labelWidth >= sectionWidth) {
+		labelsWidth += section.label.maxWidth();
+		if (section.label.maxWidth() >= sectionWidth) {
 			commonWidth = false;
 		}
 		return true;
@@ -221,7 +223,7 @@ std::vector<float64> SettingsSlider::countSectionsWidths(
 		enumerateSections([&](const Section &section) {
 			Expects(currentWidth != result.end());
 
-			*currentWidth = padding + section.labelWidth + padding;
+			*currentWidth = padding + section.label.maxWidth() + padding;
 			++currentWidth;
 			return true;
 		});
@@ -275,15 +277,13 @@ void SettingsSlider::paintEvent(QPaintEvent *e) {
 	Painter p(this);
 
 	auto clip = e->rect();
-	auto ms = getms();
-	auto activeLeft = getCurrentActiveLeft(ms);
+	auto activeLeft = getCurrentActiveLeft();
 
-	p.setFont(_st.labelFont);
-	enumerateSections([this, &p, activeLeft, ms, clip](Section &section) {
+	enumerateSections([&](Section &section) {
 		auto active = 1. - snap(qAbs(activeLeft - section.left) / float64(section.width), 0., 1.);
 		if (section.ripple) {
 			auto color = anim::color(_st.rippleBg, _st.rippleBgActive, active);
-			section.ripple->paint(p, section.left, 0, width(), ms, &color);
+			section.ripple->paint(p, section.left, 0, width(), &color);
 			if (section.ripple->empty()) {
 				section.ripple.reset();
 			}
@@ -305,9 +305,14 @@ void SettingsSlider::paintEvent(QPaintEvent *e) {
 		if (tofill) {
 			p.fillRect(myrtlrect(from, _st.barTop, tofill, _st.barStroke), _st.barFg);
 		}
-		if (myrtlrect(section.left, _st.labelTop, section.width, _st.labelFont->height).intersects(clip)) {
+		if (myrtlrect(section.left, _st.labelTop, section.width, _st.labelStyle.font->height).intersects(clip)) {
 			p.setPen(anim::pen(_st.labelFg, _st.labelFgActive, active));
-			p.drawTextLeft(section.left + (section.width - section.labelWidth) / 2, _st.labelTop, width(), section.label, section.labelWidth);
+			section.label.drawLeft(
+				p,
+				section.left + (section.width - section.label.maxWidth()) / 2,
+				_st.labelTop,
+				section.label.maxWidth(),
+				width());
 		}
 		return true;
 	});

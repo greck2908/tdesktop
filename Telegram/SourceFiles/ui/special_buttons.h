@@ -9,22 +9,28 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/tooltip.h"
+#include "ui/effects/animations.h"
 #include "styles/style_window.h"
 #include "styles/style_widgets.h"
 
 class PeerData;
 
-namespace Ui {
-class InfiniteRadialAnimation;
-} // namespace Ui
-
 namespace Data {
-class Feed;
+class CloudImageView;
 } // namespace Data
 
 namespace Window {
-class Controller;
+class SessionController;
 } // namespace Window
+
+namespace Media {
+namespace Streaming {
+class Instance;
+struct Update;
+enum class Error;
+struct Information;
+} // namespace Streaming
+} // namespace Media
 
 namespace Ui {
 
@@ -50,98 +56,6 @@ private:
 
 };
 
-class EmojiButton : public RippleButton {
-public:
-	EmojiButton(QWidget *parent, const style::IconButton &st);
-
-	void setLoading(bool loading);
-	void setColorOverrides(const style::icon *iconOverride, const style::color *colorOverride, const style::color *rippleOverride);
-
-protected:
-	void paintEvent(QPaintEvent *e) override;
-	void onStateChanged(State was, StateChangeSource source) override;
-
-	QImage prepareRippleMask() const override;
-	QPoint prepareRippleStartPosition() const override;
-
-private:
-	void step_loading(TimeMs ms, bool timer) {
-		if (timer) {
-			update();
-		}
-	}
-
-	const style::IconButton &_st;
-
-	std::unique_ptr<Ui::InfiniteRadialAnimation> _loading;
-
-	const style::icon *_iconOverride = nullptr;
-	const style::color *_colorOverride = nullptr;
-	const style::color *_rippleOverride = nullptr;
-
-};
-
-class SendButton : public RippleButton {
-public:
-	SendButton(QWidget *parent);
-
-	enum class Type {
-		Send,
-		Save,
-		Record,
-		Cancel,
-	};
-	Type type() const {
-		return _type;
-	}
-	void setType(Type state);
-	void setRecordActive(bool recordActive);
-	void finishAnimating();
-
-	void setRecordStartCallback(Fn<void()> callback) {
-		_recordStartCallback = std::move(callback);
-	}
-	void setRecordUpdateCallback(Fn<void(QPoint globalPos)> callback) {
-		_recordUpdateCallback = std::move(callback);
-	}
-	void setRecordStopCallback(Fn<void(bool active)> callback) {
-		_recordStopCallback = std::move(callback);
-	}
-	void setRecordAnimationCallback(Fn<void()> callback) {
-		_recordAnimationCallback = std::move(callback);
-	}
-
-	float64 recordActiveRatio() {
-		return _a_recordActive.current(getms(), _recordActive ? 1. : 0.);
-	}
-
-protected:
-	void mouseMoveEvent(QMouseEvent *e) override;
-	void paintEvent(QPaintEvent *e) override;
-	void onStateChanged(State was, StateChangeSource source) override;
-
-	QImage prepareRippleMask() const override;
-	QPoint prepareRippleStartPosition() const override;
-
-private:
-	void recordAnimationCallback();
-	QPixmap grabContent();
-
-	Type _type = Type::Send;
-	bool _recordActive = false;
-	QPixmap _contentFrom, _contentTo;
-
-	Animation _a_typeChanged;
-	Animation _a_recordActive;
-
-	bool _recording = false;
-	Fn<void()> _recordStartCallback;
-	Fn<void(bool active)> _recordStopCallback;
-	Fn<void(QPoint globalPos)> _recordUpdateCallback;
-	Fn<void()> _recordAnimationCallback;
-
-};
-
 class UserpicButton : public RippleButton {
 public:
 	enum class Role {
@@ -153,12 +67,12 @@ public:
 
 	UserpicButton(
 		QWidget *parent,
-		PeerId peerForCrop,
+		const QString &cropTitle,
 		Role role,
 		const style::UserpicButton &st);
 	UserpicButton(
 		QWidget *parent,
-		not_null<Window::Controller*> controller,
+		not_null<Window::SessionController*> controller,
 		not_null<PeerData*> peer,
 		Role role,
 		const style::UserpicButton &st);
@@ -199,7 +113,16 @@ private:
 	void updateCursorInChangeOverlay(QPoint localPos);
 	void setCursorInChangeOverlay(bool inOverlay);
 	void updateCursor();
+	void updateVideo();
 	bool showSavedMessages() const;
+	bool showRepliesMessages() const;
+	void checkStreamedIsStarted();
+	bool createStreamingObjects(not_null<PhotoData*> photo);
+	void clearStreaming();
+	void handleStreamingUpdate(Media::Streaming::Update &&update);
+	void handleStreamingError(Media::Streaming::Error &&error);
+	void streamingReady(Media::Streaming::Information &&info);
+	void paintUserpicFrame(Painter &p, QPoint photoPosition);
 
 	void grabOldUserpic();
 	void setClickHandlerByRole();
@@ -208,55 +131,60 @@ private:
 	void uploadNewPeerPhoto();
 
 	const style::UserpicButton &_st;
-	Window::Controller *_controller = nullptr;
+	Window::SessionController *_controller = nullptr;
 	PeerData *_peer = nullptr;
-	PeerId _peerForCrop = 0;
+	std::shared_ptr<Data::CloudImageView> _userpicView;
+	QString _cropTitle;
 	Role _role = Role::ChangePhoto;
 	bool _notShownYet = true;
 	bool _waiting = false;
 	QPixmap _userpic, _oldUserpic;
 	bool _userpicHasImage = false;
 	bool _userpicCustom = false;
-	StorageKey _userpicUniqueKey;
-	Animation _a_appearance;
+	InMemoryKey _userpicUniqueKey;
+	Ui::Animations::Simple _a_appearance;
 	QImage _result;
+	std::unique_ptr<Media::Streaming::Instance> _streamed;
+	PhotoData *_streamedPhoto = nullptr;
 
 	bool _showSavedMessagesOnSelf = false;
 	bool _canOpenPhoto = false;
 	bool _cursorInChangeOverlay = false;
 	bool _changeOverlayEnabled = false;
-	Animation _changeOverlayShown;
+	Ui::Animations::Simple _changeOverlayShown;
 
 };
+// // #feed
+//class FeedUserpicButton : public AbstractButton {
+//public:
+//	FeedUserpicButton(
+//		QWidget *parent,
+//		not_null<Window::SessionController*> controller,
+//		not_null<Data::Feed*> feed,
+//		const style::FeedUserpicButton &st);
+//
+//private:
+//	struct Part {
+//		not_null<ChannelData*> channel;
+//		base::unique_qptr<UserpicButton> button;
+//	};
+//
+//	void prepare();
+//	void checkParts();
+//	bool partsAreValid() const;
+//	void refreshParts();
+//	QPoint countInnerPosition() const;
+//
+//	const style::FeedUserpicButton &_st;
+//	not_null<Window::SessionController*> _controller;
+//	not_null<Data::Feed*> _feed;
+//	std::vector<Part> _parts;
+//
+//};
 
-class FeedUserpicButton : public AbstractButton {
-public:
-	FeedUserpicButton(
-		QWidget *parent,
-		not_null<Window::Controller*> controller,
-		not_null<Data::Feed*> feed,
-		const style::FeedUserpicButton &st);
-
-private:
-	struct Part {
-		not_null<ChannelData*> channel;
-		base::unique_qptr<UserpicButton> button;
-	};
-
-	void prepare();
-	void checkParts();
-	bool partsAreValid() const;
-	void refreshParts();
-	QPoint countInnerPosition() const;
-
-	const style::FeedUserpicButton &_st;
-	not_null<Window::Controller*> _controller;
-	not_null<Data::Feed*> _feed;
-	std::vector<Part> _parts;
-
-};
-
-class SilentToggle : public Ui::IconButton, public Ui::AbstractTooltipShower {
+class SilentToggle
+	: public Ui::IconButton
+	, public Ui::AbstractTooltipShower {
 public:
 	SilentToggle(QWidget *parent, not_null<ChannelData*> channel);
 
@@ -268,6 +196,7 @@ public:
 	// AbstractTooltipShower interface
 	QString tooltipText() const override;
 	QPoint tooltipPos() const override;
+	bool tooltipWindowActive() const override;
 
 protected:
 	void mouseMoveEvent(QMouseEvent *e) override;

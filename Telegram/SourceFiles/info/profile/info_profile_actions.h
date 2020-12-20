@@ -7,9 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-namespace Data {
-class Feed;
-} // namespace Data
+#include "base/object_ptr.h"
 
 namespace Ui {
 class RpWidget;
@@ -35,11 +33,11 @@ object_ptr<Ui::RpWidget> SetupChannelMembers(
 	not_null<Controller*> controller,
 	not_null<Ui::RpWidget*> parent,
 	not_null<PeerData*> peer);
-
-object_ptr<Ui::RpWidget> SetupFeedDetails(
-	not_null<Controller*> controller,
-	not_null<Ui::RpWidget*> parent,
-	not_null<Data::Feed*> feed);
+// // #feed
+//object_ptr<Ui::RpWidget> SetupFeedDetails(
+//	not_null<Controller*> controller,
+//	not_null<Ui::RpWidget*> parent,
+//	not_null<Data::Feed*> feed);
 
 } // namespace Profile
 } // namespace Info

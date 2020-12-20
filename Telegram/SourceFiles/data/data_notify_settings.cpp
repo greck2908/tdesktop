@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_notify_settings.h"
 
+#include "base/unixtime.h"
+
 namespace Data {
 namespace {
 
@@ -28,24 +30,24 @@ public:
 
 	bool change(const MTPDpeerNotifySettings &data);
 	bool change(
-		base::optional<int> muteForSeconds,
-		base::optional<bool> silentPosts);
+		std::optional<int> muteForSeconds,
+		std::optional<bool> silentPosts);
 
-	base::optional<TimeId> muteUntil() const;
-	base::optional<bool> silentPosts() const;
+	std::optional<TimeId> muteUntil() const;
+	std::optional<bool> silentPosts() const;
 	MTPinputPeerNotifySettings serialize() const;
 
 private:
 	bool change(
-		base::optional<int> mute,
-		base::optional<QString> sound,
-		base::optional<bool> showPreviews,
-		base::optional<bool> silentPosts);
+		std::optional<int> mute,
+		std::optional<QString> sound,
+		std::optional<bool> showPreviews,
+		std::optional<bool> silentPosts);
 
-	base::optional<TimeId> _mute;
-	base::optional<QString> _sound;
-	base::optional<bool> _silent;
-	base::optional<bool> _showPreviews;
+	std::optional<TimeId> _mute;
+	std::optional<QString> _sound;
+	std::optional<bool> _silent;
+	std::optional<bool> _showPreviews;
 
 };
 
@@ -55,40 +57,49 @@ NotifySettingsValue::NotifySettingsValue(
 }
 
 bool NotifySettingsValue::change(const MTPDpeerNotifySettings &data) {
-	return change(data.has_mute_until()
-		? base::make_optional(data.vmute_until.v)
-		: base::none, data.has_sound()
-		? base::make_optional(qs(data.vsound))
-		: base::none, data.has_show_previews()
-		? base::make_optional(mtpIsTrue(data.vshow_previews))
-		: base::none, data.has_silent()
-		? base::make_optional(mtpIsTrue(data.vsilent))
-		: base::none);
+	const auto mute = data.vmute_until();
+	const auto sound = data.vsound();
+	const auto showPreviews = data.vshow_previews();
+	const auto silent = data.vsilent();
+	return change(
+		mute ? std::make_optional(mute->v) : std::nullopt,
+		sound ? std::make_optional(qs(*sound)) : std::nullopt,
+		(showPreviews
+			? std::make_optional(mtpIsTrue(*showPreviews))
+			: std::nullopt),
+		silent ? std::make_optional(mtpIsTrue(*silent)) : std::nullopt);
 }
 
 bool NotifySettingsValue::change(
-		base::optional<int> muteForSeconds,
-		base::optional<bool> silentPosts) {
-	const auto now = unixtime();
+		std::optional<int> muteForSeconds,
+		std::optional<bool> silentPosts) {
+	const auto now = base::unixtime::now();
 	const auto notMuted = muteForSeconds
 		? !(*muteForSeconds)
 		: (!_mute || *_mute <= now);
-	return change(muteForSeconds
+	const auto newMute = muteForSeconds
 		? base::make_optional((*muteForSeconds > 0)
 			? (now + *muteForSeconds)
 			: 0)
-		: base::none, (_sound && _sound->isEmpty() && notMuted)
+		: _mute;
+	const auto newSound = (_sound && _sound->isEmpty() && notMuted)
 		? qsl("default")
-		: _sound, _showPreviews, silentPosts
+		: _sound;
+	const auto newSilentPosts = silentPosts
 		? base::make_optional(*silentPosts)
-		: base::none);
+		: _silent;
+	return change(
+		newMute,
+		newSound,
+		_showPreviews,
+		newSilentPosts);
 }
 
 bool NotifySettingsValue::change(
-		base::optional<int> mute,
-		base::optional<QString> sound,
-		base::optional<bool> showPreviews,
-		base::optional<bool> silentPosts) {
+		std::optional<int> mute,
+		std::optional<QString> sound,
+		std::optional<bool> showPreviews,
+		std::optional<bool> silentPosts) {
 	if (_mute == mute
 		&& _sound == sound
 		&& _showPreviews == showPreviews
@@ -102,11 +113,11 @@ bool NotifySettingsValue::change(
 	return true;
 }
 
-base::optional<TimeId> NotifySettingsValue::muteUntil() const {
+std::optional<TimeId> NotifySettingsValue::muteUntil() const {
 	return _mute;
 }
 
-base::optional<bool> NotifySettingsValue::silentPosts() const {
+std::optional<bool> NotifySettingsValue::silentPosts() const {
 	return _silent;
 }
 
@@ -132,7 +143,7 @@ bool NotifySettings::change(const MTPPeerNotifySettings &settings) {
 	Expects(settings.type() == mtpc_peerNotifySettings);
 
 	auto &data = settings.c_peerNotifySettings();
-	const auto empty = !data.vflags.v;
+	const auto empty = !data.vflags().v;
 	if (empty) {
 		if (!_known || _value) {
 			_known = true;
@@ -150,8 +161,8 @@ bool NotifySettings::change(const MTPPeerNotifySettings &settings) {
 }
 
 bool NotifySettings::change(
-		base::optional<int> muteForSeconds,
-		base::optional<bool> silentPosts) {
+		std::optional<int> muteForSeconds,
+		std::optional<bool> silentPosts) {
 	if (!muteForSeconds && !silentPosts) {
 		return false;
 	} else if (_value) {
@@ -161,30 +172,30 @@ bool NotifySettings::change(
 	const auto flags = (muteForSeconds ? Flag::f_mute_until : Flag(0))
 		| (silentPosts ? Flag::f_silent : Flag(0));
 	const auto muteUntil = muteForSeconds
-		? (unixtime() + *muteForSeconds)
+		? (base::unixtime::now() + *muteForSeconds)
 		: 0;
 	return change(MTP_peerNotifySettings(
 		MTP_flags(flags),
 		MTPBool(),
 		silentPosts ? MTP_bool(*silentPosts) : MTPBool(),
-		muteForSeconds ? MTP_int(unixtime() + *muteForSeconds) : MTPint(),
+		MTP_int(muteUntil),
 		MTPstring()));
 }
 
-base::optional<TimeId> NotifySettings::muteUntil() const {
+std::optional<TimeId> NotifySettings::muteUntil() const {
 	return _value
 		? _value->muteUntil()
-		: base::none;
+		: std::nullopt;
 }
 
 bool NotifySettings::settingsUnknown() const {
 	return !_known;
 }
 
-base::optional<bool> NotifySettings::silentPosts() const {
+std::optional<bool> NotifySettings::silentPosts() const {
 	return _value
 		? _value->silentPosts()
-		: base::none;
+		: std::nullopt;
 }
 
 MTPinputPeerNotifySettings NotifySettings::serialize() const {

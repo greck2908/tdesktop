@@ -7,17 +7,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include <rpl/variable.h>
-#include <rpl/event_stream.h>
 #include "window/section_widget.h"
+#include "ui/effects/animations.h"
 
 namespace Storage {
 enum class SharedMediaType : signed char;
 } // namespace Storage
-
-namespace Data {
-class Feed;
-} // namespace Data
 
 namespace Ui {
 class SettingsSlider;
@@ -78,7 +73,7 @@ class WrapWidget final : public Window::SectionWidget {
 public:
 	WrapWidget(
 		QWidget *parent,
-		not_null<Window::Controller*> window,
+		not_null<Window::SessionController*> window,
 		Wrap wrap,
 		not_null<Memento*> memento);
 
@@ -106,17 +101,19 @@ public:
 		not_null<Window::SectionMemento*> memento,
 		const Window::SectionShow &params) override;
 	bool showBackFromStackInternal(const Window::SectionShow &params);
-	std::unique_ptr<Window::SectionMemento> createMemento() override;
+	std::shared_ptr<Window::SectionMemento> createMemento() override;
 
 	rpl::producer<int> desiredHeightValue() const override;
 
 	void updateInternalState(not_null<Memento*> memento);
 
 	// Float player interface.
-	bool wheelEventFromFloatPlayer(QEvent *e) override;
-	QRect rectForFloatPlayer() const override;
+	bool floatPlayerHandleWheelEvent(QEvent *e) override;
+	QRect floatPlayerAvailableRect() override;
 
 	object_ptr<Ui::RpWidget> createTopBarSurrogate(QWidget *parent);
+
+	bool closeByOutsideClick() const;
 
 	void updateGeometry(QRect newGeometry, int additionalScroll);
 	int scrollTillBottom(int forHeight) const;
@@ -147,11 +144,12 @@ private:
 	void startInjectingActivePeerProfiles();
 	void injectActiveProfile(Dialogs::Key key);
 	void injectActivePeerProfile(not_null<PeerData*> peer);
-	void injectActiveFeedProfile(not_null<Data::Feed*> feed);
+	//void injectActiveFeedProfile(not_null<Data::Feed*> feed); // #feed
 	void injectActiveProfileMemento(
-		std::unique_ptr<ContentMemento> memento);
+		std::shared_ptr<ContentMemento> memento);
+	void checkBeforeClose(Fn<void()> close);
 	void restoreHistoryStack(
-		std::vector<std::unique_ptr<ContentMemento>> stack);
+		std::vector<std::shared_ptr<ContentMemento>> stack);
 	bool hasStackHistory() const {
 		return !_historyStack.empty();
 	}
@@ -168,6 +166,7 @@ private:
 	//void createTabs();
 	void createTopBar();
 	void highlightTopBar();
+	void setupShortcuts();
 
 	not_null<RpWidget*> topWidget() const;
 
@@ -179,22 +178,23 @@ private:
 
 	//void showTab(Tab tab);
 	void showContent(object_ptr<ContentWidget> content);
-	//std::unique_ptr<ContentMemento> createTabMemento(Tab tab);
+	//std::shared_ptr<ContentMemento> createTabMemento(Tab tab);
 	object_ptr<ContentWidget> createContent(
 		not_null<ContentMemento*> memento,
 		not_null<Controller*> controller);
 	std::unique_ptr<Controller> createController(
-		not_null<Window::Controller*> window,
+		not_null<Window::SessionController*> window,
 		not_null<ContentMemento*> memento);
 	//void convertProfileFromStackToTab();
 
 	rpl::producer<SelectedItems> selectedListValue() const;
 	bool requireTopBarSearch() const;
 
-	void addProfileMenuButton();
+	void addTopBarMenuButton();
+	void addContentSaveButton();
 	void addProfileCallsButton();
 	void addProfileNotificationsButton();
-	void showProfileMenu();
+	void showTopBarMenu();
 
 	rpl::variable<Wrap> _wrap;
 	std::unique_ptr<Controller> _controller;
@@ -204,7 +204,7 @@ private:
 	//object_ptr<Ui::SettingsSlider> _topTabs = { nullptr };
 	object_ptr<TopBar> _topBar = { nullptr };
 	object_ptr<Ui::RpWidget> _topBarSurrogate = { nullptr };
-	Animation _topBarOverrideAnimation;
+	Ui::Animations::Simple _topBarOverrideAnimation;
 	bool _topBarOverrideShown = false;
 
 	object_ptr<Ui::FadeShadow> _topShadow;
@@ -212,7 +212,7 @@ private:
 	base::unique_qptr<Ui::DropdownMenu> _topBarMenu;
 
 //	Tab _tab = Tab::Profile;
-//	std::unique_ptr<ContentMemento> _anotherTabMemento;
+//	std::shared_ptr<ContentMemento> _anotherTabMemento;
 	std::vector<StackItem> _historyStack;
 
 	rpl::event_stream<rpl::producer<int>> _desiredHeights;

@@ -9,24 +9,48 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <rpl/variable.h>
 #include "data/data_search_controller.h"
-#include "window/window_controller.h"
+#include "window/window_session_controller.h"
+#include "settings/settings_common.h"
 
 namespace Ui {
 class SearchFieldController;
 } // namespace Ui
 
 namespace Info {
+namespace Settings {
+
+struct Tag {
+	explicit Tag(not_null<UserData*> self) : self(self) {
+	}
+
+	not_null<UserData*> self;
+};
+
+} // namespace Settings
 
 class Key {
 public:
 	Key(not_null<PeerData*> peer);
-	Key(not_null<Data::Feed*> feed);
+	//Key(not_null<Data::Feed*> feed); // #feed
+	Key(Settings::Tag settings);
+	Key(not_null<PollData*> poll, FullMsgId contextId);
 
 	PeerData *peer() const;
-	Data::Feed *feed() const;
+	//Data::Feed *feed() const; // #feed
+	UserData *settingsSelf() const;
+	PollData *poll() const;
+	FullMsgId pollContextId() const;
 
 private:
-	base::variant<not_null<PeerData*>, not_null<Data::Feed*>> _value;
+	struct PollKey {
+		not_null<PollData*> poll;
+		FullMsgId contextId;
+	};
+	std::variant<
+		not_null<PeerData*>,
+		//not_null<Data::Feed*>, // #feed
+		Settings::Tag,
+		PollKey> _value;
 
 };
 
@@ -42,16 +66,23 @@ public:
 		Media,
 		CommonGroups,
 		Members,
-		Channels,
+		//Channels, // #feed
+		Settings,
+		PollResults,
 	};
+	using SettingsType = ::Settings::Type;
 	using MediaType = Storage::SharedMediaType;
 
 	Section(Type type) : _type(type) {
-		Expects(type != Type::Media);
+		Expects(type != Type::Media && type != Type::Settings);
 	}
 	Section(MediaType mediaType)
 	: _type(Type::Media)
 	, _mediaType(mediaType) {
+	}
+	Section(SettingsType settingsType)
+	: _type(Type::Settings)
+	, _settingsType(settingsType) {
 	}
 
 	Type type() const {
@@ -59,39 +90,41 @@ public:
 	}
 	MediaType mediaType() const {
 		Expects(_type == Type::Media);
+
 		return _mediaType;
+	}
+	SettingsType settingsType() const {
+		Expects(_type == Type::Settings);
+
+		return _settingsType;
 	}
 
 private:
 	Type _type;
-	Storage::SharedMediaType _mediaType;
+	MediaType _mediaType = MediaType();
+	SettingsType _settingsType = SettingsType();
 
 };
 
-class AbstractController : public Window::Navigation {
+class AbstractController : public Window::SessionNavigation {
 public:
-	AbstractController(not_null<Window::Controller*> parent)
-	: _parent(parent) {
-	}
+	AbstractController(not_null<Window::SessionController*> parent);
 
 	virtual Key key() const = 0;
 	virtual PeerData *migrated() const = 0;
 	virtual Section section() const = 0;
 
-	PeerId peerId() const {
-		if (const auto peer = key().peer()) {
-			return peer->id;
-		}
-		return PeerId(0);
+	PeerData *peer() const;
+	PeerId migratedPeerId() const;
+	//Data::Feed *feed() const { // #feed
+	//	return key().feed();
+	//}
+	UserData *settingsSelf() const {
+		return key().settingsSelf();
 	}
-	PeerId migratedPeerId() const {
-		if (auto peer = migrated()) {
-			return peer->id;
-		}
-		return PeerId(0);
-	}
-	Data::Feed *feed() const {
-		return key().feed();
+	PollData *poll() const;
+	FullMsgId pollContextId() const {
+		return key().pollContextId();
 	}
 
 	virtual void setSearchEnabledByContent(bool enabled) {
@@ -103,16 +136,22 @@ public:
 	virtual rpl::producer<QString> mediaSourceQueryValue() const;
 
 	void showSection(
-		Window::SectionMemento &&memento,
+		std::shared_ptr<Window::SectionMemento> memento,
 		const Window::SectionShow &params = Window::SectionShow()) override;
 	void showBackFromStack(
 		const Window::SectionShow &params = Window::SectionShow()) override;
-	not_null<Window::Controller*> parentController() override {
+
+	void showPeerHistory(
+		PeerId peerId,
+		const Window::SectionShow &params = Window::SectionShow::Way::ClearStack,
+		MsgId msgId = ShowAtUnreadMsgId) override;
+
+	not_null<Window::SessionController*> parentController() override {
 		return _parent;
 	}
 
 private:
-	not_null<Window::Controller*> _parent;
+	not_null<Window::SessionController*> _parent;
 
 };
 
@@ -120,7 +159,7 @@ class Controller : public AbstractController {
 public:
 	Controller(
 		not_null<WrapWidget*> widget,
-		not_null<Window::Controller*> window,
+		not_null<Window::SessionController*> window,
 		not_null<ContentMemento*> memento);
 
 	Key key() const override {
@@ -156,10 +195,14 @@ public:
 		return base::take(_searchStartsFocused);
 	}
 
+	void setCanSaveChanges(rpl::producer<bool> can);
+	rpl::producer<bool> canSaveChanges() const;
+	bool canSaveChangesNow() const;
+
 	void saveSearchState(not_null<ContentMemento*> memento);
 
 	void showSection(
-		Window::SectionMemento &&memento,
+		std::shared_ptr<Window::SectionMemento> memento,
 		const Window::SectionShow &params = Window::SectionShow()) override;
 	void showBackFromStack(
 		const Window::SectionShow &params = Window::SectionShow()) override;
@@ -186,6 +229,7 @@ private:
 	std::unique_ptr<Ui::SearchFieldController> _searchFieldController;
 	std::unique_ptr<Api::DelayedSearchController> _searchController;
 	rpl::variable<bool> _seachEnabledByContent = false;
+	rpl::variable<bool> _canSaveChanges = false;
 	bool _searchStartsFocused = false;
 
 	rpl::lifetime _lifetime;

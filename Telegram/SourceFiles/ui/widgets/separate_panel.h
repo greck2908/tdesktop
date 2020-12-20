@@ -8,41 +8,42 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "ui/rp_widget.h"
-#include "boxes/abstract_box.h"
+#include "ui/effects/animations.h"
+#include "ui/layers/layer_widget.h"
 
 namespace Ui {
+class BoxContent;
 class IconButton;
+class LayerStackWidget;
 class FlatLabel;
 template <typename Widget>
 class FadeWrapScaled;
 } // namespace Ui
 
-namespace Window {
-class LayerStackWidget;
-} // namespace Window
-
 namespace Ui {
 
-class SeparatePanel : public Ui::RpWidget {
+class SeparatePanel : public Ui::RpWidget, private base::Subscriber {
 public:
 	SeparatePanel();
 
 	void setTitle(rpl::producer<QString> title);
 	void setInnerSize(QSize size);
 
+	void setHideOnDeactivate(bool hideOnDeactivate);
 	void showAndActivate();
-	int hideAndDestroyGetDuration();
+	int hideGetDuration();
 
 	void showInner(base::unique_qptr<Ui::RpWidget> inner);
 	void showBox(
-		object_ptr<BoxContent> box,
-		LayerOptions options,
+		object_ptr<Ui::BoxContent> box,
+		Ui::LayerOptions options,
 		anim::type animated);
 	void showToast(const QString &text);
+	void destroyLayer();
 
 	rpl::producer<> backRequests() const;
 	rpl::producer<> closeRequests() const;
-	rpl::producer<> destroyRequests() const;
+	rpl::producer<> closeEvents() const;
 	void setBackAllowed(bool allowed);
 
 protected:
@@ -56,6 +57,7 @@ protected:
 	void leaveEventHook(QEvent *e) override;
 	void leaveToChildEvent(QEvent *e, QWidget *child) override;
 	void keyPressEvent(QKeyEvent *e) override;
+	bool eventHook(QEvent *e) override;
 
 private:
 	void initControls();
@@ -68,23 +70,26 @@ private:
 	void opacityCallback();
 	void ensureLayerCreated();
 
+	void updateTitleGeometry(int newWidth);
 	void updateTitlePosition();
 	void paintShadowBorder(Painter &p) const;
 	void paintOpaqueBorder(Painter &p) const;
 
 	void toggleOpacityAnimation(bool visible);
 	void finishAnimating();
-	void destroyDelayed();
+	void finishClose();
 
 	object_ptr<Ui::IconButton> _close;
 	object_ptr<Ui::FlatLabel> _title = { nullptr };
 	object_ptr<Ui::FadeWrapScaled<Ui::IconButton>> _back;
 	object_ptr<Ui::RpWidget> _body;
 	base::unique_qptr<Ui::RpWidget> _inner;
-	object_ptr<Window::LayerStackWidget> _layer = { nullptr };
+	base::unique_qptr<Ui::LayerStackWidget> _layer = { nullptr };
 	rpl::event_stream<> _synteticBackRequests;
-	rpl::event_stream<> _destroyRequests;
+	rpl::event_stream<> _userCloseRequests;
+	rpl::event_stream<> _closeEvents;
 
+	bool _hideOnDeactivate = false;
 	bool _useTransparency = true;
 	style::margins _padding;
 
@@ -92,10 +97,10 @@ private:
 	QPoint _dragStartMousePosition;
 	QPoint _dragStartMyPosition;
 
-	Animation _titleLeft;
+	Ui::Animations::Simple _titleLeft;
 	bool _visible = false;
 
-	Animation _opacityAnimation;
+	Ui::Animations::Simple _opacityAnimation;
 	QPixmap _animationCache;
 	QPixmap _borderParts;
 

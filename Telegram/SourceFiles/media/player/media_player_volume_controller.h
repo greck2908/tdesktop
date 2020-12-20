@@ -7,17 +7,29 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "ui/effects/animations.h"
+#include "ui/rp_widget.h"
+#include "base/object_ptr.h"
+
+#include <QtCore/QTimer>
+
 namespace Ui {
 class IconButton;
 class MediaSlider;
 } // namespace Ui
 
+namespace Window {
+class SessionController;
+} // namespace Window
+
 namespace Media {
 namespace Player {
 
-class VolumeController : public TWidget, private base::Subscriber {
+class VolumeController : public Ui::RpWidget, private base::Subscriber {
 public:
-	VolumeController(QWidget *parent);
+	VolumeController(
+		QWidget *parent,
+		not_null<Window::SessionController*> controller);
 
 	void setIsVertical(bool vertical);
 
@@ -32,11 +44,13 @@ private:
 
 };
 
-class VolumeWidget : public TWidget {
+class VolumeWidget : public Ui::RpWidget {
 	Q_OBJECT
 
 public:
-	VolumeWidget(QWidget *parent);
+	VolumeWidget(
+		QWidget *parent,
+		not_null<Window::SessionController*> controller);
 
 	bool overlaps(const QRect &globalRect);
 
@@ -53,7 +67,6 @@ protected:
 private slots:
 	void onShowStart();
 	void onHideStart();
-	void onWindowActiveChanged();
 
 private:
 	void otherEnter();
@@ -66,7 +79,7 @@ private:
 	bool _hiding = false;
 
 	QPixmap _cache;
-	Animation _a_appearance;
+	Ui::Animations::Simple _a_appearance;
 
 	QTimer _hideTimer, _showTimer;
 
@@ -74,5 +87,5 @@ private:
 
 };
 
-} // namespace Clip
+} // namespace Player
 } // namespace Media

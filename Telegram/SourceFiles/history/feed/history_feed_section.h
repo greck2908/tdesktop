@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "ui/effects/animations.h"
 #include "history/view/history_view_list_widget.h"
 #include "window/section_widget.h"
 #include "window/section_memento.h"
@@ -68,8 +69,6 @@ public:
 	bool wheelEventFromFloatPlayer(QEvent *e) override;
 	QRect rectForFloatPlayer() const override;
 
-	bool cmd_search() override;
-
 	// HistoryView::ListDelegate interface.
 	HistoryView::Context listContext() override;
 	void listScrollTo(int top) override;
@@ -86,7 +85,7 @@ public:
 	void listSelectionChanged(
 		HistoryView::SelectedItems &&items) override;
 	void listVisibleItemsChanged(HistoryItemsList &&items) override;
-	base::optional<int> listUnreadBarView(
+	std::optional<int> listUnreadBarView(
 		const std::vector<not_null<Element*>> &elements) override;
 	void listContentRefreshed() override;
 	ClickHandlerPtr listDateLink(not_null<Element*> view) override;
@@ -122,6 +121,8 @@ private:
 	void confirmDeleteSelected();
 	void clearSelected();
 
+	void setupShortcuts();
+
 	not_null<Data::Feed*> _feed;
 	object_ptr<Ui::ScrollArea> _scroll;
 	QPointer<HistoryView::ListWidget> _inner;
@@ -135,10 +136,10 @@ private:
 
 	FullMsgId _currentMessageId;
 	FullMsgId _highlightMessageId;
-	base::optional<Data::MessagePosition> _nextAnimatedScrollPosition;
+	std::optional<Data::MessagePosition> _nextAnimatedScrollPosition;
 	int _nextAnimatedScrollDelta = 0;
 
-	Animation _scrollDownShown;
+	Ui::Animations::Simple _scrollDownShown;
 	bool _scrollDownIsShown = false;
 	object_ptr<Ui::HistoryDownButton> _scrollDown;
 	std::shared_ptr<Window::DateClickHandler> _dateLink;

@@ -7,13 +7,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-namespace MTP {
-class Instance;
-} // namespace MTP
+#include "mtproto/dedicated_file_loader.h"
+
+namespace Main {
+class Session;
+} // namespace Main
 
 namespace Core {
 
-#ifndef TDESKTOP_DISABLE_AUTOUPDATE
+bool UpdaterDisabled();
+void SetUpdaterDisabledAtStartup();
 
 class Updater;
 
@@ -24,10 +27,7 @@ public:
 		Download,
 		Ready,
 	};
-	struct Progress {
-		int64 already;
-		int64 size;
-	};
+	using Progress = MTP::AbstractDedicatedLoader::Progress;
 
 	UpdateChecker();
 
@@ -41,7 +41,7 @@ public:
 	void stop();
 	void test();
 
-	void setMtproto(const QPointer<MTP::Instance> &mtproto);
+	void setMtproto(base::weak_ptr<Main::Session> session);
 
 	State state() const;
 	int already() const;
@@ -53,14 +53,7 @@ private:
 };
 
 bool checkReadyUpdate();
-
-#else // TDESKTOP_DISABLE_AUTOUPDATE
-class UpdateChecker {
-};
-
-#endif // TDESKTOP_DISABLE_AUTOUPDATE
-
 void UpdateApplication();
-QString countBetaVersionSignature(uint64 version);
+QString countAlphaVersionSignature(uint64 version);
 
 } // namespace Core

@@ -8,8 +8,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "platform/platform_main_window.h"
+#include "ui/platform/win/ui_window_shadow_win.h"
+#include "base/platform/win/base_windows_h.h"
 #include "base/flags.h"
-#include <windows.h>
+
+#include <QtCore/QTimer>
 
 namespace Ui {
 class PopupMenu;
@@ -18,18 +21,17 @@ class PopupMenu;
 namespace Platform {
 
 class MainWindow : public Window::MainWindow {
-	Q_OBJECT
-
 public:
-	MainWindow();
+	explicit MainWindow(not_null<Window::Controller*> controller);
 
 	HWND psHwnd() const;
 	HMENU psMenu() const;
 
-	void psFirstShow();
 	void psInitSysMenu();
 	void updateSystemMenu(Qt::WindowState state);
-	void psUpdateMargins();
+	void updateCustomMargins();
+
+	void updateWindowIcon() override;
 
 	void psRefreshTaskbarIcon();
 
@@ -41,22 +43,11 @@ public:
 	static void TaskbarCreated();
 
 	// Custom shadows.
-	enum class ShadowsChange {
-		Moved    = (1 << 0),
-		Resized  = (1 << 1),
-		Shown    = (1 << 2),
-		Hidden   = (1 << 3),
-		Activate = (1 << 4),
-	};
-	using ShadowsChanges = base::flags<ShadowsChange>;
-	friend inline constexpr auto is_flag_type(ShadowsChange) { return true; };
-
-	bool shadowsWorking() const {
-		return _shadowsWorking;
-	}
 	void shadowsActivate();
 	void shadowsDeactivate();
-	void shadowsUpdate(ShadowsChanges changes, WINDOWPOS *position = nullptr);
+	void shadowsUpdate(
+		Ui::Platform::WindowShadow::Changes changes,
+		WINDOWPOS *position = nullptr);
 
 	int deltaLeft() const {
 		return _deltaLeft;
@@ -65,16 +56,17 @@ public:
 		return _deltaTop;
 	}
 
-	~MainWindow();
-
-public slots:
 	void psShowTrayMenu();
+
+	~MainWindow();
 
 protected:
 	void initHook() override;
 	int32 screenNameChecksum(const QString &name) const override;
 	void unreadCounterChangedHook() override;
 
+	void initShadows() override;
+	void firstShadowsUpdate() override;
 	void stateChangedHook(Qt::WindowState state) override;
 
 	bool hasTrayIcon() const override {
@@ -95,15 +87,21 @@ protected:
 	QTimer psUpdatedPositionTimer;
 
 private:
+	void setupNativeWindowFrame();
 	void updateIconCounters();
-
+	QMargins computeCustomMargins();
+	void validateWindowTheme(bool native, bool night);
 	void psDestroyIcons();
+	void fixMaximizedWindow();
 
 	static UINT _taskbarCreatedMsgId;
 
-	bool _shadowsWorking = false;
+	std::optional<Ui::Platform::WindowShadow> _shadow;
+
 	bool _themeInited = false;
 	bool _inUpdateMargins = false;
+	bool _wasNativeFrame = false;
+	bool _hasActiveFrame = false;
 
 	HWND ps_hWnd = nullptr;
 	HWND ps_tbHider_hWnd = nullptr;

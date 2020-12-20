@@ -12,10 +12,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/admin_log/history_admin_log_item.h"
 #include "mtproto/sender.h"
 
-namespace Notify {
-struct PeerUpdate;
-} // namespace Notify
-
 namespace Ui {
 class ScrollArea;
 class PlainShadow;
@@ -47,23 +43,9 @@ inline bool operator!=(const FilterValue &a, const FilterValue &b) {
 	return !(a == b);
 }
 
-class LocalIdManager {
-public:
-	LocalIdManager() = default;
-	LocalIdManager(const LocalIdManager &other) = delete;
-	LocalIdManager &operator=(const LocalIdManager &other) = delete;
-	MsgId next() {
-		return ++_counter;
-	}
-
-private:
-	MsgId _counter = ServerMaxMsgId;
-
-};
-
 class Widget final : public Window::SectionWidget {
 public:
-	Widget(QWidget *parent, not_null<Window::Controller*> controller, not_null<ChannelData*> channel);
+	Widget(QWidget *parent, not_null<Window::SessionController*> controller, not_null<ChannelData*> channel);
 
 	not_null<ChannelData*> channel() const;
 	Dialogs::RowDescriptor activeChat() const override;
@@ -77,17 +59,15 @@ public:
 	bool showInternal(
 		not_null<Window::SectionMemento*> memento,
 		const Window::SectionShow &params) override;
-	std::unique_ptr<Window::SectionMemento> createMemento() override;
+	std::shared_ptr<Window::SectionMemento> createMemento() override;
 
 	void setInternalState(const QRect &geometry, not_null<SectionMemento*> memento);
 
 	// Float player interface.
-	bool wheelEventFromFloatPlayer(QEvent *e) override;
-	QRect rectForFloatPlayer() const override;
+	bool floatPlayerHandleWheelEvent(QEvent *e) override;
+	QRect floatPlayerAvailableRect() override;
 
 	void applyFilter(FilterValue &&value);
-
-	bool cmd_search() override;
 
 protected:
 	void resizeEvent(QResizeEvent *e) override;
@@ -104,6 +84,7 @@ private:
 	void updateAdaptiveLayout();
 	void saveState(not_null<SectionMemento*> memento);
 	void restoreState(not_null<SectionMemento*> memento);
+	void setupShortcuts();
 
 	object_ptr<Ui::ScrollArea> _scroll;
 	QPointer<InnerWidget> _inner;
@@ -122,7 +103,7 @@ public:
 
 	object_ptr<Window::SectionWidget> createWidget(
 		QWidget *parent,
-		not_null<Window::Controller*> controller,
+		not_null<Window::SessionController*> controller,
 		Window::Column column,
 		const QRect &geometry) override;
 
@@ -151,11 +132,11 @@ public:
 
 	void setItems(
 			std::vector<OwnedItem> &&items,
-			std::map<uint64, not_null<Element*>> &&itemsByIds,
+			std::set<uint64> &&eventIds,
 			bool upLoaded,
 			bool downLoaded) {
 		_items = std::move(items);
-		_itemsByIds = std::move(itemsByIds);
+		_eventIds = std::move(eventIds);
 		_upLoaded = upLoaded;
 		_downLoaded = downLoaded;
 	}
@@ -165,17 +146,11 @@ public:
 	void setSearchQuery(QString &&query) {
 		_searchQuery = std::move(query);
 	}
-	void setIdManager(std::shared_ptr<LocalIdManager> &&manager) {
-		_idManager = std::move(manager);
-	}
 	std::vector<OwnedItem> takeItems() {
 		return std::move(_items);
 	}
-	std::map<uint64, not_null<Element*>> takeItemsByIds() {
-		return std::move(_itemsByIds);
-	}
-	std::shared_ptr<LocalIdManager> takeIdManager() {
-		return std::move(_idManager);
+	std::set<uint64> takeEventIds() {
+		return std::move(_eventIds);
 	}
 	bool upLoaded() const {
 		return _upLoaded;
@@ -196,10 +171,9 @@ private:
 	std::vector<not_null<UserData*>> _admins;
 	std::vector<not_null<UserData*>> _adminsCanEdit;
 	std::vector<OwnedItem> _items;
-	std::map<uint64, not_null<Element*>> _itemsByIds;
+	std::set<uint64> _eventIds;
 	bool _upLoaded = false;
 	bool _downLoaded = true;
-	std::shared_ptr<LocalIdManager> _idManager;
 	FilterValue _filter;
 	QString _searchQuery;
 

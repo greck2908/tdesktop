@@ -7,8 +7,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/changelogs.h"
 
-#include "storage/localstorage.h"
 #include "lang/lang_keys.h"
+#include "core/application.h"
+#include "main/main_domain.h"
+#include "main/main_session.h"
+#include "storage/storage_domain.h"
 #include "data/data_session.h"
 #include "mainwindow.h"
 #include "apiwrap.h"
@@ -16,139 +19,90 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Core {
 namespace {
 
-std::map<int, const char*> AlphaLogs() {
+std::map<int, const char*> BetaLogs() {
 	return {
 	{
-		1002002,
-		"\xE2\x80\x94 Grouped photos and videos are displayed as albums."
+		2004006,
+		"- Fix image compression option when sending files with drag-n-drop.\n"
+
+		"- Fix caption text selection in media albums.\n"
+
+		"- Fix drafts display in personal chats in the chats list.\n"
+
+		"- Bug fixes and other minor improvements.\n"
 	},
 	{
-		1002004,
-		"\xE2\x80\x94 Group media into an album "
-		"when sharing multiple photos and videos.\n"
-
-		"\xE2\x80\x94 Bug fixes and other minor improvements."
+		2004008,
+		"- Upgrade several third party libraries to latest versions.\n"
 	},
 	{
-		1002005,
-		"\xE2\x80\x94 When viewing a photo from an album, "
-		"you'll see other pictures from the same group "
-		"as thumbnails in the lower part of the screen.\n"
+		2004010,
+		"- Use inline bots and sticker by emoji suggestions in channel comments.\n"
 
-		"\xE2\x80\x94 When composing an album paste "
-		"additional media from the clipboard.\n"
-
-		"\xE2\x80\x94 Bug fixes and other minor improvements."
+		"- Lock voice message recording, listen to your voice message before sending.\n"
 	},
 	{
-		1002007,
-		"\xE2\x80\x94 Use fast reply button in group chats.\n"
+		2004011,
+		"- Improve locked voice message recording.\n"
 
-		"\xE2\x80\x94 Select a message you want to reply to by "
-		"pressing Ctrl+Up and Ctrl+Down."
+		"- Fix main window closing to tray on Windows.\n"
+
+		"- Fix crash in bot command sending.\n"
+
+		"- Fix adding additional photos when sending an album to a group with enabled slow mode.\n"
 	},
 	{
-		1002009,
-		"\xE2\x80\x94 Quick Reply. "
-		"Double click next to any message for a quick reply.\n"
-
-		"\xE2\x80\x94 Search for Stickers. "
-		"Click on the new search icon to access "
-		"your sticker sets or find new ones."
+		2004012,
+		"- Voice chats in groups. (alpha version)\n"
 	},
 	{
-		1002019,
-		"\xE2\x80\x94 Enable proxy for calls in Settings.\n"
+		2004014,
+		"- Create voice chats in legacy groups.\n"
 
-		"\xE2\x80\x94 Bug fixes and other minor improvements."
+		"- Fix sticker pack opening.\n"
+
+		"- Fix group status display.\n"
+		
+		"- Fix group members display.\n"
 	},
 	{
-		1002020,
-		"\xE2\x80\x94 Emoji and text replacements are done "
-		"while you type the message.\n"
+		2004015,
+		"- Improve design of voice chats.\n"
 
-		"\xE2\x80\x94 Revert emoji and text replacements "
-		"by pressing backspace.\n"
+		"- Fix sending of voice messages as replies.\n"
 
-		"\xE2\x80\x94 Disable emoji replacements or suggestions "
-		"in Settings.\n"
+		"- Fix 'Open With' menu position in macOS.\n"
 
-		"\xE2\x80\x94 Some critical bug fixes."
+		"- Fix freeze on secondary screen disconnect.\n"
 	},
-	{
-		1002022,
-		"\xE2\x80\x94 Use markdown in media captions "
-		"(**bold**, __italic__, `tag` and ```code```).\n"
-
-		"\xE2\x80\x94 Use emoji replacement in media captions, "
-		"group and channel titles and descriptions (:like: etc.)\n"
-
-		"\xE2\x80\x94 Markdown replacement now happens immediately "
-		"after typing (instead of after sending) and can be "
-		"rolled back using Backspace or Ctrl/Cmd + Z. "
-		"Replacement no longer happens when pasting text."
-	},
-	{
-		1002023,
-		"\xE2\x80\x94 Apply formatting from input field context menu.\n"
-
-		"\xE2\x80\x94 Apply formatting by hotkeys.\n"
-
-		"\xE2\x80\x94 Bug fixes and other minor improvements."
-	},
-	{
-		1002024,
-		"\xE2\x80\x94 Add links with custom text from context menu "
-		"or by Ctrl/Cmd + K keyboard shortcut."
-	},
-	{
-		1002025,
-		"\xE2\x80\x94 Apply markdown formatting (```, `, **, __) "
-		"only when sending the message.\n"
-
-		"\xE2\x80\x94 Display connection quality bars in calls.\n"
-
-		"\xE2\x80\x94 Telegram Desktop can update itself through MTProto.\n"
-
-		"\xE2\x80\x94 Bug fixes and other minor improvements."
-	}
 	};
-}
-
-QString FormatVersionDisplay(int version) {
-	return QString::number(version / 1000000)
-		+ '.' + QString::number((version % 1000000) / 1000)
-		+ ((version % 1000)
-			? ('.' + QString::number(version % 1000))
-			: QString());
-}
-
-QString FormatVersionPrecise(int version) {
-	return QString::number(version / 1000000)
-		+ '.' + QString::number((version % 1000000) / 1000)
-		+ '.' + QString::number(version % 1000);
-}
+};
 
 } // namespace
 
-Changelogs::Changelogs(not_null<AuthSession*> session, int oldVersion)
+Changelogs::Changelogs(not_null<Main::Session*> session, int oldVersion)
 : _session(session)
 , _oldVersion(oldVersion) {
-	_chatsSubscription = subscribe(
-		_session->data().moreChatsLoaded(),
-		[this] { requestCloudLogs(); });
+	_session->data().chatsListChanges(
+	) | rpl::filter([](Data::Folder *folder) {
+		return !folder;
+	}) | rpl::start_with_next([=] {
+		requestCloudLogs();
+	}, _chatsSubscription);
 }
 
 std::unique_ptr<Changelogs> Changelogs::Create(
-		not_null<AuthSession*> session) {
-	const auto oldVersion = Local::oldMapVersion();
+		not_null<Main::Session*> session) {
+	auto &local = Core::App().domain().local();
+	const auto oldVersion = local.oldVersion();
+	local.clearOldVersion();
 	return (oldVersion > 0 && oldVersion < AppVersion)
 		? std::make_unique<Changelogs>(session, oldVersion)
 		: nullptr;
 }
 
 void Changelogs::requestCloudLogs() {
-	unsubscribe(base::take(_chatsSubscription));
+	_chatsSubscription.destroy();
 
 	const auto callback = [this](const MTPUpdates &result) {
 		_session->api().applyUpdates(result);
@@ -161,10 +115,10 @@ void Changelogs::requestCloudLogs() {
 			resultEmpty = false;
 			break;
 		case mtpc_updatesCombined:
-			resultEmpty = result.c_updatesCombined().vupdates.v.isEmpty();
+			resultEmpty = result.c_updatesCombined().vupdates().v.isEmpty();
 			break;
 		case mtpc_updates:
-			resultEmpty = result.c_updates().vupdates.v.isEmpty();
+			resultEmpty = result.c_updates().vupdates().v.isEmpty();
 			break;
 		case mtpc_updatesTooLong:
 		case mtpc_updateShortSentMessage:
@@ -181,15 +135,16 @@ void Changelogs::requestCloudLogs() {
 }
 
 void Changelogs::addLocalLogs() {
-	if (cAlphaVersion() || cBetaVersion()) {
-		addAlphaLogs();
+	if (AppBetaVersion || cAlphaVersion()) {
+		addBetaLogs();
 	}
 	if (!_addedSomeLocal) {
-		const auto text = lng_new_version_wrap(
+		const auto text = tr::lng_new_version_wrap(
+			tr::now,
 			lt_version,
-			str_const_toString(AppVersionStr),
+			QString::fromLatin1(AppVersionStr),
 			lt_changes,
-			lang(lng_new_version_minor),
+			tr::lng_new_version_minor(tr::now),
 			lt_link,
 			qsl("https://desktop.telegram.org/changelog"));
 		addLocalLog(text.trimmed());
@@ -199,27 +154,46 @@ void Changelogs::addLocalLogs() {
 void Changelogs::addLocalLog(const QString &text) {
 	auto textWithEntities = TextWithEntities{ text };
 	TextUtilities::ParseEntities(textWithEntities, TextParseLinks);
-	App::wnd()->serviceNotification(
-		textWithEntities,
-		MTP_messageMediaEmpty(),
-		unixtime());
+	_session->data().serviceNotification(textWithEntities);
 	_addedSomeLocal = true;
 };
 
-void Changelogs::addAlphaLogs() {
-	for (const auto[version, changes] : AlphaLogs()) {
-		addAlphaLog(version, changes);
+void Changelogs::addBetaLogs() {
+	for (const auto [version, changes] : BetaLogs()) {
+		addBetaLog(version, changes);
 	}
 }
 
-void Changelogs::addAlphaLog(int changeVersion, const char *changes) {
+void Changelogs::addBetaLog(int changeVersion, const char *changes) {
 	if (_oldVersion >= changeVersion) {
 		return;
 	}
+	const auto text = [&] {
+		static const auto simple = u"\n- "_q;
+		static const auto separator = QString::fromUtf8("\n\xE2\x80\xA2 ");
+		auto result = QString::fromUtf8(changes).trimmed();
+		if (result.startsWith(simple.midRef(1))) {
+			result = separator.mid(1) + result.mid(simple.size() - 1);
+		}
+		return result.replace(simple, separator);
+	}();
 	const auto version = FormatVersionDisplay(changeVersion);
-	const auto text = qsl("New in version %1:\n\n").arg(version)
-		+ QString::fromUtf8(changes).trimmed();
-	addLocalLog(text);
+	const auto log = qsl("New in version %1:\n\n").arg(version) + text;
+	addLocalLog(log);
+}
+
+QString FormatVersionDisplay(int version) {
+	return QString::number(version / 1000000)
+		+ '.' + QString::number((version % 1000000) / 1000)
+		+ ((version % 1000)
+			? ('.' + QString::number(version % 1000))
+			: QString());
+}
+
+QString FormatVersionPrecise(int version) {
+	return QString::number(version / 1000000)
+		+ '.' + QString::number((version % 1000000) / 1000)
+		+ '.' + QString::number(version % 1000);
 }
 
 } // namespace Core
