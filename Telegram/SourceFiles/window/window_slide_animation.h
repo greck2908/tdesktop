@@ -7,8 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "ui/effects/animations.h"
-
 namespace Window {
 
 enum class SlideDirection {
@@ -44,7 +42,7 @@ private:
 	bool _topBarShadowEnabled = false;
 	bool _withFade = false;
 
-	mutable Ui::Animations::Simple _animation;
+	mutable Animation _animation;
 	QPixmap _cacheUnder, _cacheOver;
 
 	RepaintCallback _repaintCallback;

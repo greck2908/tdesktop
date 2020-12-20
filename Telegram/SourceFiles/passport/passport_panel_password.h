@@ -8,7 +8,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "ui/rp_widget.h"
-#include "base/object_ptr.h"
 
 namespace Ui {
 class PasswordInput;
@@ -68,6 +67,7 @@ private:
 
 	not_null<Ui::VerticalLayout*> _inner;
 	base::unique_qptr<Ui::RpWidget> _about;
+	base::unique_qptr<Ui::RpWidget> _button;
 
 };
 

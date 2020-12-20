@@ -9,7 +9,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "data/data_feed.h"
 #include "data/data_session.h"
-#include "data/data_channel.h"
 #include "info/info_controller.h"
 #include "lang/lang_keys.h"
 #include "history/history.h"
@@ -39,6 +38,7 @@ public:
 	QMargins actionMargins() const override;
 	void paintAction(
 		Painter &p,
+		TimeMs ms,
 		int x,
 		int y,
 		int outerWidth,
@@ -76,6 +76,7 @@ QMargins ChannelsController::Row::actionMargins() const {
 
 void ChannelsController::Row::paintAction(
 		Painter &p,
+		TimeMs ms,
 		int x,
 		int y,
 		int outerWidth,
@@ -109,7 +110,7 @@ auto ChannelsController::createRow(not_null<History*> history)
 
 std::unique_ptr<PeerListRow> ChannelsController::createRestoredRow(
 		not_null<PeerData*> peer) {
-	return createRow(peer->owner().history(peer));
+	return createRow(App::history(peer));
 }
 
 void ChannelsController::prepare() {
@@ -187,12 +188,11 @@ void ChannelsController::rowActionClicked(not_null<PeerListRow*> row) {
 }
 
 base::unique_qptr<Ui::PopupMenu> ChannelsController::rowContextMenu(
-		QWidget *parent,
 		not_null<PeerListRow*> row) {
 	auto my = static_cast<Row*>(row.get());
 	auto channel = my->history()->peer->asChannel();
 
-	auto result = base::make_unique_q<Ui::PopupMenu>(parent);
+	auto result = base::make_unique_q<Ui::PopupMenu>(nullptr);
 	Window::PeerMenuAddMuteAction(channel, [&](
 			const QString &text,
 			Fn<void()> handler) {
@@ -251,15 +251,13 @@ void NotificationsController::loadMoreRows() {
 	if (_preloadRequestId || _allLoaded) {
 		return;
 	}
-	// const auto hash = 0;
 	//_preloadRequestId = request(MTPmessages_GetDialogs( // #feed
 	//	MTP_flags(MTPmessages_GetDialogs::Flag::f_feed_id),
 	//	MTP_int(_feed->id()),
 	//	MTP_int(_preloadOffsetDate),
 	//	MTP_int(_preloadOffsetId),
 	//	_preloadPeer ? _preloadPeer->input : MTP_inputPeerEmpty(),
-	//	MTP_int(Data::Feed::kChannelsLimit),
-	//	MTP_int(hash)
+	//	MTP_int(Data::Feed::kChannelsLimit)
 	//)).done([=](const MTPmessages_Dialogs &result) {
 	//	applyFeedDialogs(result);
 	//	_preloadRequestId = 0;
@@ -272,8 +270,8 @@ void NotificationsController::applyFeedDialogs(
 		const MTPmessages_Dialogs &result) {
 	const auto [dialogsList, messagesList] = [&] {
 		const auto process = [&](const auto &data) {
-			_feed->owner().processUsers(data.vusers);
-			_feed->owner().processChats(data.vchats);
+			App::feedUsers(data.vusers);
+			App::feedChats(data.vchats);
 			return std::make_tuple(&data.vdialogs.v, &data.vmessages.v);
 		};
 		switch (result.type()) {
@@ -297,21 +295,25 @@ void NotificationsController::applyFeedDialogs(
 	auto channels = std::vector<not_null<ChannelData*>>();
 	channels.reserve(dialogsList->size());
 	for (const auto &dialog : *dialogsList) {
-		dialog.match([&](const MTPDdialog &data) {
-			if (const auto peerId = peerFromMTP(data.vpeer)) {
-				if (peerIsChannel(peerId)) { // #TODO archive
-					const auto history = Auth().data().history(peerId);
+		switch (dialog.type()) {
+		case mtpc_dialog: {
+			if (const auto peerId = peerFromMTP(dialog.c_dialog().vpeer)) {
+				if (peerIsChannel(peerId)) {
+					const auto history = App::history(peerId);
 					const auto channel = history->peer->asChannel();
-					history->applyDialog(data);
-					channels.emplace_back(channel);
+					history->applyDialog(dialog.c_dialog());
+					channels.push_back(channel);
 				} else {
 					LOG(("API Error: "
-						"Unexpected non-channel in folder dialogs list."));
+						"Unexpected non-channel in feed dialogs list."));
 				}
 			}
-		}, [&](const MTPDdialogFolder &data) {
-			LOG(("API Error: Unexpected dialogFolder in folder dialogs list."));
-		});
+		} break;
+		//case mtpc_dialogFeed: { // #feed
+		//	LOG(("API Error: Unexpected dialogFeed in feed dialogs list."));
+		//} break;
+		default: Unexpected("Type in DialogsInner::dialogsReceived");
+		}
 	}
 	if (!channels.empty()) {
 		auto notMutedChannels = ranges::view::all(
@@ -416,7 +418,7 @@ void EditController::loadMoreRows() {
 //
 //		for (const auto &chat : data.vchats.v) {
 //			if (chat.type() == mtpc_channel) {
-//				channels.push_back(_feed->owner().channel(chat.c_channel().vid.v));
+//				channels.push_back(App::channel(chat.c_channel().vid.v));
 //			}
 //		}
 //	} break;

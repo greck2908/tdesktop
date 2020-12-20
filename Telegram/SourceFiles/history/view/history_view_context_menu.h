@@ -13,13 +13,8 @@ namespace Ui {
 class PopupMenu;
 } // namespace Ui
 
-namespace Window {
-class SessionNavigation;
-} // namespace Main
-
 namespace HistoryView {
 
-enum class Context : char;
 enum class PointState : char;
 class ListWidget;
 class Element;
@@ -27,15 +22,11 @@ struct SelectedItem;
 using SelectedItems = std::vector<SelectedItem>;
 
 struct ContextMenuRequest {
-	explicit ContextMenuRequest(
-		not_null<Window::SessionNavigation*> navigation);
-
-	const not_null<Window::SessionNavigation*> navigation;
 	ClickHandlerPtr link;
 	Element *view = nullptr;
 	HistoryItem *item = nullptr;
 	SelectedItems selectedItems;
-	TextForMimeData selectedText;
+	TextWithEntities selectedText;
 	bool overSelection = false;
 	PointState pointState = PointState();
 };
@@ -43,11 +34,5 @@ struct ContextMenuRequest {
 base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 	not_null<ListWidget*> list,
 	const ContextMenuRequest &request);
-
-void CopyPostLink(
-	not_null<Main::Session*> session,
-	FullMsgId itemId,
-	Context context);
-void StopPoll(not_null<Main::Session*> session, FullMsgId itemId);
 
 } // namespace

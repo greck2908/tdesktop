@@ -16,24 +16,24 @@ namespace Dialogs {
 
 class IndexedList {
 public:
-	IndexedList(SortMode sortMode, FilterId filterId = 0);
+	IndexedList(SortMode sortMode);
 
 	RowsByLetter addToEnd(Key key);
 	Row *addByName(Key key);
-	void adjustByDate(const RowsByLetter &links);
+	void adjustByPos(const RowsByLetter &links);
 	void moveToTop(Key key);
 
 	// row must belong to this indexed list all().
 	void movePinned(Row *row, int deltaSign);
 
-	// For sortMode != SortMode::Date && != Complex
+	// For sortMode != SortMode::Date
 	void peerNameChanged(
 		not_null<PeerData*> peer,
 		const base::flat_set<QChar> &oldChars);
 
-	//For sortMode == SortMode::Date || == Complex
+	//For sortMode == SortMode::Date
 	void peerNameChanged(
-		FilterId filterId,
+		Mode list,
 		not_null<PeerData*> peer,
 		const base::flat_set<QChar> &oldChars);
 
@@ -44,14 +44,17 @@ public:
 		return _list;
 	}
 	const List *filtered(QChar ch) const {
-		const auto i = _index.find(ch);
-		return (i != _index.end()) ? &i->second : nullptr;
+		if (auto it = _index.find(ch); it != _index.cend()) {
+			return it->second.get();
+		}
+		return &_empty;
 	}
-	std::vector<not_null<Row*>> filtered(const QStringList &words) const;
+
+	~IndexedList();
 
 	// Part of List interface is duplicated here for all() list.
 	int size() const { return all().size(); }
-	bool empty() const { return all().empty(); }
+	bool isEmpty() const { return all().isEmpty(); }
 	bool contains(Key key) const { return all().contains(key); }
 	Row *getRow(Key key) const { return all().getRow(key); }
 	Row *rowAtY(int32 y, int32 h) const { return all().rowAtY(y, h); }
@@ -76,14 +79,13 @@ private:
 		Key key,
 		const base::flat_set<QChar> &oldChars);
 	void adjustNames(
-		FilterId filterId,
+		Mode list,
 		not_null<History*> history,
 		const base::flat_set<QChar> &oldChars);
 
-	SortMode _sortMode = SortMode();
-	FilterId _filterId = 0;
+	SortMode _sortMode;
 	List _list, _empty;
-	base::flat_map<QChar, List> _index;
+	base::flat_map<QChar, std::unique_ptr<List>> _index;
 
 };
 

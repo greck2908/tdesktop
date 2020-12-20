@@ -10,44 +10,57 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_photo.h"
 #include "data/data_document.h"
 
-class ChannelData;
-
-namespace Data {
-class Session;
-} // namespace Data
-
-enum class WebPageType {
-	Photo,
-	Video,
-	Profile,
-	WallPaper,
-	Theme,
-	Article,
-	ArticleWithIV,
+enum WebPageType {
+	WebPagePhoto,
+	WebPageVideo,
+	WebPageProfile,
+	WebPageArticle
 };
 
-WebPageType ParseWebPageType(const MTPDwebPage &type);
-
-struct WebPageCollage {
-	using Item = std::variant<PhotoData*, DocumentData*>;
-
-	WebPageCollage() = default;
-	explicit WebPageCollage(
-		not_null<Data::Session*> owner,
-		const MTPDwebPage &data);
-
-	std::vector<Item> items;
-
-};
+inline WebPageType toWebPageType(const QString &type) {
+	if (type == qstr("photo")) return WebPagePhoto;
+	if (type == qstr("video")) return WebPageVideo;
+	if (type == qstr("profile")) return WebPageProfile;
+	return WebPageArticle;
+}
 
 struct WebPageData {
-	WebPageData(not_null<Data::Session*> owner, const WebPageId &id);
+	WebPageData(const WebPageId &id) : id(id) {
+	}
+	WebPageData(
+		const WebPageId &id,
+		WebPageType type,
+		const QString &url,
+		const QString &displayUrl,
+		const QString &siteName,
+		const QString &title,
+		const TextWithEntities &description,
+		DocumentData *document,
+		PhotoData *photo,
+		int duration,
+		const QString &author,
+		int pendingTill)
+	: id(id)
+	, type(type)
+	, url(url)
+	, displayUrl(displayUrl)
+	, siteName(siteName)
+	, title(title)
+	, description(description)
+	, duration(duration)
+	, author(author)
+	, photo(photo)
+	, document(document)
+	, pendingTill(pendingTill) {
+	}
 
-	[[nodiscard]] Data::Session &owner() const;
-	[[nodiscard]] Main::Session &session() const;
+	void forget() {
+		if (document) document->forget();
+		if (photo) photo->forget();
+	}
 
 	bool applyChanges(
-		WebPageType newType,
+		const QString &newType,
 		const QString &newUrl,
 		const QString &newDisplayUrl,
 		const QString &newSiteName,
@@ -55,18 +68,12 @@ struct WebPageData {
 		const TextWithEntities &newDescription,
 		PhotoData *newPhoto,
 		DocumentData *newDocument,
-		WebPageCollage &&newCollage,
 		int newDuration,
 		const QString &newAuthor,
 		int newPendingTill);
 
-	static void ApplyChanges(
-		not_null<Main::Session*> session,
-		ChannelData *channel,
-		const MTPmessages_Messages &result);
-
 	WebPageId id = 0;
-	WebPageType type = WebPageType::Article;
+	WebPageType type = WebPageArticle;
 	QString url;
 	QString displayUrl;
 	QString siteName;
@@ -76,13 +83,7 @@ struct WebPageData {
 	QString author;
 	PhotoData *photo = nullptr;
 	DocumentData *document = nullptr;
-	WebPageCollage collage;
 	int pendingTill = 0;
 	int version = 0;
-
-private:
-	void replaceDocumentGoodThumbnail();
-
-	const not_null<Data::Session*> _owner;
 
 };

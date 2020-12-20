@@ -8,20 +8,38 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/win/launcher_win.h"
 
 #include "core/crash_reports.h"
-#include "core/update_checker.h"
-#include "base/platform/base_platform_info.h"
-#include "base/platform/win/base_windows_h.h"
+#include "platform/platform_specific.h"
 
+#include <windows.h>
 #include <shellapi.h>
-#include <VersionHelpers.h>
 
 namespace Platform {
+namespace {
 
-Launcher::Launcher(int argc, char *argv[])
-: Core::Launcher(argc, argv, DeviceModelPretty(), SystemVersionPretty()) {
+QString DeviceModel() {
+	return "PC";
 }
 
-std::optional<QStringList> Launcher::readArgumentsHook(
+QString SystemVersion() {
+	switch (QSysInfo::windowsVersion()) {
+	case QSysInfo::WV_XP: return "Windows XP";
+	case QSysInfo::WV_2003: return "Windows 2003";
+	case QSysInfo::WV_VISTA: return "Windows Vista";
+	case QSysInfo::WV_WINDOWS7: return "Windows 7";
+	case QSysInfo::WV_WINDOWS8: return "Windows 8";
+	case QSysInfo::WV_WINDOWS8_1: return "Windows 8.1";
+	case QSysInfo::WV_WINDOWS10: return "Windows 10";
+	default: return "Windows";
+	}
+}
+
+} // namespace
+
+Launcher::Launcher(int argc, char *argv[])
+: Core::Launcher(argc, argv, DeviceModel(), SystemVersion()) {
+}
+
+base::optional<QStringList> Launcher::readArgumentsHook(
 		int argc,
 		char *argv[]) const {
 	auto count = 0;
@@ -36,7 +54,7 @@ std::optional<QStringList> Launcher::readArgumentsHook(
 			return result;
 		}
 	}
-	return std::nullopt;
+	return base::none;
 }
 
 bool Launcher::launchUpdater(UpdaterLaunch action) {
@@ -68,14 +86,9 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 	if (cStartInTray()) {
 		pushArgument(qsl("-startintray"));
 	}
-	if (cUseFreeType()) {
-		pushArgument(qsl("-freetype"));
+	if (cTestMode()) {
+		pushArgument(qsl("-testmode"));
 	}
-#ifndef TDESKTOP_DISABLE_AUTOUPDATE
-	if (Core::UpdaterDisabled()) {
-		pushArgument(qsl("-externalupdater"));
-	}
-#endif // !TDESKTOP_DISABLE_AUTOUPDATE
 	if (customWorkingDir()) {
 		pushArgument(qsl("-workdir"));
 		pushArgument('"' + cWorkingDir() + '"');
@@ -129,11 +142,11 @@ bool Launcher::launch(
 		arguments.toStdWString().c_str(),
 		nativeWorkingDir.empty() ? nullptr : nativeWorkingDir.c_str(),
 		SW_SHOWNORMAL);
-	if (int64(result) < 32) {
+	if (long(result) < 32) {
 		DEBUG_LOG(("Application Error: failed to execute %1, working directory: '%2', result: %3"
 			).arg(binaryPath
 			).arg(cWorkingDir()
-			).arg(int64(result)
+			).arg(long(result)
 			));
 		return false;
 	}

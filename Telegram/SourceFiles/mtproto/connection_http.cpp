@@ -10,11 +10,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/qthelp_url.h"
 
 namespace MTP {
-namespace details {
+namespace internal {
 namespace {
 
 constexpr auto kForceHttpPort = 80;
-constexpr auto kFullConnectionTimeout = crl::time(8000);
+constexpr auto kFullConnectionTimeout = TimeMs(8000);
 
 } // namespace
 
@@ -29,14 +29,17 @@ ConnectionPointer HttpConnection::clone(const ProxyData &proxy) {
 	return ConnectionPointer::New<HttpConnection>(thread(), proxy);
 }
 
-void HttpConnection::sendData(mtpBuffer &&buffer) {
-	Expects(buffer.size() > 2);
+void HttpConnection::sendData(mtpBuffer &buffer) {
+	if (_status == Status::Finished) return;
 
-	if (_status == Status::Finished) {
+	if (buffer.size() < 3) {
+		LOG(("TCP Error: writing bad packet, len = %1").arg(buffer.size() * sizeof(mtpPrime)));
+		TCP_LOG(("TCP Error: bad packet %1").arg(Logs::mb(&buffer[0], buffer.size() * sizeof(mtpPrime)).str()));
+		emit error(kErrorCodeOther);
 		return;
 	}
 
-	int32 requestSize = (buffer.size() - 2) * sizeof(mtpPrime);
+	int32 requestSize = (buffer.size() - 3) * sizeof(mtpPrime);
 
 	QNetworkRequest request(url());
 	request.setHeader(QNetworkRequest::ContentLengthHeader, QVariant(requestSize));
@@ -74,15 +77,15 @@ void HttpConnection::connectToServer(
 		this,
 		&HttpConnection::requestFinished);
 
-	auto buffer = preparePQFake(_checkNonce);
+	mtpBuffer buffer(preparePQFake(_checkNonce));
 
 	DEBUG_LOG(("HTTP Info: "
 		"dc:%1 - Sending fake req_pq to '%2'"
 		).arg(protocolDcId
 		).arg(url().toDisplayString()));
 
-	_pingTime = crl::now();
-	sendData(std::move(buffer));
+	_pingTime = getms();
+	sendData(buffer);
 }
 
 mtpBuffer HttpConnection::handleResponse(QNetworkReply *reply) {
@@ -167,24 +170,20 @@ void HttpConnection::requestFinished(QNetworkReply *reply) {
 			if (_status == Status::Ready) {
 				_receivedQueue.push_back(data);
 				emit receivedData();
-			} else if (const auto res_pq = readPQFakeReply(data)) {
-				const auto &data = res_pq->c_resPQ();
-				if (data.vnonce() == _checkNonce) {
-					DEBUG_LOG(("Connection Info: "
-						"HTTP-transport to %1 connected by pq-response"
-						).arg(_address));
-					_status = Status::Ready;
-					_pingTime = crl::now() - _pingTime;
-					emit connected();
-				} else {
-					DEBUG_LOG(("Connection Error: "
-						"Wrong nonce received in HTTP fake pq-responce"));
+			} else {
+				try {
+					auto res_pq = readPQFakeReply(data);
+					const auto &res_pq_data(res_pq.c_resPQ());
+					if (res_pq_data.vnonce == _checkNonce) {
+						DEBUG_LOG(("Connection Info: HTTP-transport to %1 connected by pq-response").arg(_address));
+						_status = Status::Ready;
+						_pingTime = getms() - _pingTime;
+						emit connected();
+					}
+				} catch (Exception &e) {
+					DEBUG_LOG(("Connection Error: exception in parsing HTTP fake pq-responce, %1").arg(e.what()));
 					emit error(kErrorCodeOther);
 				}
-			} else {
-				DEBUG_LOG(("Connection Error: "
-					"Could not parse HTTP fake pq-responce"));
-				emit error(kErrorCodeOther);
 			}
 		}
 	} else {
@@ -196,11 +195,11 @@ void HttpConnection::requestFinished(QNetworkReply *reply) {
 	}
 }
 
-crl::time HttpConnection::pingTime() const {
-	return isConnected() ? _pingTime : crl::time(0);
+TimeMs HttpConnection::pingTime() const {
+	return isConnected() ? _pingTime : TimeMs(0);
 }
 
-crl::time HttpConnection::fullConnectTimeout() const {
+TimeMs HttpConnection::fullConnectTimeout() const {
 	return kFullConnectionTimeout;
 }
 
@@ -246,5 +245,5 @@ QUrl HttpConnection::url() const {
 	return QUrl(pattern.arg(_address).arg(kForceHttpPort));
 }
 
-} // namespace details
+} // namespace internal
 } // namespace MTP

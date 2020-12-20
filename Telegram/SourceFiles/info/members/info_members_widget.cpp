@@ -10,7 +10,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/profile/info_profile_members.h"
 #include "info/info_controller.h"
 #include "ui/widgets/scroll_area.h"
-#include "ui/ui_utility.h"
 #include "styles/style_info.h"
 
 namespace Info {
@@ -18,12 +17,12 @@ namespace Members {
 
 Memento::Memento(not_null<Controller*> controller)
 : Memento(
-	controller->peer(),
+	controller->peerId(),
 	controller->migratedPeerId()) {
 }
 
-Memento::Memento(not_null<PeerData*> peer, PeerId migratedPeerId)
-: ContentMemento(peer, migratedPeerId) {
+Memento::Memento(PeerId peerId, PeerId migratedPeerId)
+: ContentMemento(peerId, migratedPeerId) {
 }
 
 Section Memento::section() const {
@@ -38,7 +37,7 @@ object_ptr<ContentWidget> Memento::createWidget(
 		parent,
 		controller);
 	result->setInternalState(geometry, this);
-	return result;
+	return std::move(result);
 }
 
 void Memento::setState(std::unique_ptr<SavedState> state) {
@@ -79,10 +78,10 @@ void Widget::setInternalState(
 	restoreState(memento);
 }
 
-std::shared_ptr<ContentMemento> Widget::doCreateMemento() {
-	auto result = std::make_shared<Memento>(controller());
+std::unique_ptr<ContentMemento> Widget::doCreateMemento() {
+	auto result = std::make_unique<Memento>(controller());
 	saveState(result.get());
-	return result;
+	return std::move(result);
 }
 
 void Widget::saveState(not_null<Memento*> memento) {

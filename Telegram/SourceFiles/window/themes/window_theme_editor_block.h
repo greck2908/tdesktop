@@ -7,8 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "ui/rp_widget.h"
-
 class EditColorBox;
 
 namespace Window {
@@ -74,8 +72,6 @@ public:
 
 	bool feedDescription(const QString &name, const QString &description);
 
-	void sortByDistance(const QColor &to);
-
 protected:
 	void paintEvent(QPaintEvent *e) override;
 	int resizeGetHeight(int newWidth) override;
@@ -111,7 +107,7 @@ private:
 	Row *findRow(const QString &name);
 	int findRowIndex(const Row *row);
 	void updateRow(const Row &row);
-	void paintRow(Painter &p, int index, const Row &row);
+	void paintRow(Painter &p, int index, const Row &row, TimeMs ms);
 
 	void updateSelected(QPoint localPosition);
 	void setSelected(int selected);

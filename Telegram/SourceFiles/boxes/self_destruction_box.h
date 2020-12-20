@@ -16,31 +16,20 @@ class Radiobutton;
 class FlatLabel;
 } // namespace Ui
 
-namespace Main {
-class Session;
-} // namespace Main
+class SelfDestructionBox : public BoxContent, private MTP::Sender {
+	Q_OBJECT
 
-class SelfDestructionBox : public Ui::BoxContent {
 public:
-	SelfDestructionBox(
-		QWidget*,
-		not_null<Main::Session*> session,
-		rpl::producer<int> preloaded);
-
-	static QString DaysLabel(int days);
+	SelfDestructionBox(QWidget*) {
+	}
 
 protected:
 	void prepare() override;
 
 private:
-	void gotCurrent(int days);
-	void showContent();
-
-	const not_null<Main::Session*> _session;
-	bool _prepared = false;
 	std::vector<int> _ttlValues;
 	object_ptr<Ui::FlatLabel> _description = { nullptr };
-	object_ptr<Ui::FlatLabel> _loading;
 	std::shared_ptr<Ui::RadiobuttonGroup> _ttlGroup;
+	std::vector<object_ptr<Ui::Radiobutton>> _options;
 
 };

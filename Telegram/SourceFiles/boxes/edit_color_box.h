@@ -9,15 +9,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "boxes/abstract_box.h"
 
-class EditColorBox : public Ui::BoxContent, private base::Subscriber {
+class EditColorBox : public BoxContent {
 public:
-	enum class Mode {
-		RGBA,
-		HSL,
-	};
-	EditColorBox(QWidget*, const QString &title, Mode mode, QColor current);
-
-	void setLightnessLimits(int min, int max);
+	EditColorBox(QWidget*, const QString &title, QColor current = QColor(255, 255, 255));
 
 	void setSaveCallback(Fn<void(QColor)> callback) {
 		_saveCallback = std::move(callback);
@@ -42,28 +36,21 @@ protected:
 	void setInnerFocus() override;
 
 private:
-	struct HSB { // HSV or HSL depending on Mode.
-		int hue = 0;
-		int saturation = 0;
-		int brightness = 0;
-	};
 	void saveColor();
 	void fieldSubmitted();
 
-	[[nodiscard]] HSB hsbFromControls() const;
 	void updateFromColor(QColor color);
 	void updateControlsFromColor();
-	void updateControlsFromHSB(HSB hsb);
-	void updateHSBFields();
+	void updateControlsFromHSV(int hue, int saturation, int brightness);
+	void updateHSVFields();
 	void updateRGBFields();
 	void updateResultField();
 	void updateFromControls();
-	void updateFromHSBFields();
+	void updateFromHSVFields();
 	void updateFromRGBFields();
 	void updateFromResultField();
-	void setHSB(HSB hsb, int alpha);
+	void setHSV(int hue, int saturation, int brightness, int alpha);
 	void setRGB(int red, int green, int blue, int alpha);
-	[[nodiscard]] QColor applyLimits(QColor color) const;
 
 	int percentFromByte(int byte) {
 		return snap(qRound(byte * 100 / 255.), 0, 100);
@@ -78,12 +65,10 @@ private:
 	class ResultField;
 
 	QString _title;
-	Mode _mode = Mode();
 
 	object_ptr<Picker> _picker;
-	object_ptr<Slider> _hueSlider = { nullptr };
-	object_ptr<Slider> _opacitySlider = { nullptr };
-	object_ptr<Slider> _lightnessSlider = { nullptr };
+	object_ptr<Slider> _hueSlider;
+	object_ptr<Slider> _opacitySlider;
 
 	object_ptr<Field> _hueField;
 	object_ptr<Field> _saturationField;
@@ -99,9 +84,6 @@ private:
 
 	QRect _currentRect;
 	QRect _newRect;
-
-	int _lightnessMin = 0;
-	int _lightnessMax = 255;
 
 	Fn<void(QColor)> _saveCallback;
 	Fn<void()> _cancelCallback;

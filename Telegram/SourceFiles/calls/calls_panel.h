@@ -9,134 +9,143 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/weak_ptr.h"
 #include "base/timer.h"
-#include "base/object_ptr.h"
 #include "calls/calls_call.h"
-#include "ui/effects/animations.h"
+#include "ui/widgets/tooltip.h"
 #include "ui/rp_widget.h"
-
-class Image;
-
-namespace Data {
-class PhotoMedia;
-class CloudImageView;
-} // namespace Data
 
 namespace Ui {
 class IconButton;
-class CallButton;
 class FlatLabel;
 template <typename Widget>
 class FadeWrap;
-template <typename Widget>
-class PaddingWrap;
-class Window;
-namespace Platform {
-class TitleControls;
-} // namespace Platform
 } // namespace Ui
 
 namespace style {
 struct CallSignalBars;
-struct CallBodyLayout;
 } // namespace style
 
 namespace Calls {
 
-class Userpic;
-class SignalBars;
-class VideoBubble;
-
-class Panel final {
+class SignalBars : public Ui::RpWidget, private base::Subscriber {
 public:
-	Panel(not_null<Call*> call);
-	~Panel();
+	SignalBars(
+		QWidget *parent,
+		not_null<Call*> call,
+		const style::CallSignalBars &st,
+		Fn<void()> displayedChangedCallback = nullptr);
 
-	[[nodiscard]] bool isActive() const;
-	void showAndActivate();
-	void replaceCall(not_null<Call*> call);
-	void closeBeforeDestroy();
+	bool isDisplayed() const;
+
+protected:
+	void paintEvent(QPaintEvent *e) override;
 
 private:
-	class Incoming;
+	void changed(int count);
+
+	const style::CallSignalBars &_st;
+	int _count = Call::kSignalBarStarting;
+	Fn<void()> _displayedChangedCallback;
+
+};
+
+class Panel
+	: public Ui::RpWidget
+	, private base::Subscriber
+	, private Ui::AbstractTooltipShower {
+
+public:
+	Panel(not_null<Call*> call);
+
+	void showAndActivate();
+	void replaceCall(not_null<Call*> call);
+	void hideAndDestroy();
+
+protected:
+	void paintEvent(QPaintEvent *e) override;
+	void closeEvent(QCloseEvent *e) override;
+	void resizeEvent(QResizeEvent *e) override;
+	void mousePressEvent(QMouseEvent *e) override;
+	void mouseReleaseEvent(QMouseEvent *e) override;
+	void mouseMoveEvent(QMouseEvent *e) override;
+	void leaveEventHook(QEvent *e) override;
+	void leaveToChildEvent(QEvent *e, QWidget *child) override;
+	bool eventHook(QEvent *e) override;
+
+private:
 	using State = Call::State;
 	using Type = Call::Type;
-	enum class AnswerHangupRedialState : uchar {
-		Answer,
-		Hangup,
-		Redial,
-	};
 
-	[[nodiscard]] not_null<Ui::RpWidget*> widget() const;
+	// AbstractTooltipShower interface
+	QString tooltipText() const override;
+	QPoint tooltipPos() const override;
+	bool tooltipWindowActive() const override;
 
-	void paint(QRect clip);
-
-	void initWindow();
-	void initWidget();
 	void initControls();
-	void reinitWithCall(Call *call);
+	void reinitControls();
 	void initLayout();
 	void initGeometry();
+	void hideDeactivated();
+	void createBottomImage();
+	void createDefaultCacheImage();
+	void refreshCacheImageUserPhoto();
 
-	void handleClose();
-
+	void processUserPhoto();
+	void refreshUserPhoto();
+	bool isGoodUserPhoto(PhotoData *photo);
+	void createUserpicCache(ImagePtr image);
 	QRect signalBarsRect() const;
 	void paintSignalBarsBg(Painter &p);
 
 	void updateControlsGeometry();
 	void updateHangupGeometry();
 	void updateStatusGeometry();
-	void updateOutgoingVideoBubbleGeometry();
 	void stateChanged(State state);
 	void showControls();
 	void updateStatusText(State state);
-	void startDurationUpdateTimer(crl::time currentDuration);
-	void setIncomingSize(QSize size);
-	void refreshIncomingGeometry();
-
-	void refreshOutgoingPreviewInBody(State state);
-	void toggleFullScreen(bool fullscreen);
-	void createRemoteAudioMute();
-	void refreshAnswerHangupRedialLabel();
-
-	[[nodiscard]] QRect incomingFrameGeometry() const;
-	[[nodiscard]] QRect outgoingFrameGeometry() const;
+	void startDurationUpdateTimer(TimeMs currentDuration);
+	void fillFingerprint();
+	void toggleOpacityAnimation(bool visible);
+	void finishAnimating();
+	void destroyDelayed();
 
 	Call *_call = nullptr;
 	not_null<UserData*> _user;
 
-	const std::unique_ptr<Ui::Window> _window;
-	std::unique_ptr<Incoming> _incoming;
+	bool _useTransparency = true;
+	style::margins _padding;
+	int _contentTop = 0;
 
-#ifdef Q_OS_WIN
-	std::unique_ptr<Ui::Platform::TitleControls> _controls;
-#endif // Q_OS_WIN
+	bool _dragging = false;
+	QPoint _dragStartMousePosition;
+	QPoint _dragStartMyPosition;
 
-	QSize _incomingFrameSize;
+	int _stateChangedSubscription = 0;
 
-	rpl::lifetime _callLifetime;
-
-	not_null<const style::CallBodyLayout*> _bodySt;
-	object_ptr<Ui::CallButton> _answerHangupRedial;
-	object_ptr<Ui::FadeWrap<Ui::CallButton>> _decline;
-	object_ptr<Ui::FadeWrap<Ui::CallButton>> _cancel;
+	class Button;
+	object_ptr<Button> _answerHangupRedial;
+	object_ptr<Ui::FadeWrap<Button>> _decline;
+	object_ptr<Ui::FadeWrap<Button>> _cancel;
 	bool _hangupShown = false;
-	bool _outgoingPreviewInBody = false;
-	std::optional<AnswerHangupRedialState> _answerHangupRedialState;
-	Ui::Animations::Simple _hangupShownProgress;
-	object_ptr<Ui::CallButton> _camera;
-	object_ptr<Ui::CallButton> _mute;
+	Animation _hangupShownProgress;
+	object_ptr<Ui::IconButton> _mute;
 	object_ptr<Ui::FlatLabel> _name;
 	object_ptr<Ui::FlatLabel> _status;
-	object_ptr<Ui::RpWidget> _fingerprint = { nullptr };
-	object_ptr<Ui::PaddingWrap<Ui::FlatLabel>> _remoteAudioMute = { nullptr };
-	std::unique_ptr<Userpic> _userpic;
-	std::unique_ptr<VideoBubble> _outgoingVideoBubble;
-	QPixmap _bottomShadow;
-	int _bodyTop = 0;
-	int _buttonsTop = 0;
+	object_ptr<SignalBars> _signalBars;
+	std::vector<EmojiPtr> _fingerprint;
+	QRect _fingerprintArea;
 
 	base::Timer _updateDurationTimer;
 	base::Timer _updateOuterRippleTimer;
+
+	bool _visible = false;
+	QPixmap _userPhoto;
+	PhotoId _userPhotoId = 0;
+	bool _userPhotoFull = false;
+
+	Animation _opacityAnimation;
+	QPixmap _animationCache;
+	QPixmap _bottomCache;
+	QPixmap _cache;
 
 };
 

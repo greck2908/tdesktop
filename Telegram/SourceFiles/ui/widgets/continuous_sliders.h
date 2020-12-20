@@ -8,16 +8,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "styles/style_widgets.h"
-#include "ui/effects/animations.h"
-#include "ui/rp_widget.h"
-
-namespace base {
-class Timer;
-} // namespace base
 
 namespace Ui {
 
-class ContinuousSlider : public RpWidget {
+class ContinuousSlider : public TWidget {
 public:
 	ContinuousSlider(QWidget *parent);
 
@@ -32,20 +26,17 @@ public:
 
 	float64 value() const;
 	void setValue(float64 value);
-	void setValue(float64 value, float64 receivedTill);
 	void setFadeOpacity(float64 opacity);
 	void setDisabled(bool disabled);
 	bool isDisabled() const {
 		return _disabled;
 	}
 
-	void setAdjustCallback(Fn<float64(float64)> callback) {
-		_adjustCallback = std::move(callback);
-	}
-	void setChangeProgressCallback(Fn<void(float64)> callback) {
+	using Callback = Fn<void(float64)>;
+	void setChangeProgressCallback(Callback &&callback) {
 		_changeProgressCallback = std::move(callback);
 	}
-	void setChangeFinishedCallback(Fn<void(float64)> callback) {
+	void setChangeFinishedCallback(Callback &&callback) {
 		_changeFinishedCallback = std::move(callback);
 	}
 	bool isChanging() const {
@@ -65,14 +56,11 @@ protected:
 	float64 fadeOpacity() const {
 		return _fadeOpacity;
 	}
-	float64 getCurrentValue() const {
+	float64 getCurrentValue() {
 		return _mouseDown ? _downValue : _value;
 	}
-	float64 getCurrentReceivedTill() const {
-		return _receivedTill;
-	}
-	float64 getCurrentOverFactor() {
-		return _disabled ? 0. : _overAnimation.value(_over ? 1. : 0.);
+	float64 getCurrentOverFactor(TimeMs ms) {
+		return _disabled ? 0. : _a_over.current(ms, _over ? 1. : 0.);
 	}
 	Direction getDirection() const {
 		return _direction;
@@ -80,10 +68,9 @@ protected:
 	bool isHorizontal() const {
 		return (_direction == Direction::Horizontal);
 	}
-	QRect getSeekRect() const;
-	virtual QSize getSeekDecreaseSize() const = 0;
 
 private:
+	virtual QRect getSeekRect() const = 0;
 	virtual float64 getOverDuration() const = 0;
 
 	bool moveByWheel() const {
@@ -97,17 +84,15 @@ private:
 	Direction _direction = Direction::Horizontal;
 	bool _disabled = false;
 
-	std::unique_ptr<base::Timer> _byWheelFinished;
+	std::unique_ptr<SingleTimer> _byWheelFinished;
 
-	Fn<float64(float64)> _adjustCallback;
-	Fn<void(float64)> _changeProgressCallback;
-	Fn<void(float64)> _changeFinishedCallback;
+	Callback _changeProgressCallback;
+	Callback _changeFinishedCallback;
 
 	bool _over = false;
-	Ui::Animations::Simple _overAnimation;
+	Animation _a_over;
 
 	float64 _value = 0.;
-	float64 _receivedTill = 0.;
 
 	bool _mouseDown = false;
 	float64 _downValue = 0.;
@@ -124,7 +109,7 @@ protected:
 	void paintEvent(QPaintEvent *e) override;
 
 private:
-	QSize getSeekDecreaseSize() const override;
+	QRect getSeekRect() const override;
 	float64 getOverDuration() const override;
 
 	const style::FilledSlider &_st;
@@ -141,49 +126,11 @@ public:
 	}
 	void disablePaint(bool disabled);
 
-	template <
-		typename Value,
-		typename Convert,
-		typename Callback,
-		typename = std::enable_if_t<
-			rpl::details::is_callable_plain_v<Callback, Value>
-			&& std::is_same_v<Value, decltype(std::declval<Convert>()(1))>>>
-	void setPseudoDiscrete(
-			int valuesCount,
-			Convert &&convert,
-			Value current,
-			Callback &&callback) {
-		Expects(valuesCount > 1);
-
-		setAlwaysDisplayMarker(true);
-		setDirection(Ui::ContinuousSlider::Direction::Horizontal);
-
-		const auto sectionsCount = (valuesCount - 1);
-		setValue(1.);
-		for (auto index = index_type(); index != valuesCount; ++index) {
-			if (current <= convert(index)) {
-				setValue(index / float64(sectionsCount));
-				break;
-			}
-		}
-		setAdjustCallback([=](float64 value) {
-			return std::round(value * sectionsCount) / sectionsCount;
-		});
-		setChangeProgressCallback([
-			=,
-			convert = std::forward<Convert>(convert),
-			callback = std::forward<Callback>(callback)
-		](float64 value) {
-			const auto index = int(std::round(value * sectionsCount));
-			callback(convert(index));
-		});
-	}
-
 protected:
 	void paintEvent(QPaintEvent *e) override;
 
 private:
-	QSize getSeekDecreaseSize() const override;
+	QRect getSeekRect() const override;
 	float64 getOverDuration() const override;
 
 	const style::MediaSlider &_st;

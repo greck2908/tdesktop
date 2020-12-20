@@ -8,44 +8,41 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "window/notifications_manager.h"
-#include "base/timer.h"
-
-namespace Data {
-class CloudImageView;
-} // namespace Data
+#include "core/single_timer.h"
 
 namespace Window {
 namespace Notifications {
 
 class CachedUserpics : public QObject {
+	Q_OBJECT
+
 public:
 	enum class Type {
 		Rounded,
 		Circled,
 	};
-
 	CachedUserpics(Type type);
+
+	QString get(const StorageKey &key, PeerData *peer);
+
 	~CachedUserpics();
 
-	[[nodiscard]] QString get(
-		const InMemoryKey &key,
-		not_null<PeerData*> peer,
-		std::shared_ptr<Data::CloudImageView> &view);
+private slots:
+	void onClear();
 
 private:
-	void clear();
 	void clearInMs(int ms);
-	crl::time clear(crl::time ms);
+	TimeMs clear(TimeMs ms);
 
 	Type _type = Type::Rounded;
 	struct Image {
-		crl::time until = 0;
+		TimeMs until;
 		QString path;
 	};
-	using Images = QMap<InMemoryKey, Image>;
+	using Images = QMap<StorageKey, Image>;
 	Images _images;
 	bool _someSavedFlag = false;
-	base::Timer _clearTimer;
+	SingleTimer _clearTimer;
 
 };
 

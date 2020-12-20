@@ -14,7 +14,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <pwd.h>
 #include <string>
 #include <deque>
-#include <vector>
 #include <cstring>
 #include <cerrno>
 #include <algorithm>
@@ -24,7 +23,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 using std::string;
 using std::deque;
-using std::vector;
 using std::cout;
 
 bool do_mkdir(const char *path) { // from http://stackoverflow.com/questions/675039/how-can-i-create-directory-tree-in-c-linux
@@ -298,28 +296,6 @@ bool update() {
 
 	for (size_t i = 0; i < from.size(); ++i) {
 		string fname = from[i], tofname = to[i];
-
-		// it is necessary to remove the old file to not to get an error if appimage file is used by fuse
-		struct stat statbuf;
-		writeLog("Trying to get stat() for '%s'", tofname.c_str());
-		if (!stat(tofname.c_str(), &statbuf)) {
-			if (S_ISDIR(statbuf.st_mode)) {
-				writeLog("Fully clearing path '%s'..", tofname.c_str());
-				if (!remove_directory(tofname.c_str())) {
-					writeLog("Error: failed to clear path '%s'", tofname.c_str());
-					delFolder();
-					return false;
-				}
-			} else {
-				writeLog("Unlinking file '%s'", tofname.c_str());
-				if (unlink(tofname.c_str())) {
-					writeLog("Error: failed to unlink '%s'", tofname.c_str());
-					delFolder();
-					return false;
-				}
-			}
-		}
-
 		writeLog("Copying file '%s' to '%s'..", fname.c_str(), tofname.c_str());
 		int copyTries = 0, triesLimit = 30;
 		do {
@@ -361,7 +337,6 @@ int main(int argc, char *argv[]) {
 	bool tosettings = false;
 	bool startintray = false;
 	bool testmode = false;
-	bool externalupdater = false;
 	bool customWorkingDir = false;
 
 	char *key = 0;
@@ -377,8 +352,6 @@ int main(int argc, char *argv[]) {
 			startintray = true;
 		} else if (equal(argv[i], "-testmode")) {
 			testmode = true;
-		} else if (equal(argv[i], "-externalupdater")) {
-			externalupdater = true;
 		} else if (equal(argv[i], "-tosettings")) {
 			tosettings = true;
 		} else if (equal(argv[i], "-workdir_custom")) {
@@ -398,7 +371,7 @@ int main(int argc, char *argv[]) {
 	}
 	openLog();
 
-	writeLog("Updater started, new argments formatting..");
+	writeLog("Updater started..");
 	for (int i = 0; i < argc; ++i) {
 		writeLog("Argument: '%s'", argv[i]);
 	}
@@ -463,45 +436,41 @@ int main(int argc, char *argv[]) {
 		writeLog("Error: short exe name!");
 	}
 
-	auto fullBinaryPath = exePath + exeName;
-	const auto path = fullBinaryPath.c_str();
+	static const int MaxLen = 65536, MaxArgsCount = 128;
 
-	auto values = vector<string>();
-	const auto push = [&](string arg) {
-		// Force null-terminated .data() call result.
-		values.push_back(arg + char(0));
-	};
-	push(path);
-	push("-noupdate");
-	if (autostart) push("-autostart");
-	if (debug) push("-debug");
-	if (startintray) push("-startintray");
-	if (testmode) push("-testmode");
-	if (externalupdater) push("-externalupdater");
-	if (tosettings) push("-tosettings");
+	char path[MaxLen] = {0};
+	string fullBinaryPath = exePath + exeName;
+	strcpy(path, fullBinaryPath.c_str());
+
+	char *args[MaxArgsCount] = { 0 };
+	char p_noupdate[] = "-noupdate";
+	char p_autostart[] = "-autostart";
+	char p_debug[] = "-debug";
+	char p_tosettings[] = "-tosettings";
+	char p_key[] = "-key";
+	char p_startintray[] = "-startintray";
+	char p_testmode[] = "-testmode";
+	char p_workdir[] = "-workdir";
+	int argIndex = 0;
+	args[argIndex++] = path;
+	args[argIndex++] = p_noupdate;
+	if (autostart) args[argIndex++] = p_autostart;
+	if (debug) args[argIndex++] = p_debug;
+	if (startintray) args[argIndex++] = p_startintray;
+	if (testmode) args[argIndex++] = p_testmode;
+	if (tosettings) args[argIndex++] = p_tosettings;
 	if (key) {
-		push("-key");
-		push(key);
+		args[argIndex++] = p_key;
+		args[argIndex++] = key;
 	}
 	if (customWorkingDir && workdir) {
-		push("-workdir");
-		push(workdir);
+		args[argIndex++] = p_workdir;
+		args[argIndex++] = workdir;
 	}
-
-	auto args = vector<char*>();
-	for (auto &arg : values) {
-		args.push_back(arg.data());
-	}
-	args.push_back(nullptr);
-
 	pid_t pid = fork();
 	switch (pid) {
-	case -1:
-		writeLog("fork() failed!");
-		return 1;
-	case 0:
-		execv(path, args.data());
-		return 1;
+	case -1: writeLog("fork() failed!"); return 1;
+	case 0: execv(path, args); return 1;
 	}
 
 	writeLog("Executed Telegram, closing log and quitting..");

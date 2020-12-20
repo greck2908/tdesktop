@@ -53,11 +53,7 @@ TextWithLabel CreateTextWithLabel(
 	layout->add(Ui::CreateSkipWidget(layout, st::infoLabelSkip));
 	layout->add(object_ptr<Ui::FlatLabel>(
 		layout,
-		std::move(
-			label
-		) | rpl::after_next([=] {
-			layout->resizeToWidth(layout->widthNoMargins());
-		}),
+		std::move(label),
 		st::infoLabel));
 	result->finishAnimating();
 	return { std::move(result), labeled };

@@ -10,31 +10,25 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/abstract_box.h"
 #include "base/timer.h"
 #include "ui/widgets/input_fields.h"
-#include "mtproto/sender.h"
 
 namespace Ui {
 class InputField;
 class FlatLabel;
 } // namespace Ui
 
-namespace Main {
-class Session;
-} // namespace Main
-
-void ShowPhoneBannedError(const QString &phone);
-[[nodiscard]] QString ExtractPhonePrefix(const QString &phone);
-
 class SentCodeField : public Ui::InputField {
 public:
-	SentCodeField(
-		QWidget *parent,
-		const style::InputField &st,
-		rpl::producer<QString> placeholder = nullptr,
-		const QString &val = QString());
+	SentCodeField(QWidget *parent, const style::InputField &st, Fn<QString()> placeholderFactory = Fn<QString()>(), const QString &val = QString()) : Ui::InputField(parent, st, std::move(placeholderFactory), val) {
+		connect(this, &Ui::InputField::changed, [this] { fix(); });
+	}
 
-	void setAutoSubmit(int length, Fn<void()> submitCallback);
-	void setChangedCallback(Fn<void()> changedCallback);
-	QString getDigitsOnly() const;
+	void setAutoSubmit(int length, Fn<void()> submitCallback) {
+		_autoSubmitLength = length;
+		_submitCallback = std::move(submitCallback);
+	}
+	void setChangedCallback(Fn<void()> changedCallback) {
+		_changedCallback = std::move(changedCallback);
+	}
 
 private:
 	void fix();
@@ -90,16 +84,11 @@ private:
 
 };
 
-class ConfirmPhoneBox final : public Ui::BoxContent {
+class ConfirmPhoneBox : public BoxContent, public RPCSender {
 public:
-	static void Start(
-		not_null<Main::Session*> session,
-		const QString &phone,
-		const QString &hash);
+	static void start(const QString &phone, const QString &hash);
 
-	[[nodiscard]] Main::Session &session() const {
-		return *_session;
-	}
+	~ConfirmPhoneBox();
 
 protected:
 	void prepare() override;
@@ -109,11 +98,7 @@ protected:
 	void resizeEvent(QResizeEvent *e) override;
 
 private:
-	ConfirmPhoneBox(
-		QWidget*,
-		not_null<Main::Session*> session,
-		const QString &phone,
-		const QString &hash);
+	ConfirmPhoneBox(QWidget*, const QString &phone, const QString &hash);
 	friend class object_ptr<ConfirmPhoneBox>;
 
 	void sendCode();
@@ -121,12 +106,12 @@ private:
 	void checkPhoneAndHash();
 
 	void sendCodeDone(const MTPauth_SentCode &result);
-	void sendCodeFail(const RPCError &error);
+	bool sendCodeFail(const RPCError &error);
 
 	void callDone(const MTPauth_SentCode &result);
 
 	void confirmDone(const MTPBool &result);
-	void confirmFail(const RPCError &error);
+	bool confirmFail(const RPCError &error);
 
 	QString getPhone() const {
 		return _phone;
@@ -135,8 +120,6 @@ private:
 
 	void showError(const QString &error);
 
-	const not_null<Main::Session*> _session;
-	MTP::Sender _api;
 	mtpRequestId _sendCodeRequestId = 0;
 
 	// _hash from the link for account.sendConfirmPhoneCode call.

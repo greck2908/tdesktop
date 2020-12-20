@@ -9,13 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "history/history.h"
 #include "history/history_item_components.h"
-#include "data/data_user.h"
-#include "data/data_session.h"
-#include "main/main_session.h"
-#include "ui/cached_round_corners.h"
-#include "facades.h"
 #include "styles/style_widgets.h"
-#include "styles/style_chat.h"
+#include "styles/style_history.h"
 
 namespace {
 
@@ -69,14 +64,14 @@ void Style::repaint(not_null<const HistoryItem*> item) const {
 }
 
 int Style::buttonRadius() const {
-	return st::roundRadiusSmall;
+	return st::buttonRadius;
 }
 
 void Style::paintButtonBg(
 		Painter &p,
 		const QRect &rect,
 		float64 howMuchOver) const {
-	Ui::FillRoundRect(p, rect, st::botKbBg, Ui::BotKeyboardCorners);
+	App::roundRect(p, rect, st::botKbBg, BotKeyboardCorners);
 }
 
 void Style::paintButtonIcon(
@@ -98,9 +93,7 @@ int Style::minButtonWidth(HistoryMessageMarkupButton::Type type) const {
 
 } // namespace
 
-BotKeyboard::BotKeyboard(not_null<Main::Session*> session, QWidget *parent)
-: TWidget(parent)
-, _session(session)
+BotKeyboard::BotKeyboard(QWidget *parent) : TWidget(parent)
 , _st(&st::botKbButton) {
 	setGeometry(0, 0, _st->margin, st::botKbScroll.deltat);
 	_height = st::botKbScroll.deltat;
@@ -116,7 +109,7 @@ void BotKeyboard::paintEvent(QPaintEvent *e) {
 	if (_impl) {
 		int x = rtl() ? st::botKbScroll.width : _st->margin;
 		p.translate(x, st::botKbScroll.deltat);
-		_impl->paint(p, width(), clip.translated(-x, -st::botKbScroll.deltat));
+		_impl->paint(p, width(), clip.translated(-x, -st::botKbScroll.deltat), getms());
 	}
 }
 
@@ -137,7 +130,7 @@ void BotKeyboard::mouseReleaseEvent(QMouseEvent *e) {
 	updateSelected();
 
 	if (ClickHandlerPtr activated = ClickHandler::unpressed()) {
-		ActivateClickHandler(window(), activated, e->button());
+		App::activateClickHandler(activated, e->button());
 	}
 }
 
@@ -151,7 +144,7 @@ void BotKeyboard::leaveEventHook(QEvent *e) {
 }
 
 bool BotKeyboard::moderateKeyActivate(int key) {
-	if (const auto item = _session->data().message(_wasForMsgId)) {
+	if (const auto item = App::histItemById(_wasForMsgId)) {
 		if (const auto markup = item->Get<HistoryMessageReplyMarkup>()) {
 			if (key >= Qt::Key_1 && key <= Qt::Key_9) {
 				const auto index = int(key - Qt::Key_1);
@@ -161,14 +154,12 @@ bool BotKeyboard::moderateKeyActivate(int key) {
 					App::activateBotCommand(item, 0, index);
 					return true;
 				}
-			} else if (const auto user = item->history()->peer->asUser()) {
-				if (user->isBot() && item->from() == user) {
-					if (key == Qt::Key_Q) {
+			} else if (key == Qt::Key_Q) {
+				if (const auto user = item->history()->peer->asUser()) {
+					if (user->botInfo && item->from() == user) {
 						App::sendBotCommand(user, user, qsl("/translate"));
-					} else if (key == Qt::Key_W) {
-						App::sendBotCommand(user, user, qsl("/eng"));
+						return true;
 					}
-					return true;
 				}
 			}
 		}
@@ -272,10 +263,6 @@ void BotKeyboard::clearSelection() {
 
 QPoint BotKeyboard::tooltipPos() const {
 	return _lastMousePos;
-}
-
-bool BotKeyboard::tooltipWindowActive() const {
-	return Ui::AppInFocus() && Ui::InFocusChain(window());
 }
 
 QString BotKeyboard::tooltipText() const {

@@ -9,39 +9,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "window/themes/window_theme.h"
 
-namespace Data {
-struct CloudTheme;
-} // namespace Data
-
 namespace Window {
 namespace Theme {
 
 struct CurrentData {
-	WallPaperId backgroundId = 0;
+	int32 backgroundId = 0;
 	QImage backgroundImage;
 	bool backgroundTiled = false;
 };
 
-enum class PreviewType {
-	Normal,
-	Extended,
-};
-
-[[nodiscard]] QString CachedThemePath(uint64 documentId);
-
-std::unique_ptr<Preview> PreviewFromFile(
-	const QByteArray &bytes,
-	const QString &filepath,
-	const Data::CloudTheme &cloud);
 std::unique_ptr<Preview> GeneratePreview(
-	const QByteArray &bytes,
 	const QString &filepath,
-	const Data::CloudTheme &cloud,
-	CurrentData &&data,
-	PreviewType type);
-QImage GeneratePreview(
-	const QByteArray &bytes,
-	const QString &filepath);
+	CurrentData &&data);
 
 int DefaultPreviewTitleHeight();
 void DefaultPreviewWindowFramePaint(

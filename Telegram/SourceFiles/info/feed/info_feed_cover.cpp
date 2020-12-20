@@ -71,7 +71,7 @@ void Cover::initViewers() {
 }
 
 void Cover::refreshNameText() {
-	_name->setText(_feed->chatListName());
+	_name->setText(_feed->chatsListName());
 	refreshNameGeometry(width());
 }
 
@@ -84,7 +84,7 @@ void Cover::refreshStatusText() {
 	}();
 	_status->setRichText(textcmdLink(1, statusText));
 	_status->setLink(1, std::make_shared<LambdaClickHandler>([=] {
-		_controller->showSection(std::make_unique<Info::Memento>(
+		_controller->showSection(Info::Memento(
 			_feed,
 			Section::Type::Channels));
 	}));

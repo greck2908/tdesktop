@@ -10,13 +10,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/themes/window_theme.h"
 #include "lang/lang_keys.h"
 #include "platform/platform_window_title.h"
-#include "ui/text/text_options.h"
-#include "ui/image/image_prepare.h"
-#include "ui/emoji_config.h"
+#include "ui/text_options.h"
 #include "styles/style_widgets.h"
 #include "styles/style_window.h"
-#include "styles/style_media_view.h"
-#include "styles/style_chat.h"
+#include "styles/style_mediaview.h"
+#include "styles/style_history.h"
 #include "styles/style_dialogs.h"
 #include "styles/style_info.h"
 
@@ -41,7 +39,7 @@ QString fillLetters(const QString &name) {
 			}
 		} else if (!letterFound && ch->isLetterOrNumber()) {
 			letterFound = true;
-			if (ch + 1 != end && Ui::Text::IsDiac(*(ch + 1))) {
+			if (ch + 1 != end && chIsDiac(*(ch + 1))) {
 				letters.push_back(QString(ch, 2));
 				levels.push_back(level);
 				++ch;
@@ -83,12 +81,9 @@ QString fillLetters(const QString &name) {
 
 class Generator {
 public:
-	Generator(
-		const Instance &theme,
-		CurrentData &&current,
-		PreviewType type);
+	Generator(const Instance &theme, CurrentData &&current);
 
-	[[nodiscard]] QImage generate();
+	QImage generate();
 
 private:
 	enum class Status {
@@ -97,7 +92,7 @@ private:
 		Received
 	};
 	struct Row {
-		Ui::Text::String name;
+		Text name;
 		QString letters;
 		enum class Type {
 			User,
@@ -110,7 +105,7 @@ private:
 		bool muted = false;
 		bool pinned = false;
 		QString date;
-		Ui::Text::String text;
+		Text text;
 		Status status = Status::None;
 		bool selected = false;
 		bool active = false;
@@ -123,18 +118,17 @@ private:
 		QString date;
 		bool attached = false;
 		bool tail = true;
-		Ui::Text::String text = { st::msgMinWidth };
+		Text text = { st::msgMinWidth };
 		QVector<int> waveform;
 		int waveactive = 0;
 		QString wavestatus;
 		QImage photo;
 		int photoWidth = 0;
 		int photoHeight = 0;
-		Ui::Text::String replyName = { st::msgMinWidth };
-		Ui::Text::String replyText = { st::msgMinWidth };
+		Text replyName = { st::msgMinWidth };
+		Text replyText = { st::msgMinWidth };
 	};
 
-	[[nodiscard]] bool extended() const;
 	void prepare();
 
 	void addRow(QString name, int peerIndex, QString date, QString text);
@@ -166,8 +160,7 @@ private:
 
 	const Instance &_theme;
 	const style::palette &_palette;
-	const CurrentData _current;
-	const PreviewType _type;
+	CurrentData _current;
 	Painter *_p = nullptr;
 
 	QRect _rect;
@@ -182,7 +175,7 @@ private:
 	int _rowsTop = 0;
 	std::vector<Row> _rows;
 
-	Ui::Text::String _topBarName;
+	Text _topBarName;
 	QString _topBarStatus;
 	bool _topBarStatusActive = false;
 
@@ -193,19 +186,10 @@ private:
 
 };
 
-bool Generator::extended() const {
-	return (_type == PreviewType::Extended);
-}
-
 void Generator::prepare() {
-	const auto size = extended()
-		? QRect(
-			QPoint(),
-			st::themePreviewSize).marginsAdded(st::themePreviewMargin).size()
-		: st::themePreviewSize;
-	_rect = QRect(QPoint(), size);
-	_inner = extended() ? _rect.marginsRemoved(st::themePreviewMargin) : _rect;
-	_body = extended() ? _inner.marginsRemoved(QMargins(0, Platform::PreviewTitleHeight(), 0, 0)) : _inner;
+	_rect = QRect(0, 0, st::themePreviewMargin.left() + st::themePreviewSize.width() + st::themePreviewMargin.right(), st::themePreviewMargin.top() + st::themePreviewSize.height() + st::themePreviewMargin.bottom());
+	_inner = _rect.marginsRemoved(st::themePreviewMargin);
+	_body = _inner.marginsRemoved(QMargins(0, Platform::PreviewTitleHeight(), 0, 0));
 	_dialogs = QRect(_body.x(), _body.y(), st::themePreviewDialogsWidth, _body.height());
 	_dialogsList = _dialogs.marginsRemoved(QMargins(0, st::dialogsFilterPadding.y() + st::dialogsMenuToggle.height + st::dialogsFilterPadding.y(), 0, st::dialogsPadding.y()));
 	_topBar = QRect(_dialogs.x() + _dialogs.width(), _dialogs.y(), _body.width() - _dialogs.width(), st::topBarHeight);
@@ -245,13 +229,12 @@ void Generator::addAudioBubble(QVector<int> waveform, int waveactive, QString wa
 
 	auto width = st::msgFileMinWidth;
 	auto tleft = 0, tright = 0;
-	const auto &st = st::msgFileLayout;
-	tleft = st.padding.left() + st.thumbSize + st.padding.right();
-	tright = st.padding.left();
+	tleft = st::msgFilePadding.left() + st::msgFileSize + st::msgFilePadding.right();
+	tright = st::msgFileThumbPadding.left();
 	accumulate_max(width, tleft + st::normalFont->width(wavestatus) + skipBlock.width() + st::msgPadding.right());
 	accumulate_min(width, st::msgMaxWidth);
 
-	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
+	auto height = st::msgFilePadding.top() + st::msgFileSize + st::msgFilePadding.bottom();
 	addBubble(std::move(bubble), width, height, date, status);
 }
 
@@ -294,8 +277,8 @@ void Generator::addDateBubble(QString date) {
 void Generator::addPhotoBubble(QString image, QString caption, QString date, Status status) {
 	Bubble bubble;
 	bubble.photo.load(image);
-	bubble.photoWidth = style::ConvertScale(bubble.photo.width() / 2);
-	bubble.photoHeight = style::ConvertScale(bubble.photo.height() / 2);
+	bubble.photoWidth = convertScale(bubble.photo.width() / 2);
+	bubble.photoHeight = convertScale(bubble.photo.height() / 2);
 	auto skipBlock = computeSkipBlock(status, date);
 	bubble.text.setRichText(st::messageTextStyle, caption + textcmdSkipBlock(skipBlock.width(), skipBlock.height()), Ui::ItemTextDefaultOptions());
 
@@ -354,14 +337,10 @@ void Generator::generateData() {
 	_bubbles.back().replyText.setText(st::messageTextStyle, "Mark Twain said that " + QString() + QChar(9757) + QChar(55356) + QChar(57339), Ui::DialogTextOptions());
 }
 
-Generator::Generator(
-	const Instance &theme,
-	CurrentData &&current,
-	PreviewType type)
+Generator::Generator(const Instance &theme, CurrentData &&current)
 : _theme(theme)
 , _palette(_theme.palette)
-, _current(std::move(current))
-, _type(type) {
+, _current(std::move(current)) {
 }
 
 QImage Generator::generate() {
@@ -387,9 +366,7 @@ QImage Generator::generate() {
 		paintDialogs();
 		paintHistoryShadows();
 	}
-	if (extended()) {
-		Platform::PreviewWindowFramePaint(result, _palette, _body, _rect.width());
-	}
+	Platform::PreviewWindowFramePaint(result, _palette, _body, _rect.width());
 
 	return result;
 }
@@ -399,7 +376,6 @@ void Generator::paintHistoryList() {
 
 	_historyBottom = _history.y() + _history.height();
 	_historyBottom -= st::historyPaddingBottom;
-	_p->setClipping(true);
 	for (auto i = _bubbles.size(); i != 0;) {
 		auto &bubble = _bubbles[--i];
 		if (bubble.width > 0) {
@@ -417,8 +393,7 @@ void Generator::paintHistoryBackground() {
 	auto background = _theme.background;
 	auto tiled = _theme.tiled;
 	if (background.isNull()) {
-		const auto fakePaper = Data::WallPaper(_current.backgroundId);
-		if (Data::IsThemeWallPaper(fakePaper)) {
+		if (_current.backgroundId == Window::Theme::kThemeBackground) {
 			background.load(qsl(":/gui/art/bg.jpg"));
 			tiled = false;
 		} else {
@@ -473,10 +448,10 @@ void Generator::paintTopBar() {
 
 	auto right = st::topBarMenuToggle.width;
 	st::topBarMenuToggle.icon[_palette].paint(*_p, _topBar.x() + _topBar.width() - right + st::topBarMenuToggle.iconPosition.x(), _topBar.y() + st::topBarMenuToggle.iconPosition.y(), _rect.width());
-	right += st::topBarSkip + st::topBarCall.width;
-	st::topBarCall.icon[_palette].paint(*_p, _topBar.x() + _topBar.width() - right + st::topBarCall.iconPosition.x(), _topBar.y() + st::topBarCall.iconPosition.y(), _rect.width());
 	right += st::topBarSearch.width;
 	st::topBarSearch.icon[_palette].paint(*_p, _topBar.x() + _topBar.width() - right + st::topBarSearch.iconPosition.x(), _topBar.y() + st::topBarSearch.iconPosition.y(), _rect.width());
+	right += st::topBarCallSkip + st::topBarCall.width;
+	st::topBarCall.icon[_palette].paint(*_p, _topBar.x() + _topBar.width() - right + st::topBarCall.iconPosition.x(), _topBar.y() + st::topBarCall.iconPosition.y(), _rect.width());
 
 	auto decreaseWidth = st::topBarCall.width + st::topBarCallSkip + st::topBarSearch.width + st::topBarMenuToggle.width;
 	auto nameleft = _topBar.x() + st::topBarArrowPadding.right();
@@ -499,16 +474,10 @@ void Generator::paintComposeArea() {
 	auto right = st::historySendRight + st::historySendSize.width();
 	st::historyRecordVoice[_palette].paintInCenter(*_p, QRect(_composeArea.x() + _composeArea.width() - right, controlsTop, st::historySendSize.width(), st::historySendSize.height()));
 
-	const auto emojiIconLeft = (st::historyAttachEmoji.iconPosition.x() < 0)
-		? ((st::historyAttachEmoji.width - st::historyAttachEmoji.icon.width()) / 2)
-		: st::historyAttachEmoji.iconPosition.x();
-	const auto emojiIconTop = (st::historyAttachEmoji.iconPosition.y() < 0)
-		? ((st::historyAttachEmoji.height - st::historyAttachEmoji.icon.height()) / 2)
-		: st::historyAttachEmoji.iconPosition.y();
 	right += st::historyAttachEmoji.width;
 	auto attachEmojiLeft = _composeArea.x() + _composeArea.width() - right;
 	_p->fillRect(attachEmojiLeft, controlsTop, st::historyAttachEmoji.width, st::historyAttachEmoji.height, st::historyComposeAreaBg[_palette]);
-	st::historyAttachEmoji.icon[_palette].paint(*_p, attachEmojiLeft + emojiIconLeft, controlsTop + emojiIconTop, _rect.width());
+	st::historyAttachEmoji.icon[_palette].paint(*_p, attachEmojiLeft + st::historyAttachEmoji.iconPosition.x(), controlsTop + st::historyAttachEmoji.iconPosition.y(), _rect.width());
 
 	auto pen = st::historyEmojiCircleFg[_palette]->p;
 	pen.setWidth(st::historyEmojiCircleLine);
@@ -520,10 +489,17 @@ void Generator::paintComposeArea() {
 	auto inner = QRect(QPoint(attachEmojiLeft + (st::historyAttachEmoji.width - st::historyEmojiCircle.width()) / 2, controlsTop + st::historyEmojiCircleTop), st::historyEmojiCircle);
 	_p->drawEllipse(inner);
 
-	auto fieldLeft = _composeArea.x() + st::historyAttach.width;
-	auto fieldTop = _composeArea.y() + _composeArea.height() - st::historyAttach.height + st::historySendPadding;
-	auto fieldWidth = _composeArea.width() - st::historyAttach.width - st::historySendSize.width() - st::historySendRight - st::historyAttachEmoji.width;
-	auto fieldHeight = st::historySendSize.height() - 2 * st::historySendPadding;
+	auto fakeMargin = 0;
+	switch (cScale()) {
+	case dbisOneAndQuarter: fakeMargin = 1; break;
+	case dbisOneAndHalf: fakeMargin = 2; break;
+	case dbisTwo: fakeMargin = 4; break;
+	}
+
+	auto fieldLeft = _composeArea.x() + st::historyAttach.width + fakeMargin;
+	auto fieldTop = _composeArea.y() + _composeArea.height() - st::historyAttach.height + st::historySendPadding + fakeMargin;
+	auto fieldWidth = _composeArea.width() - st::historyAttach.width - st::historySendSize.width() - st::historySendRight - st::historyAttachEmoji.width - 2 * fakeMargin;
+	auto fieldHeight = st::historySendSize.height() - 2 * st::historySendPadding - 2 * fakeMargin;
 	auto field = QRect(fieldLeft, fieldTop, fieldWidth, fieldHeight);
 	_p->fillRect(field, st::historyComposeField.textBg[_palette]);
 
@@ -533,11 +509,11 @@ void Generator::paintComposeArea() {
 	_p->setPen(st::historyComposeField.placeholderFg[_palette]);
 
 	auto placeholderRect = QRect(
-		field.x() + st::historyComposeField.textMargins.left() + st::historyComposeField.placeholderMargins.left(),
-		field.y() + st::historyComposeField.textMargins.top() + st::historyComposeField.placeholderMargins.top(),
+		field.x() + st::historyComposeField.textMargins.left() - fakeMargin + st::historyComposeField.placeholderMargins.left(),
+		field.y() + st::historyComposeField.textMargins.top() - fakeMargin + st::historyComposeField.placeholderMargins.top(),
 		field.width() - st::historyComposeField.textMargins.left() - st::historyComposeField.textMargins.right(),
 		field.height() - st::historyComposeField.textMargins.top() - st::historyComposeField.textMargins.bottom());
-	_p->drawText(placeholderRect, tr::lng_message_ph(tr::now), QTextOption(st::historyComposeField.placeholderAlign));
+	_p->drawText(placeholderRect, lang(lng_message_ph), QTextOption(st::historyComposeField.textAlign));
 
 	_p->restore();
 	_p->setClipping(false);
@@ -551,7 +527,7 @@ void Generator::paintDialogs() {
 	auto filterLeft = _dialogs.x() + st::dialogsFilterPadding.x() + st::dialogsMenuToggle.width + st::dialogsFilterPadding.x();
 	auto filterRight = st::dialogsFilterSkip + st::dialogsFilterPadding.x();
 	auto filterWidth = _dialogs.x() + _dialogs.width() - filterLeft - filterRight;
-	auto filterAreaHeight = st::topBarHeight;
+	auto filterAreaHeight = st::dialogsFilterPadding.y() + st::dialogsMenuToggle.height + st::dialogsFilterPadding.y();
 	auto filterTop = _dialogs.y() + (filterAreaHeight - st::dialogsFilter.height) / 2;
 	auto filter = QRect(filterLeft, filterTop, filterWidth, st::dialogsFilter.height);
 
@@ -561,7 +537,7 @@ void Generator::paintDialogs() {
 	_p->setBrush(st::dialogsFilter.bgColor[_palette]);
 	{
 		PainterHighQualityEnabler hq(*_p);
-		_p->drawRoundedRect(QRectF(filter).marginsRemoved(QMarginsF(st::dialogsFilter.borderWidth / 2., st::dialogsFilter.borderWidth / 2., st::dialogsFilter.borderWidth / 2., st::dialogsFilter.borderWidth / 2.)), st::roundRadiusSmall - (st::dialogsFilter.borderWidth / 2.), st::roundRadiusSmall - (st::dialogsFilter.borderWidth / 2.));
+		_p->drawRoundedRect(QRectF(filter).marginsRemoved(QMarginsF(st::dialogsFilter.borderWidth / 2., st::dialogsFilter.borderWidth / 2., st::dialogsFilter.borderWidth / 2., st::dialogsFilter.borderWidth / 2.)), st::buttonRadius - (st::dialogsFilter.borderWidth / 2.), st::buttonRadius - (st::dialogsFilter.borderWidth / 2.));
 	}
 
 	if (!st::dialogsFilter.icon.empty()) {
@@ -573,7 +549,7 @@ void Generator::paintDialogs() {
 	auto phRect = QRect(filter.x() + st::dialogsFilter.textMrg.left() + st::dialogsFilter.phPos.x(), filter.y() + st::dialogsFilter.textMrg.top() + st::dialogsFilter.phPos.y(), filter.width() - st::dialogsFilter.textMrg.left() - st::dialogsFilter.textMrg.right(), filter.height() - st::dialogsFilter.textMrg.top() - st::dialogsFilter.textMrg.bottom());;
 	_p->setFont(st::dialogsFilter.font);
 	_p->setPen(st::dialogsFilter.phColor[_palette]);
-	_p->drawText(phRect, tr::lng_dlg_filter(tr::now), QTextOption(st::dialogsFilter.phAlign));
+	_p->drawText(phRect, lang(lng_dlg_filter), QTextOption(st::dialogsFilter.phAlign));
 	_p->restore();
 	_p->setClipping(false);
 
@@ -628,6 +604,7 @@ void Generator::paintRow(const Row &row) {
 	auto availableWidth = namewidth;
 	if (row.unreadCounter) {
 		auto counter = QString::number(row.unreadCounter);
+		auto mutedCounter = row.muted;
 		auto unreadRight = x + fullWidth - st::dialogsPadding.x();
 		auto unreadTop = texttop + st::dialogsTextFont->ascent - st::dialogsUnreadFont->ascent - (st::dialogsUnreadHeight - st::dialogsUnreadFont->height) / 2;
 
@@ -746,7 +723,7 @@ void Generator::paintBubble(const Bubble &bubble) {
 		auto h = st::msgReplyPadding.top() + st::msgReplyBarSize.height() + st::msgReplyPadding.bottom();
 
 		auto bar = (bubble.outbg ? st::msgOutReplyBarColor[_palette] : st::msgInReplyBarColor[_palette]);
-		auto rbar = style::rtlrect(trect.x() + st::msgReplyBarPos.x(), trect.y() + st::msgReplyPadding.top() + st::msgReplyBarPos.y(), st::msgReplyBarSize.width(), st::msgReplyBarSize.height(), _rect.width());
+		auto rbar = rtlrect(trect.x() + st::msgReplyBarPos.x(), trect.y() + st::msgReplyPadding.top() + st::msgReplyBarPos.y(), st::msgReplyBarSize.width(), st::msgReplyBarSize.height(), _rect.width());
 		_p->fillRect(rbar, bar);
 
 		_p->setPen(bubble.outbg ? st::msgOutServiceFg[_palette] : st::msgInServiceFg[_palette]);
@@ -764,14 +741,13 @@ void Generator::paintBubble(const Bubble &bubble) {
 		_p->setFont(st::msgFont);
 		bubble.text.draw(*_p, trect.x(), trect.y(), trect.width());
 	} else if (!bubble.waveform.isEmpty()) {
-		const auto &st = st::msgFileLayout;
-		auto nameleft = x + st.padding.left() + st.thumbSize + st.padding.right();
-		auto nametop = y + st.nameTop;
-		auto nameright = st.padding.left();
-		auto statustop = y + st.statusTop;
-		auto bottom = y + st.padding.top() + st.thumbSize + st.padding.bottom();
+		auto nameleft = x + st::msgFilePadding.left() + st::msgFileSize + st::msgFilePadding.right();
+		auto nametop = y + st::msgFileNameTop;
+		auto nameright = st::msgFilePadding.left();
+		auto statustop = y + st::msgFileStatusTop;
+		auto bottom = y + st::msgFilePadding.top() + st::msgFileSize + st::msgFilePadding.bottom();
 
-		auto inner = style::rtlrect(x + st.padding.left(), y + st.padding.top(), st.thumbSize, st.thumbSize, _rect.width());
+		auto inner = rtlrect(x + st::msgFilePadding.left(), y + st::msgFilePadding.top(), st::msgFileSize, st::msgFileSize, _rect.width());
 		_p->setPen(Qt::NoPen);
 		_p->setBrush(bubble.outbg ? st::msgFileOutBg[_palette] : st::msgFileInBg[_palette]);
 
@@ -787,40 +763,23 @@ void Generator::paintBubble(const Bubble &bubble) {
 		// rescale waveform by going in waveform.size * bar_count 1D grid
 		auto active = bubble.outbg ? st::msgWaveformOutActive[_palette] : st::msgWaveformInActive[_palette];
 		auto inactive = bubble.outbg ? st::msgWaveformOutInactive[_palette] : st::msgWaveformInInactive[_palette];
-		auto wf_size = bubble.waveform.size();
-		auto availw = namewidth + st::msgWaveformSkip;
-		auto bar_count = qMin(availw / (st::msgWaveformBar + st::msgWaveformSkip), wf_size);
-		auto max_value = 0;
-		auto max_delta = st::msgWaveformMax - st::msgWaveformMin;
-		auto wave_bottom = y + st::msgFileLayout.padding.top() + st::msgWaveformMax;
+		int32 wf_size = bubble.waveform.size(), availw = namewidth + st::msgWaveformSkip;
+		int32 bar_count = wf_size;
+		int32 max_delta = st::msgWaveformMax - st::msgWaveformMin;
+		auto wave_bottom = y + st::msgFilePadding.top() + st::msgWaveformMax;
 		_p->setPen(Qt::NoPen);
 		auto norm_value = uchar(31);
-		for (auto i = 0, bar_x = 0, sum_i = 0; i < wf_size; ++i) {
-			auto value = bubble.waveform[i];
-			if (sum_i + bar_count >= wf_size) { // draw bar
-				sum_i = sum_i + bar_count - wf_size;
-				if (sum_i < (bar_count + 1) / 2) {
-					if (max_value < value) max_value = value;
-				}
-				auto bar_value = ((max_value * max_delta) + ((norm_value + 1) / 2)) / (norm_value + 1);
+		for (auto i = 0, bar_x = 0; i != wf_size; ++i) {
+			uchar value = bubble.waveform[i];
+			auto max_value = value;
+			int32 bar_value = ((max_value * max_delta) + ((norm_value + 1) / 2)) / (norm_value + 1);
 
-				if (i >= bubble.waveactive) {
-					_p->fillRect(nameleft + bar_x, wave_bottom - bar_value, st::msgWaveformBar, st::msgWaveformMin + bar_value, inactive);
-				} else {
-					_p->fillRect(nameleft + bar_x, wave_bottom - bar_value, st::msgWaveformBar, st::msgWaveformMin + bar_value, active);
-				}
-				bar_x += st::msgWaveformBar + st::msgWaveformSkip;
-
-				if (sum_i < (bar_count + 1) / 2) {
-					max_value = 0;
-				} else {
-					max_value = value;
-				}
+			if (i >= bubble.waveactive) {
+				_p->fillRect(nameleft + bar_x, wave_bottom - bar_value, st::msgWaveformBar, st::msgWaveformMin + bar_value, inactive);
 			} else {
-				if (max_value < value) max_value = value;
-
-				sum_i += bar_count;
+				_p->fillRect(nameleft + bar_x, wave_bottom - bar_value, st::msgWaveformBar, st::msgWaveformMin + bar_value, active);
 			}
+			bar_x += st::msgWaveformBar + st::msgWaveformSkip;
 		}
 
 		auto status = bubble.outbg ? st::mediaOutFg[_palette] : st::mediaInFg[_palette];
@@ -930,82 +889,35 @@ void Generator::restoreTextPalette() {
 
 } // namespace
 
-QString CachedThemePath(uint64 documentId) {
-	return QString::fromLatin1("special://cached-%1").arg(documentId);
-}
-
-std::unique_ptr<Preview> PreviewFromFile(
-		const QByteArray &bytes,
-		const QString &filepath,
-		const Data::CloudTheme &cloud) {
-	auto result = std::make_unique<Preview>();
-	auto &object = result->object;
-	object.cloud = cloud;
-	object.pathAbsolute = filepath.isEmpty()
-		? CachedThemePath(cloud.documentId)
-		: QFileInfo(filepath).absoluteFilePath();
-	object.pathRelative = filepath.isEmpty()
-		? object.pathAbsolute
-		: QDir().relativeFilePath(filepath);
-	const auto instance = &result->instance;
-	const auto cache = &result->instance.cached;
-	if (bytes.isEmpty()) {
-		if (!LoadFromFile(filepath, instance, cache, &object.content)) {
-			return nullptr;
-		}
-	} else {
-		object.content = bytes;
-		if (!LoadFromContent(bytes, instance, cache)) {
-			return nullptr;
-		}
-	}
-	return result;
-}
-
 std::unique_ptr<Preview> GeneratePreview(
-		const QByteArray &bytes,
 		const QString &filepath,
-		const Data::CloudTheme &cloud,
-		CurrentData &&data,
-		PreviewType type) {
-	auto result = PreviewFromFile(bytes, filepath, cloud);
-	if (!result) {
+		CurrentData &&data) {
+	auto result = std::make_unique<Preview>();
+	result->path = filepath;
+	if (!LoadFromFile(filepath, &result->instance, &result->content)) {
 		return nullptr;
 	}
 	result->preview = Generator(
 		result->instance,
-		std::move(data),
-		type
+		std::move(data)
 	).generate();
 	return result;
 }
 
-QImage GeneratePreview(
-		const QByteArray &bytes,
-		const QString &filepath) {
-	const auto preview = GeneratePreview(
-		bytes,
-		filepath,
-		Data::CloudTheme(),
-		CurrentData{ Data::ThemeWallPaper().id() },
-		PreviewType::Normal);
-	return preview ? preview->preview : QImage();
-}
-
 int DefaultPreviewTitleHeight() {
-	return st::defaultWindowTitle.height;
+	return st::titleHeight;
 }
 
 void DefaultPreviewWindowTitle(Painter &p, const style::palette &palette, QRect body, int outerWidth) {
-	auto titleRect = QRect(body.x(), body.y() - st::defaultWindowTitle.height, body.width(), st::defaultWindowTitle.height);
+	auto titleRect = QRect(body.x(), body.y() - st::titleHeight, body.width(), st::titleHeight);
 	p.fillRect(titleRect, QColor(0, 0, 0));
 	p.fillRect(titleRect, st::titleBgActive[palette]);
-	auto right = st::windowTitleButtonClose.width;
-	st::windowTitleButtonClose.icon[palette].paint(p, titleRect.x() + titleRect.width() - right + st::windowTitleButtonClose.iconPosition.x(), titleRect.y() + st::windowTitleButtonClose.iconPosition.y(), outerWidth);
-	right += st::defaultWindowTitle.maximize.width;
-	st::defaultWindowTitle.maximize.icon[palette].paint(p, titleRect.x() + titleRect.width() - right + st::defaultWindowTitle.maximize.iconPosition.x(), titleRect.y() + st::defaultWindowTitle.maximize.iconPosition.y(), outerWidth);
-	right += st::defaultWindowTitle.minimize.width;
-	st::defaultWindowTitle.minimize.icon[palette].paint(p, titleRect.x() + titleRect.width() - right + st::defaultWindowTitle.minimize.iconPosition.x(), titleRect.y() + st::defaultWindowTitle.minimize.iconPosition.y(), outerWidth);
+	auto right = st::titleButtonClose.width;
+	st::titleButtonClose.icon[palette].paint(p, titleRect.x() + titleRect.width() - right + st::titleButtonClose.iconPosition.x(), titleRect.y() + st::titleButtonClose.iconPosition.y(), outerWidth);
+	right += st::titleButtonMaximize.width;
+	st::titleButtonMaximize.icon[palette].paint(p, titleRect.x() + titleRect.width() - right + st::titleButtonMaximize.iconPosition.x(), titleRect.y() + st::titleButtonMaximize.iconPosition.y(), outerWidth);
+	right += st::titleButtonMinimize.width;
+	st::titleButtonMinimize.icon[palette].paint(p, titleRect.x() + titleRect.width() - right + st::titleButtonMinimize.iconPosition.x(), titleRect.y() + st::titleButtonMinimize.iconPosition.y(), outerWidth);
 	p.fillRect(titleRect.x(), titleRect.y() + titleRect.height() - st::lineWidth, titleRect.width(), st::lineWidth, st::titleShadow[palette]);
 }
 
@@ -1027,7 +939,7 @@ void DefaultPreviewWindowFramePaint(QImage &preview, const style::palette &palet
 		currentInt = *lastLineInts;
 		++maxSize;
 	}
-	if (maxSize % cIntRetinaFactor()) {
+	if (cRetina() && (maxSize % cIntRetinaFactor())) {
 		maxSize -= (maxSize % cIntRetinaFactor());
 	}
 	auto size = maxSize / cIntRetinaFactor();
@@ -1053,7 +965,7 @@ void DefaultPreviewWindowFramePaint(QImage &preview, const style::palette &palet
 	Painter p(&preview);
 	DefaultPreviewWindowTitle(p, palette, body, outerWidth);
 
-	auto inner = QRect(body.x(), body.y() - st::defaultWindowTitle.height, body.width(), body.height() + st::defaultWindowTitle.height);
+	auto inner = QRect(body.x(), body.y() - st::titleHeight, body.width(), body.height() + st::titleHeight);
 	p.setClipRegion(QRegion(inner.marginsAdded(QMargins(size, size, size, size))) - inner);
 	p.drawImage(inner.x() - left, inner.y() - top, topLeft);
 	p.drawImage(inner.x() + inner.width() + right - width, inner.y() - top, topRight);

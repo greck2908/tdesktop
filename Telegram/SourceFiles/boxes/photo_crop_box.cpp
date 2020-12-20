@@ -9,22 +9,33 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "lang/lang_keys.h"
 #include "ui/widgets/buttons.h"
-#include "ui/ui_utility.h"
-#include "app.h"
-#include "styles/style_layers.h"
 #include "styles/style_boxes.h"
 
-PhotoCropBox::PhotoCropBox(
-	QWidget*,
-	const QImage &img,
-	const QString &title)
-: _title(title)
-, _img(img) {
+PhotoCropBox::PhotoCropBox(QWidget*, const QImage &img, const PeerId &peer)
+: _img(img)
+, _peerId(peer) {
+	init(img, nullptr);
+}
+
+PhotoCropBox::PhotoCropBox(QWidget*, const QImage &img, not_null<PeerData*> peer)
+: _img(img)
+, _peerId(peer->id) {
+	init(img, peer);
+}
+
+void PhotoCropBox::init(const QImage &img, PeerData *peer) {
+	if (peerIsChat(_peerId) || (peer && peer->isMegagroup())) {
+		_title = lang(lng_create_group_crop);
+	} else if (peerIsChannel(_peerId)) {
+		_title = lang(lng_create_channel_crop);
+	} else {
+		_title = lang(lng_settings_crop_profile);
+	}
 }
 
 void PhotoCropBox::prepare() {
-	addButton(tr::lng_settings_save(), [this] { sendPhoto(); });
-	addButton(tr::lng_cancel(), [this] { closeBox(); });
+	addButton(langFactory(lng_settings_save), [this] { sendPhoto(); });
+	addButton(langFactory(lng_cancel), [this] { closeBox(); });
 
 	int32 s = st::boxWideWidth - st::boxPhotoPadding.left() - st::boxPhotoPadding.right();
 	_thumb = App::pixmapFromImageInPlace(_img.scaled(s * cIntRetinaFactor(), s * cIntRetinaFactor(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
@@ -262,7 +273,7 @@ void PhotoCropBox::sendPhoto() {
 		tosend = cropped.copy();
 	}
 
-	auto weak = Ui::MakeWeak(this);
+	auto weak = make_weak(this);
 	_readyImages.fire(std::move(tosend));
 	if (weak) {
 		closeBox();

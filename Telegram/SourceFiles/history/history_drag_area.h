@@ -7,32 +7,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "ui/rp_widget.h"
-#include "ui/effects/animations.h"
+#include "ui/twidget.h"
 
-namespace Storage {
-enum class MimeDataState;
-} // namespace Storage
-
-class DragArea : public Ui::RpWidget {
+class DragArea : public TWidget {
+	Q_OBJECT
 
 public:
 	DragArea(QWidget *parent);
-
-	struct Areas {
-		DragArea *document;
-		DragArea *photo;
-	};
-
-	using CallbackComputeState =
-		Fn<Storage::MimeDataState(const QMimeData *data)>;
-
-	static Areas SetupDragAreaToContainer(
-		not_null<Ui::RpWidget*> container,
-		Fn<bool(not_null<const QMimeData*>)> &&dragEnterFilter = nullptr,
-		Fn<void(bool)> &&setAcceptDropsField = nullptr,
-		Fn<void()> &&updateControlsGeometry = nullptr,
-		CallbackComputeState &&computeState = nullptr);
 
 	void setText(const QString &text, const QString &subtext);
 
@@ -50,28 +31,36 @@ public:
 protected:
 	void paintEvent(QPaintEvent *e) override;
 	void mouseMoveEvent(QMouseEvent *e) override;
-	void dragMoveEvent(QDragMoveEvent *e) override;
-	// These events should be filtered by parent!
 	void dragEnterEvent(QDragEnterEvent *e) override;
 	void dragLeaveEvent(QDragLeaveEvent *e) override;
 	void dropEvent(QDropEvent *e) override;
+	void dragMoveEvent(QDragMoveEvent *e) override;
 
-private:
+public slots:
 	void hideStart();
 	void hideFinish();
 
 	void showStart();
 
+private:
 	void setIn(bool in);
 	void opacityAnimationCallback();
+	QRect innerRect() const {
+		return QRect(
+			st::dragPadding.left(),
+			st::dragPadding.top(),
+			width() - st::dragPadding.left() - st::dragPadding.right(),
+			height() - st::dragPadding.top() - st::dragPadding.bottom()
+		);
+	}
 
 	bool _hiding = false;
 	bool _in = false;
 	QPixmap _cache;
 	Fn<void(const QMimeData *data)> _droppedCallback;
 
-	Ui::Animations::Simple _a_opacity;
-	Ui::Animations::Simple _a_in;
+	Animation _a_opacity;
+	Animation _a_in;
 
 	QString _text, _subtext;
 

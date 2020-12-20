@@ -8,32 +8,37 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "platform/platform_notifications_manager.h"
-#include "base/weak_ptr.h"
 
 namespace Platform {
 namespace Notifications {
 
-class Manager
-	: public Window::Notifications::NativeManager
-	, public base::has_weak_ptr {
+inline bool SkipAudio() {
+	return false;
+}
+
+inline bool SkipToast() {
+	return false;
+}
+
+inline void FlashBounce() {
+}
+
+void Finish();
+
+class Manager : public Window::Notifications::NativeManager {
 public:
-	Manager(not_null<Window::Notifications::System*> system);
-	void clearNotification(NotificationId id);
+	Manager(Window::Notifications::System *system);
+
+	void clearNotification(PeerId peerId, MsgId msgId);
+	bool hasPoorSupport() const;
+	bool hasActionsSupport() const;
+
 	~Manager();
 
 protected:
-	void doShowNativeNotification(
-		not_null<PeerData*> peer,
-		std::shared_ptr<Data::CloudImageView> &userpicView,
-		MsgId msgId,
-		const QString &title,
-		const QString &subtitle,
-		const QString &msg,
-		bool hideNameAndPhoto,
-		bool hideReplyButton) override;
+	void doShowNativeNotification(PeerData *peer, MsgId msgId, const QString &title, const QString &subtitle, const QString &msg, bool hideNameAndPhoto, bool hideReplyButton) override;
 	void doClearAllFast() override;
-	void doClearFromHistory(not_null<History*> history) override;
-	void doClearFromSession(not_null<Main::Session*> session) override;
+	void doClearFromHistory(History *history) override;
 
 private:
 	class Private;

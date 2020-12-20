@@ -7,48 +7,28 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "api/api_common.h"
-#include "mtproto/facade.h"
-
-#include <QtCore/QTimer>
-
-class ApiWrap;
 struct FileLoadResult;
 struct SendMediaReady;
 
-namespace Api {
-enum class SendProgressType;
-} // namespace Api
-
-namespace Main {
-class Session;
-} // namespace Main
-
 namespace Storage {
-
-// MTP big files methods used for files greater than 10mb.
-constexpr auto kUseBigFilesFrom = 10 * 1024 * 1024;
 
 struct UploadedPhoto {
 	FullMsgId fullId;
-	Api::SendOptions options;
+	bool silent = false;
 	MTPInputFile file;
-	bool edit = false;
 };
 
 struct UploadedDocument {
 	FullMsgId fullId;
-	Api::SendOptions options;
+	bool silent = false;
 	MTPInputFile file;
-	bool edit = false;
 };
 
 struct UploadedThumbDocument {
 	FullMsgId fullId;
-	Api::SendOptions options;
+	bool silent = false;
 	MTPInputFile file;
 	MTPInputFile thumb;
-	bool edit = false;
 };
 
 struct UploadSecureProgress {
@@ -63,19 +43,18 @@ struct UploadSecureDone {
 	int partsCount = 0;
 };
 
-class Uploader final : public QObject {
+class Uploader : public QObject, public RPCSender {
 	Q_OBJECT
 
 public:
-	explicit Uploader(not_null<ApiWrap*> api);
-	~Uploader();
-
-	[[nodiscard]] Main::Session &session() const;
-
+	Uploader();
 	void uploadMedia(const FullMsgId &msgId, const SendMediaReady &image);
 	void upload(
 		const FullMsgId &msgId,
 		const std::shared_ptr<FileLoadResult> &file);
+
+	int32 currentOffset(const FullMsgId &msgId) const; // -1 means file not found
+	int32 fullSize(const FullMsgId &msgId) const;
 
 	void cancel(const FullMsgId &msgId);
 	void pause(const FullMsgId &msgId);
@@ -114,6 +93,8 @@ public:
 		return _secureFailed.events();
 	}
 
+	~Uploader();
+
 public slots:
 	void unpause();
 	void sendNext();
@@ -123,21 +104,10 @@ private:
 	struct File;
 
 	void partLoaded(const MTPBool &result, mtpRequestId requestId);
-	void partFailed(const RPCError &error, mtpRequestId requestId);
-
-	void processPhotoProgress(const FullMsgId &msgId);
-	void processPhotoFailed(const FullMsgId &msgId);
-	void processDocumentProgress(const FullMsgId &msgId);
-	void processDocumentFailed(const FullMsgId &msgId);
+	bool partFailed(const RPCError &err, mtpRequestId requestId);
 
 	void currentFailed();
 
-	void sendProgressUpdate(
-		not_null<HistoryItem*> item,
-		Api::SendProgressType type,
-		int progress = 0);
-
-	const not_null<ApiWrap*> _api;
 	base::flat_map<mtpRequestId, QByteArray> requestsSent;
 	base::flat_map<mtpRequestId, int32> docRequestsSent;
 	base::flat_map<mtpRequestId, int32> dcMap;
@@ -160,8 +130,6 @@ private:
 	rpl::event_stream<FullMsgId> _photoFailed;
 	rpl::event_stream<FullMsgId> _documentFailed;
 	rpl::event_stream<FullMsgId> _secureFailed;
-
-	rpl::lifetime _lifetime;
 
 };
 

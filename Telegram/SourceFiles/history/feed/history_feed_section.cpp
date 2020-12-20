@@ -16,7 +16,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_service.h"
 #include "history/history_inner_widget.h"
 #include "core/event_filter.h"
-#include "core/shortcuts.h"
 #include "lang/lang_keys.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/shadow.h"
@@ -59,7 +58,7 @@ object_ptr<Window::SectionWidget> Memento::createWidget(
 	}
 	auto result = object_ptr<Widget>(parent, controller, _feed);
 	result->setInternalState(geometry, this);
-	return result;
+	return std::move(result);
 }
 
 Widget::Widget(
@@ -82,7 +81,6 @@ Widget::Widget(
 	_topBar->move(0, 0);
 	_topBar->resizeToWidth(width());
 	_topBar->show();
-
 	_topBar->forwardSelectionRequest(
 	) | rpl::start_with_next([=] {
 		forwardSelected();
@@ -136,7 +134,6 @@ Widget::Widget(
 	}, lifetime());
 
 	setupScrollDownButton();
-	setupShortcuts();
 }
 
 void Widget::setupScrollDownButton() {
@@ -202,7 +199,7 @@ void Widget::updateScrollDownVisibility() {
 		return;
 	}
 
-	const auto scrollDownIsVisible = [&]() -> std::optional<bool> {
+	const auto scrollDownIsVisible = [&]() -> base::optional<bool> {
 		const auto top = _scroll->scrollTop() + st::historyToDownShownAfter;
 		if (top < _scroll->scrollTopMax()) {
 			return true;
@@ -210,7 +207,7 @@ void Widget::updateScrollDownVisibility() {
 		if (_inner->loadedAtBottomKnown()) {
 			return !_inner->loadedAtBottom();
 		}
-		return std::nullopt;
+		return base::none;
 	};
 	const auto scrollDownIsShown = scrollDownIsVisible();
 	if (!scrollDownIsShown) {
@@ -231,7 +228,7 @@ void Widget::updateScrollDownPosition() {
 	auto top = anim::interpolate(
 		0,
 		_scrollDown->height() + st::historyToDownPosition.y(),
-		_scrollDownShown.value(_scrollDownIsShown ? 1. : 0.));
+		_scrollDownShown.current(_scrollDownIsShown ? 1. : 0.));
 	_scrollDown->moveToRight(
 		st::historyToDownPosition.x(),
 		_scroll->height() - top);
@@ -242,7 +239,7 @@ void Widget::updateScrollDownPosition() {
 }
 
 void Widget::scrollDownAnimationFinish() {
-	_scrollDownShown.stop();
+	_scrollDownShown.finish();
 	updateScrollDownPosition();
 }
 
@@ -298,17 +295,13 @@ void Widget::setInternalState(
 	restoreState(memento);
 }
 
-void Widget::setupShortcuts() {
-	Shortcuts::Requests(
-	) | rpl::filter([=] {
-		return isActiveWindow() && !Ui::isLayerShown() && inFocusChain();
-	}) | rpl::start_with_next([=](not_null<Shortcuts::Request*> request) {
-		using Command = Shortcuts::Command;
-		request->check(Command::Search, 2) && request->handle([=] {
-			App::main()->searchInChat(_feed);
-			return true;
-		});
-	}, lifetime());
+bool Widget::cmd_search() {
+	if (!inFocusChain()) {
+		return false;
+	}
+
+	App::main()->searchInChat(_feed);
+	return true;
 }
 
 HistoryView::Context Widget::listContext() {
@@ -375,11 +368,11 @@ void Widget::listVisibleItemsChanged(HistoryItemsList &&items) {
 	}
 }
 
-std::optional<int> Widget::listUnreadBarView(
+base::optional<int> Widget::listUnreadBarView(
 		const std::vector<not_null<Element*>> &elements) {
 	const auto position = _feed->unreadPosition();
 	if (!position || elements.empty() || !_feed->unreadCount()) {
-		return std::nullopt;
+		return base::none;
 	}
 	const auto minimal = ranges::upper_bound(
 		elements,
@@ -387,14 +380,14 @@ std::optional<int> Widget::listUnreadBarView(
 		std::less<>(),
 		[](auto view) { return view->data()->position(); });
 	if (minimal == end(elements)) {
-		return std::nullopt;
+		return base::none;
 	}
 	const auto view = *minimal;
 	const auto unreadMessagesHeight = elements.back()->y()
 		+ elements.back()->height()
 		- view->y();
 	if (unreadMessagesHeight < _scroll->height()) {
-		return std::nullopt;
+		return base::none;
 	}
 	return base::make_optional(int(minimal - begin(elements)));
 }
@@ -456,7 +449,7 @@ ClickHandlerPtr Widget::listDateLink(not_null<Element*> view) {
 std::unique_ptr<Window::SectionMemento> Widget::createMemento() {
 	auto result = std::make_unique<Memento>(_feed);
 	saveState(result.get());
-	return result;
+	return std::move(result);
 }
 
 void Widget::saveState(not_null<Memento*> memento) {
@@ -489,7 +482,7 @@ void Widget::updateControlsGeometry() {
 	const auto contentWidth = width();
 
 	const auto newScrollTop = _scroll->isHidden()
-		? std::nullopt
+		? base::none
 		: base::make_optional(_scroll->scrollTop() + topDelta());
 	_topBar->resizeToWidth(contentWidth);
 	_topBarShadow->resize(contentWidth, st::lineWidth);
@@ -537,7 +530,10 @@ void Widget::paintEvent(QPaintEvent *e) {
 	//	updateListSize();
 	//}
 
-	SectionWidget::PaintBackground(this, e->rect());
+	const auto ms = getms();
+	_scrollDownShown.step(ms);
+
+	SectionWidget::PaintBackground(this, e);
 
 	if (_emptyTextView) {
 		Painter p(this);
@@ -552,7 +548,7 @@ void Widget::paintEvent(QPaintEvent *e) {
 			p,
 			clip.translated(-left, -top),
 			TextSelection(),
-			crl::now());
+			getms());
 	}
 }
 

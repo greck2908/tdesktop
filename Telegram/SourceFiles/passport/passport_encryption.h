@@ -12,11 +12,13 @@ namespace Passport {
 bytes::vector GenerateSecretBytes();
 
 bytes::vector EncryptSecureSecret(
+	bytes::const_span salt,
 	bytes::const_span secret,
-	bytes::const_span passwordHashForSecret);
+	bytes::const_span password);
 bytes::vector DecryptSecureSecret(
+	bytes::const_span salt,
 	bytes::const_span encryptedSecret,
-	bytes::const_span passwordHashForSecret);
+	bytes::const_span password);
 
 bytes::vector SerializeData(const std::map<QString, QString> &data);
 std::map<QString, QString> DeserializeData(bytes::const_span bytes);
@@ -24,8 +26,8 @@ std::map<QString, QString> DeserializeData(bytes::const_span bytes);
 struct DataError {
 	// QByteArray - bad existing scan with such file_hash
 	// QString - bad data field value with such key
-	// std::nullopt - additional scan required
-	std::variant<v::null_t, QByteArray, QString> key;
+	// base::none - additional scan required
+	base::optional_variant<QByteArray, QString> key;
 	QString type; // personal_details, passport, etc.
 	QString text;
 

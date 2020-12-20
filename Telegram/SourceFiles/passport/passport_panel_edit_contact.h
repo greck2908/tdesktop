@@ -8,14 +8,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "ui/rp_widget.h"
-#include "base/object_ptr.h"
 
 namespace Ui {
 class MaskedInputField;
 class PlainShadow;
 class RoundButton;
 class VerticalLayout;
-class BoxContent;
 } // namespace Ui
 
 namespace Passport {
@@ -33,7 +31,7 @@ struct EditContactScheme {
 
 	QString aboutExisting;
 	QString newHeader;
-	rpl::producer<QString> newPlaceholder;
+	Fn<QString()> newPlaceholder;
 	QString aboutNew;
 	Fn<bool(const QString &value)> validate;
 	Fn<QString(const QString &value)> format;
@@ -75,18 +73,16 @@ private:
 
 };
 
-object_ptr<Ui::BoxContent> VerifyPhoneBox(
+object_ptr<BoxContent> VerifyPhoneBox(
 	const QString &phone,
 	int codeLength,
 	Fn<void(QString code)> submit,
 	rpl::producer<QString> call,
 	rpl::producer<QString> error);
-object_ptr<Ui::BoxContent> VerifyEmailBox(
+object_ptr<BoxContent> VerifyEmailBox(
 	const QString &email,
 	int codeLength,
 	Fn<void(QString code)> submit,
-	Fn<void()> resend,
-	rpl::producer<QString> error,
-	rpl::producer<QString> resent);
+	rpl::producer<QString> error);
 
 } // namespace Passport

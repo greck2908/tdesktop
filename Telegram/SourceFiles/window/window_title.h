@@ -7,8 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "ui/rp_widget.h"
-
 namespace Window {
 
 enum class HitTestResult {
@@ -26,9 +24,9 @@ enum class HitTestResult {
 	TopLeft,
 };
 
-class TitleWidget : public Ui::RpWidget {
+class TitleWidget : public TWidget {
 public:
-	using RpWidget::RpWidget;
+	using TWidget::TWidget;
 
 	virtual void init() {
 	}

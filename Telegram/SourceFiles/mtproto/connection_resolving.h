@@ -7,12 +7,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "mtproto/mtproto_auth_key.h"
+#include "mtproto/auth_key.h"
 #include "mtproto/connection_abstract.h"
 #include "base/timer.h"
 
 namespace MTP {
-namespace details {
+namespace internal {
 
 class ResolvingConnection : public AbstractConnection {
 public:
@@ -24,9 +24,9 @@ public:
 
 	ConnectionPointer clone(const ProxyData &proxy) override;
 
-	crl::time pingTime() const override;
-	crl::time fullConnectTimeout() const override;
-	void sendData(mtpBuffer &&buffer) override;
+	TimeMs pingTime() const override;
+	TimeMs fullConnectTimeout() const override;
+	void sendData(mtpBuffer &buffer) override;
 	void disconnectFromServer() override;
 	void connectToServer(
 		const QString &address,
@@ -34,7 +34,6 @@ public:
 		const bytes::vector &protocolSecret,
 		int16 protocolDcId) override;
 	bool isConnected() const override;
-	bool requiresExtendedPadding() const override;
 
 	int32 debugState() const override;
 
@@ -67,5 +66,5 @@ private:
 
 };
 
-} // namespace details
+} // namespace internal
 } // namespace MTP

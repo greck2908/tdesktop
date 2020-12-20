@@ -13,13 +13,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_shared_media.h"
 #include "info/info_memento.h"
 #include "info/info_controller.h"
+#include "info/profile/info_profile_button.h"
 #include "info/profile/info_profile_values.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/vertical_layout.h"
-#include "ui/widgets/buttons.h"
-#include "window/window_session_controller.h"
-#include "data/data_channel.h"
-#include "data/data_user.h"
+#include "window/window_controller.h"
 #include "styles/style_info.h"
 
 namespace Info {
@@ -27,21 +25,22 @@ namespace Media {
 
 using Type = Storage::SharedMediaType;
 
-inline tr::phrase<lngtag_count> MediaTextPhrase(Type type) {
+inline auto MediaTextPhrase(Type type) {
 	switch (type) {
-	case Type::Photo: return tr::lng_profile_photos;
-	case Type::Video: return tr::lng_profile_videos;
-	case Type::File: return tr::lng_profile_files;
-	case Type::MusicFile: return tr::lng_profile_songs;
-	case Type::Link: return tr::lng_profile_shared_links;
-	case Type::RoundVoiceFile: return tr::lng_profile_audios;
+	case Type::Photo: return lng_profile_photos;
+	case Type::Video: return lng_profile_videos;
+	case Type::File: return lng_profile_files;
+	case Type::MusicFile: return lng_profile_songs;
+	case Type::Link: return lng_profile_shared_links;
+	case Type::VoiceFile: return lng_profile_audios;
+//	case Type::RoundFile: return lng_profile_rounds;
 	}
 	Unexpected("Type in MediaTextPhrase()");
 };
 
 inline auto MediaText(Type type) {
 	return [phrase = MediaTextPhrase(type)](int count) {
-		return phrase(tr::now, lt_count, count);
+		return phrase(lt_count, count);
 	};
 }
 
@@ -53,7 +52,7 @@ inline auto AddCountedButton(
 		Ui::MultiSlideTracker &tracker) {
 	using namespace rpl::mappers;
 
-	using Button = Ui::SettingsButton;
+	using Button = Profile::Button;
 	auto forked = std::move(count)
 		| start_spawning(parent->lifetime());
 	auto text = rpl::duplicate(
@@ -80,7 +79,7 @@ inline auto AddCountedButton(
 
 inline auto AddButton(
 		Ui::VerticalLayout *parent,
-		not_null<Window::SessionNavigation*> navigation,
+		not_null<Window::Navigation*> navigation,
 		not_null<PeerData*> peer,
 		PeerData *migrated,
 		Type type,
@@ -92,28 +91,28 @@ inline auto AddButton(
 		tracker)->entity();
 	result->addClickHandler([=] {
 		navigation->showSection(
-			std::make_shared<Info::Memento>(peer, Section(type)));
+			Info::Memento(peer->id, Section(type)));
 	});
-	return result;
+	return std::move(result);
 };
 
 inline auto AddCommonGroupsButton(
 		Ui::VerticalLayout *parent,
-		not_null<Window::SessionNavigation*> navigation,
+		not_null<Window::Navigation*> navigation,
 		not_null<UserData*> user,
 		Ui::MultiSlideTracker &tracker) {
 	auto result = AddCountedButton(
 		parent,
 		Profile::CommonGroupsCountValue(user),
 		[](int count) {
-			return tr::lng_profile_common_groups(tr::now, lt_count, count);
+			return lng_profile_common_groups(lt_count, count);
 		},
 		tracker)->entity();
 	result->addClickHandler([=] {
 		navigation->showSection(
-			std::make_shared<Info::Memento>(user, Section::Type::CommonGroups));
+			Info::Memento(user->id, Section::Type::CommonGroups));
 	});
-	return result;
+	return std::move(result);
 };
 
 } // namespace Media

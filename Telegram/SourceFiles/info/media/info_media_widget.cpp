@@ -11,20 +11,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_controller.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/search_field_controller.h"
-#include "ui/ui_utility.h"
-#include "data/data_peer.h"
 #include "styles/style_info.h"
 
 namespace Info {
 namespace Media {
 
-std::optional<int> TypeToTabIndex(Type type) {
+base::optional<int> TypeToTabIndex(Type type) {
 	switch (type) {
 	case Type::Photo: return 0;
 	case Type::Video: return 1;
 	case Type::File: return 2;
 	}
-	return std::nullopt;
+	return base::none;
 }
 
 Type TabIndexToType(int index) {
@@ -38,16 +36,16 @@ Type TabIndexToType(int index) {
 
 Memento::Memento(not_null<Controller*> controller)
 : Memento(
-	controller->peer(),
+	controller->peerId(),
 	controller->migratedPeerId(),
 	controller->section().mediaType()) {
 }
 
-Memento::Memento(not_null<PeerData*> peer, PeerId migratedPeerId, Type type)
-: ContentMemento(peer, migratedPeerId)
+Memento::Memento(PeerId peerId, PeerId migratedPeerId, Type type)
+: ContentMemento(peerId, migratedPeerId)
 , _type(type) {
 	_searchState.query.type = type;
-	_searchState.query.peerId = peer->id;
+	_searchState.query.peerId = peerId;
 	_searchState.query.migratedPeerId = migratedPeerId;
 	if (migratedPeerId) {
 		_searchState.migratedList = Storage::SparseIdsList();
@@ -66,7 +64,7 @@ object_ptr<ContentWidget> Memento::createWidget(
 		parent,
 		controller);
 	result->setInternalState(geometry, this);
-	return result;
+	return std::move(result);
 }
 
 Widget::Widget(
@@ -99,7 +97,7 @@ bool Widget::showInternal(not_null<ContentMemento*> memento) {
 	if (!controller()->validateMementoPeer(memento)) {
 		return false;
 	}
-	if (const auto mediaMemento = dynamic_cast<Memento*>(memento.get())) {
+	if (auto mediaMemento = dynamic_cast<Memento*>(memento.get())) {
 		if (_inner->showInternal(mediaMemento)) {
 			return true;
 		}
@@ -115,10 +113,10 @@ void Widget::setInternalState(
 	restoreState(memento);
 }
 
-std::shared_ptr<ContentMemento> Widget::doCreateMemento() {
-	auto result = std::make_shared<Memento>(controller());
+std::unique_ptr<ContentMemento> Widget::doCreateMemento() {
+	auto result = std::make_unique<Memento>(controller());
 	saveState(result.get());
-	return result;
+	return std::move(result);
 }
 
 void Widget::saveState(not_null<Memento*> memento) {

@@ -13,5 +13,5 @@ namespace Data {
 struct Group;
 } // namespace Data
 
-TextForMimeData HistoryItemText(not_null<HistoryItem*> item);
-TextForMimeData HistoryGroupText(not_null<const Data::Group*> group);
+TextWithEntities HistoryItemText(not_null<HistoryItem*> item);
+TextWithEntities HistoryGroupText(not_null<const Data::Group*> group);

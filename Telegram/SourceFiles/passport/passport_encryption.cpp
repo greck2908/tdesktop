@@ -8,11 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "passport/passport_encryption.h"
 
 #include "base/openssl_help.h"
-#include "mtproto/details/mtproto_rsa_public_key.h"
-
-#include <QtCore/QJsonDocument>
-#include <QtCore/QJsonArray>
-#include <QtCore/QJsonObject>
+#include "mtproto/rsa_public_key.h"
 
 namespace Passport {
 namespace {
@@ -20,7 +16,6 @@ namespace {
 constexpr auto kAesKeyLength = 32;
 constexpr auto kAesIvLength = 16;
 constexpr auto kSecretSize = 32;
-constexpr auto kAesParamsHashSize = 64;
 constexpr auto kMinPadding = 32;
 constexpr auto kMaxPadding = 255;
 constexpr auto kAlignTo = 16;
@@ -32,19 +27,16 @@ struct AesParams {
 	bytes::vector iv;
 };
 
-AesParams PrepareAesParamsWithHash(bytes::const_span hashForEncryptionKey) {
-	Expects(hashForEncryptionKey.size() == kAesParamsHashSize);
+AesParams PrepareAesParams(bytes::const_span bytesForEncryptionKey) {
+	const auto hash = openssl::Sha512(bytesForEncryptionKey);
+	const auto view = gsl::make_span(hash);
 
 	auto result = AesParams();
 	result.key = bytes::make_vector(
-		hashForEncryptionKey.subspan(0, kAesKeyLength));
+		view.subspan(0, kAesKeyLength));
 	result.iv = bytes::make_vector(
-		hashForEncryptionKey.subspan(kAesKeyLength, kAesIvLength));
+		view.subspan(kAesKeyLength, kAesIvLength));
 	return result;
-}
-
-AesParams PrepareAesParams(bytes::const_span bytesForEncryptionKey) {
-	return PrepareAesParamsWithHash(openssl::Sha512(bytesForEncryptionKey));
 }
 
 bytes::vector EncryptOrDecrypt(
@@ -120,9 +112,9 @@ bytes::vector GenerateSecretBytes() {
 	return result;
 }
 
-bytes::vector DecryptSecretBytesWithHash(
+bytes::vector DecryptSecretBytes(
 		bytes::const_span encryptedSecret,
-		bytes::const_span hashForEncryptionKey) {
+		bytes::const_span bytesForEncryptionKey) {
 	if (encryptedSecret.empty()) {
 		return {};
 	} else if (encryptedSecret.size() != kSecretSize) {
@@ -130,31 +122,13 @@ bytes::vector DecryptSecretBytesWithHash(
 			).arg(encryptedSecret.size()));
 		return {};
 	}
-	auto params = PrepareAesParamsWithHash(hashForEncryptionKey);
+	auto params = PrepareAesParams(bytesForEncryptionKey);
 	auto result = Decrypt(encryptedSecret, std::move(params));
 	if (!CheckSecretBytes(result)) {
 		LOG(("API Error: Bad secret bytes."));
 		return {};
 	}
 	return result;
-}
-
-bytes::vector DecryptSecretBytes(
-		bytes::const_span encryptedSecret,
-		bytes::const_span bytesForEncryptionKey) {
-	return DecryptSecretBytesWithHash(
-		encryptedSecret,
-		openssl::Sha512(bytesForEncryptionKey));
-}
-
-bytes::vector EncryptSecretBytesWithHash(
-		bytes::const_span secret,
-		bytes::const_span hashForEncryptionKey) {
-	Expects(secret.size() == kSecretSize);
-	Expects(CheckSecretBytes(secret) == true);
-
-	auto params = PrepareAesParamsWithHash(hashForEncryptionKey);
-	return Encrypt(secret, std::move(params));
 }
 
 bytes::vector EncryptSecretBytes(
@@ -168,21 +142,33 @@ bytes::vector EncryptSecretBytes(
 }
 
 bytes::vector DecryptSecureSecret(
+		bytes::const_span salt,
 		bytes::const_span encryptedSecret,
-		bytes::const_span passwordHashForSecret) {
+		bytes::const_span password) {
+	Expects(!salt.empty());
 	Expects(!encryptedSecret.empty());
+	Expects(!password.empty());
 
-	return DecryptSecretBytesWithHash(
-		encryptedSecret,
-		passwordHashForSecret);
+	const auto bytesForEncryptionKey = bytes::concatenate(
+		salt,
+		password,
+		salt);
+	return DecryptSecretBytes(encryptedSecret, bytesForEncryptionKey);
 }
 
 bytes::vector EncryptSecureSecret(
+		bytes::const_span salt,
 		bytes::const_span secret,
-		bytes::const_span passwordHashForSecret) {
+		bytes::const_span password) {
+	Expects(!salt.empty());
 	Expects(secret.size() == kSecretSize);
+	Expects(!password.empty());
 
-	return EncryptSecretBytesWithHash(secret, passwordHashForSecret);
+	const auto bytesForEncryptionKey = bytes::concatenate(
+		salt,
+		password,
+		salt);
+	return EncryptSecretBytes(secret, bytesForEncryptionKey);
 }
 
 bytes::vector SerializeData(const std::map<QString, QString> &data) {
@@ -398,7 +384,7 @@ bytes::vector DecryptData(
 bytes::vector PrepareValueHash(
 		bytes::const_span dataHash,
 		bytes::const_span valueSecret) {
-	return openssl::Sha256(dataHash, valueSecret);
+	return openssl::Sha256(bytes::concatenate(dataHash, valueSecret));
 }
 
 bytes::vector EncryptValueSecret(
@@ -429,7 +415,7 @@ uint64 CountSecureSecretId(bytes::const_span secret) {
 bytes::vector EncryptCredentialsSecret(
 		bytes::const_span secret,
 		bytes::const_span publicKey) {
-	const auto key = MTP::details::RSAPublicKey(publicKey);
+	const auto key = MTP::internal::RSAPublicKey(publicKey);
 	return key.encryptOAEPpadding(secret);
 }
 

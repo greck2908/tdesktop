@@ -48,16 +48,15 @@ private:
 	using ListWidget = PeerListContent;
 
 	// PeerListContentDelegate interface.
-	void peerListSetTitle(rpl::producer<QString> title) override;
-	void peerListSetAdditionalTitle(rpl::producer<QString> title) override;
-	bool peerListIsRowChecked(not_null<PeerListRow*> row) override;
+	void peerListSetTitle(Fn<QString()> title) override;
+	void peerListSetAdditionalTitle(
+		Fn<QString()> title) override;
+	bool peerListIsRowSelected(not_null<PeerData*> peer) override;
 	int peerListSelectedRowsCount() override;
 	std::vector<not_null<PeerData*>> peerListCollectSelectedRows() override;
 	void peerListScrollToTop() override;
-	void peerListAddSelectedPeerInBunch(
-		not_null<PeerData*> peer) override;
 	void peerListAddSelectedRowInBunch(
-		not_null<PeerListRow*> row) override;
+		not_null<PeerData*> peer) override;
 	void peerListFinishSelectedRowsBunch() override;
 	void peerListSetDescription(
 		object_ptr<Ui::FlatLabel> description) override;

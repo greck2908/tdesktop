@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "ui/effects/animations.h"
 #include "styles/style_widgets.h"
 
 namespace Ui {
@@ -16,15 +15,17 @@ class RoundCheckbox {
 public:
 	RoundCheckbox(const style::RoundCheckbox &st, Fn<void()> updateCallback);
 
-	void paint(Painter &p, int x, int y, int outerWidth, float64 masterScale = 1.);
+	void paint(Painter &p, TimeMs ms, int x, int y, int outerWidth, float64 masterScale = 1.);
 
 	void setDisplayInactive(bool displayInactive);
 	bool checked() const {
 		return _checked;
 	}
-	void setChecked(
-		bool newChecked,
-		anim::type animated = anim::type::normal);
+	enum class SetStyle {
+		Animated,
+		Fast,
+	};
+	void setChecked(bool newChecked, SetStyle speed = SetStyle::Animated);
 
 	void invalidateCache();
 
@@ -35,7 +36,7 @@ private:
 	Fn<void()> _updateCallback;
 
 	bool _checked = false;
-	Ui::Animations::Simple _checkedProgress;
+	Animation _checkedProgress;
 
 	bool _displayInactive = false;
 	QPixmap _inactiveCacheBg, _inactiveCacheFg;
@@ -47,15 +48,14 @@ public:
 	using PaintRoundImage = Fn<void(Painter &p, int x, int y, int outerWidth, int size)>;
 	RoundImageCheckbox(const style::RoundImageCheckbox &st, Fn<void()> updateCallback, PaintRoundImage &&paintRoundImage);
 
-	void paint(Painter &p, int x, int y, int outerWidth);
+	void paint(Painter &p, TimeMs ms, int x, int y, int outerWidth);
 	float64 checkedAnimationRatio() const;
 
 	bool checked() const {
 		return _check.checked();
 	}
-	void setChecked(
-		bool newChecked,
-		anim::type animated = anim::type::normal);
+	using SetStyle = RoundCheckbox::SetStyle;
+	void setChecked(bool newChecked, SetStyle speed = SetStyle::Animated);
 
 	void invalidateCache() {
 		_check.invalidateCache();
@@ -69,7 +69,7 @@ private:
 	PaintRoundImage _paintRoundImage;
 
 	QPixmap _wideCache;
-	Ui::Animations::Simple _selection;
+	Animation _selection;
 
 	RoundCheckbox _check;
 

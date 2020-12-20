@@ -11,13 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/weak_ptr.h"
 #include "data/data_sparse_ids.h"
 
-class History;
-
-namespace Main {
-class Session;
-} // namespace Main
-
-std::optional<Storage::SharedMediaType> SharedMediaOverviewType(
+base::optional<Storage::SharedMediaType> SharedMediaOverviewType(
 	Storage::SharedMediaType type);
 void SharedMediaShowOverview(
 	Storage::SharedMediaType type,
@@ -25,7 +19,6 @@ void SharedMediaShowOverview(
 bool SharedMediaAllowSearch(Storage::SharedMediaType type);
 
 rpl::producer<SparseIdsSlice> SharedMediaViewer(
-	not_null<Main::Session*> session,
 	Storage::SharedMediaKey key,
 	int limitBefore,
 	int limitAfter);
@@ -51,7 +44,6 @@ struct SharedMediaMergedKey {
 };
 
 rpl::producer<SparseIdsMergedSlice> SharedMediaMergedViewer(
-	not_null<Main::Session*> session,
 	SharedMediaMergedKey key,
 	int limitBefore,
 	int limitAfter);
@@ -60,9 +52,9 @@ class SharedMediaWithLastSlice {
 public:
 	using Type = Storage::SharedMediaType;
 
-	using Value = std::variant<FullMsgId, not_null<PhotoData*>>;
+	using Value = base::variant<FullMsgId, not_null<PhotoData*>>;
 	using MessageId = SparseIdsMergedSlice::UniversalMsgId;
-	using UniversalMsgId = std::variant<
+	using UniversalMsgId = base::variant<
 		MessageId,
 		not_null<PhotoData*>>;
 
@@ -76,7 +68,8 @@ public:
 		, migratedPeerId(migratedPeerId)
 		, type(type)
 		, universalId(universalId) {
-			Expects(v::is<MessageId>(universalId) || type == Type::ChatPhoto);
+			Expects(base::get_if<MessageId>(&universalId) != nullptr
+				|| type == Type::ChatPhoto);
 		}
 
 		bool operator==(const Key &other) const {
@@ -96,22 +89,19 @@ public:
 
 	};
 
+	SharedMediaWithLastSlice(Key key);
 	SharedMediaWithLastSlice(
-		not_null<Main::Session*> session,
-		Key key);
-	SharedMediaWithLastSlice(
-		not_null<Main::Session*> session,
 		Key key,
 		SparseIdsMergedSlice slice,
-		std::optional<SparseIdsMergedSlice> ending);
+		base::optional<SparseIdsMergedSlice> ending);
 
-	std::optional<int> fullCount() const;
-	std::optional<int> skippedBefore() const;
-	std::optional<int> skippedAfter() const;
-	std::optional<int> indexOf(Value fullId) const;
+	base::optional<int> fullCount() const;
+	base::optional<int> skippedBefore() const;
+	base::optional<int> skippedAfter() const;
+	base::optional<int> indexOf(Value fullId) const;
 	int size() const;
 	Value operator[](int index) const;
-	std::optional<int> distance(const Key &a, const Key &b) const;
+	base::optional<int> distance(const Key &a, const Key &b) const;
 
 	void reverse();
 
@@ -119,8 +109,8 @@ public:
 		return {
 			key.peerId,
 			key.migratedPeerId,
-			v::is<MessageId>(key.universalId)
-				? v::get<MessageId>(key.universalId)
+			base::get_if<MessageId>(&key.universalId)
+				? (*base::get_if<MessageId>(&key.universalId))
 				: ServerMaxMsgId - 1
 		};
 	}
@@ -133,26 +123,23 @@ public:
 	}
 
 private:
-	static std::optional<SparseIdsMergedSlice> EndingSlice(const Key &key) {
-		return v::is<MessageId>(key.universalId)
+	static base::optional<SparseIdsMergedSlice> EndingSlice(const Key &key) {
+		return base::get_if<MessageId>(&key.universalId)
 			? base::make_optional(SparseIdsMergedSlice(EndingKey(key)))
-			: std::nullopt;
+			: base::none;
 	}
 
-	static std::optional<PhotoId> LastPeerPhotoId(
-		not_null<Main::Session*> session,
-		PeerId peerId);
-	static std::optional<bool> IsLastIsolated(
-		not_null<Main::Session*> session,
+	static base::optional<PhotoId> LastPeerPhotoId(PeerId peerId);
+	static base::optional<bool> IsLastIsolated(
 		const SparseIdsMergedSlice &slice,
-		const std::optional<SparseIdsMergedSlice> &ending,
-		std::optional<PhotoId> lastPeerPhotoId);
-	static std::optional<FullMsgId> LastFullMsgId(
+		const base::optional<SparseIdsMergedSlice> &ending,
+		base::optional<PhotoId> lastPeerPhotoId);
+	static base::optional<FullMsgId> LastFullMsgId(
 		const SparseIdsMergedSlice &slice);
-	static std::optional<int> Add(
-			const std::optional<int> &a,
-			const std::optional<int> &b) {
-		return (a && b) ? base::make_optional(*a + *b) : std::nullopt;
+	static base::optional<int> Add(
+			const base::optional<int> &a,
+			const base::optional<int> &b) {
+		return (a && b) ? base::make_optional(*a + *b) : base::none;
 	}
 	static Value ComputeId(PeerId peerId, MsgId msgId) {
 		return FullMsgId(
@@ -160,44 +147,41 @@ private:
 			msgId);
 	}
 	static Value ComputeId(const Key &key) {
-		if (const auto messageId = std::get_if<MessageId>(&key.universalId)) {
+		if (auto messageId = base::get_if<MessageId>(&key.universalId)) {
 			return (*messageId >= 0)
 				? ComputeId(key.peerId, *messageId)
 				: ComputeId(key.migratedPeerId, ServerMaxMsgId + *messageId);
 		}
-		return v::get<not_null<PhotoData*>>(key.universalId);
+		return *base::get_if<not_null<PhotoData*>>(&key.universalId);
 	}
 
 	bool isolatedInSlice() const {
 		return (_slice.skippedAfter() != 0);
 	}
-	std::optional<int> lastPhotoSkip() const {
+	base::optional<int> lastPhotoSkip() const {
 		return _isolatedLastPhoto
 			| [](bool isolated) { return isolated ? 1 : 0; };
 	}
 
-	std::optional<int> skippedBeforeImpl() const;
-	std::optional<int> skippedAfterImpl() const;
-	std::optional<int> indexOfImpl(Value fullId) const;
+	base::optional<int> skippedBeforeImpl() const;
+	base::optional<int> skippedAfterImpl() const;
+	base::optional<int> indexOfImpl(Value fullId) const;
 
-	not_null<Main::Session*> _session;
 	Key _key;
 	SparseIdsMergedSlice _slice;
-	std::optional<SparseIdsMergedSlice> _ending;
-	std::optional<PhotoId> _lastPhotoId;
-	std::optional<bool> _isolatedLastPhoto;
+	base::optional<SparseIdsMergedSlice> _ending;
+	base::optional<PhotoId> _lastPhotoId;
+	base::optional<bool> _isolatedLastPhoto;
 	bool _reversed = false;
 
 };
 
 rpl::producer<SharedMediaWithLastSlice> SharedMediaWithLastViewer(
-	not_null<Main::Session*> session,
 	SharedMediaWithLastSlice::Key key,
 	int limitBefore,
 	int limitAfter);
 
 rpl::producer<SharedMediaWithLastSlice> SharedMediaWithLastReversedViewer(
-	not_null<Main::Session*> session,
 	SharedMediaWithLastSlice::Key key,
 	int limitBefore,
 	int limitAfter);

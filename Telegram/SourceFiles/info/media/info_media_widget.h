@@ -17,7 +17,7 @@ namespace Media {
 
 using Type = Storage::SharedMediaType;
 
-std::optional<int> TypeToTabIndex(Type type);
+base::optional<int> TypeToTabIndex(Type type);
 Type TabIndexToType(int index);
 
 class InnerWidget;
@@ -25,7 +25,7 @@ class InnerWidget;
 class Memento final : public ContentMemento {
 public:
 	Memento(not_null<Controller*> controller);
-	Memento(not_null<PeerData*> peer, PeerId migratedPeerId, Type type);
+	Memento(PeerId peerId, PeerId migratedPeerId, Type type);
 
 	using SearchState = Api::DelayedSearchController::SavedState;
 
@@ -103,7 +103,7 @@ private:
 	void saveState(not_null<Memento*> memento);
 	void restoreState(not_null<Memento*> memento);
 
-	std::shared_ptr<ContentMemento> doCreateMemento() override;
+	std::unique_ptr<ContentMemento> doCreateMemento() override;
 
 	InnerWidget *_inner = nullptr;
 

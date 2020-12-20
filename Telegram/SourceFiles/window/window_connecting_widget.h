@@ -7,36 +7,39 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "ui/abstract_button.h"
 #include "base/timer.h"
-#include "base/unique_qptr.h"
-#include "ui/effects/animations.h"
 
 namespace Ui {
-class RpWidget;
+class LinkButton;
 } // namespace Ui
-
-namespace Main {
-class Account;
-} // namespace Main
 
 namespace Window {
 
-class ConnectionState : private base::Subscriber {
+class ConnectingWidget
+	: public Ui::AbstractButton
+	, private base::Subscriber {
 public:
-	ConnectionState(
-		not_null<Ui::RpWidget*> parent,
-		not_null<Main::Account*> account,
+	ConnectingWidget(QWidget *parent);
+
+	rpl::producer<float64> visibility() const;
+
+	void finishAnimating();
+	void setForceHidden(bool hidden);
+	void setVisibleHook(bool visible) override;
+
+	static base::unique_qptr<ConnectingWidget> CreateDefaultWidget(
+		Ui::RpWidget *parent,
 		rpl::producer<bool> shown);
 
-	void raise();
-	void setForceHidden(bool hidden);
+protected:
+	void resizeEvent(QResizeEvent *e) override;
+	void paintEvent(QPaintEvent *e) override;
 
-	rpl::lifetime &lifetime() {
-		return _lifetime;
-	}
+	void onStateChanged(State was, StateChangeSource source) override;
 
 private:
-	class Widget;
+	class ProxyIcon;
 	struct State {
 		enum class Type {
 			Connected,
@@ -46,7 +49,6 @@ private:
 		Type type = Type::Connected;
 		bool useProxy = false;
 		bool underCursor = false;
-		bool updateReady = false;
 		int waitTillRetry = 0;
 
 		bool operator==(const State &other) const;
@@ -62,33 +64,34 @@ private:
 		int textWidth = 0;
 
 	};
-
-	void createWidget();
-	void finishAnimating();
+	void updateRetryGeometry();
+	void updateWidth();
+	void updateVisibility();
 	void refreshState();
 	void applyState(const State &state);
 	void changeVisibilityWithLayout(const Layout &layout);
+	void refreshRetryLink(bool hasRetry);
 	Layout computeLayout(const State &state) const;
 	void setLayout(const Layout &layout);
 	float64 currentVisibility() const;
-	rpl::producer<float64> visibility() const;
-	void updateWidth();
-	void updateVisibility();
-	void refreshProgressVisibility();
 
-	const not_null<Main::Account*> _account;
-	not_null<Ui::RpWidget*> _parent;
-	base::unique_qptr<Widget> _widget;
-	bool _forceHidden = false;
+	QRect innerRect() const;
+	QRect contentRect() const;
+	QRect textRect() const;
+
 	base::Timer _refreshTimer;
 	State _state;
 	Layout _currentLayout;
-	crl::time _connectingStartedAt = 0;
-	Ui::Animations::Simple _contentWidth;
-	Ui::Animations::Simple _visibility;
+	TimeMs _connectingStartedAt = 0;
+	Animation _contentWidth;
+	Animation _visibility;
+	base::unique_qptr<Ui::LinkButton> _retry;
+	QPointer<Ui::RpWidget> _progress;
+	QPointer<ProxyIcon> _proxyIcon;
+	bool _forceHidden = false;
+	bool _realHidden = false;
 
 	rpl::event_stream<float64> _visibilityValues;
-	rpl::lifetime _lifetime;
 
 };
 

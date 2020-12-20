@@ -16,24 +16,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/fade_wrap.h"
 #include "ui/toast/toast.h"
 #include "ui/widgets/tooltip.h"
-#include "ui/platform/ui_platform_utility.h"
-#include "ui/layers/layer_widget.h"
-#include "window/themes/window_theme.h"
-#include "core/application.h"
-#include "app.h"
+#include "window/layer_widget.h"
+#include "messenger.h"
 #include "styles/style_widgets.h"
 #include "styles/style_info.h"
 #include "styles/style_calls.h"
 
-#include <QtGui/QWindow>
-#include <QtWidgets/QApplication>
-#include <QtWidgets/QDesktopWidget>
-
 namespace Ui {
 
 SeparatePanel::SeparatePanel()
-: RpWidget(Core::App().getModalParent())
-, _close(this, st::separatePanelClose)
+: _close(this, st::separatePanelClose)
 , _back(this, object_ptr<Ui::IconButton>(this, st::separatePanelBack))
 , _body(this) {
 	setMouseTracking(true);
@@ -45,8 +37,6 @@ SeparatePanel::SeparatePanel()
 void SeparatePanel::setTitle(rpl::producer<QString> title) {
 	_title.create(this, std::move(title), st::separatePanelTitle);
 	_title->setAttribute(Qt::WA_TransparentForMouseEvents);
-	_title->show();
-	updateTitleGeometry(width());
 }
 
 void SeparatePanel::initControls() {
@@ -55,7 +45,10 @@ void SeparatePanel::initControls() {
 		_back->moveToLeft(_padding.left(), _padding.top());
 		_close->moveToRight(_padding.right(), _padding.top());
 		if (_title) {
-			updateTitleGeometry(width);
+			_title->resizeToWidth(width
+				- _padding.left() - _back->width()
+				- _padding.right() - _close->width());
+			updateTitlePosition();
 		}
 	}, lifetime());
 
@@ -68,21 +61,14 @@ void SeparatePanel::initControls() {
 			st::fadeWrapDuration);
 	}, _back->lifetime());
 	_back->hide(anim::type::instant);
-	_titleLeft.stop();
-}
-
-void SeparatePanel::updateTitleGeometry(int newWidth) {
-	_title->resizeToWidth(newWidth
-		- _padding.left() - _back->width()
-		- _padding.right() - _close->width());
-	updateTitlePosition();
+	_titleLeft.finish();
 }
 
 void SeparatePanel::updateTitlePosition() {
 	if (!_title) {
 		return;
 	}
-	const auto progress = _titleLeft.value(_back->toggled() ? 1. : 0.);
+	const auto progress = _titleLeft.current(_back->toggled() ? 1. : 0.);
 	const auto left = anim::interpolate(
 		st::separatePanelTitleLeft,
 		_back->width() + st::separatePanelTitleSkip,
@@ -94,33 +80,21 @@ void SeparatePanel::updateTitlePosition() {
 
 rpl::producer<> SeparatePanel::backRequests() const {
 	return rpl::merge(
-		_back->entity()->clicks() | rpl::to_empty,
+		_back->entity()->clicks(),
 		_synteticBackRequests.events());
 }
 
 rpl::producer<> SeparatePanel::closeRequests() const {
-	return rpl::merge(
-		_close->clicks() | rpl::to_empty,
-		_userCloseRequests.events());
+	return _close->clicks();
 }
 
-rpl::producer<> SeparatePanel::closeEvents() const {
-	return _closeEvents.events();
+rpl::producer<> SeparatePanel::destroyRequests() const {
+	return _destroyRequests.events();
 }
 
 void SeparatePanel::setBackAllowed(bool allowed) {
 	if (allowed != _back->toggled()) {
 		_back->toggle(allowed, anim::type::normal);
-	}
-}
-
-void SeparatePanel::setHideOnDeactivate(bool hideOnDeactivate) {
-	_hideOnDeactivate = hideOnDeactivate;
-	if (!_hideOnDeactivate) {
-		showAndActivate();
-	} else if (!isActiveWindow()) {
-		LOG(("Export Info: Panel Hide On Inactive Change."));
-		hideGetDuration();
 	}
 }
 
@@ -139,17 +113,10 @@ void SeparatePanel::keyPressEvent(QKeyEvent *e) {
 	return RpWidget::keyPressEvent(e);
 }
 
-bool SeparatePanel::eventHook(QEvent *e) {
-	if (e->type() == QEvent::WindowDeactivate && _hideOnDeactivate) {
-		LOG(("Export Info: Panel Hide On Inactive Window."));
-		hideGetDuration();
-	}
-	return RpWidget::eventHook(e);
-}
-
 void SeparatePanel::initLayout() {
 	setWindowFlags(Qt::WindowFlags(Qt::FramelessWindowHint)
 		| Qt::WindowStaysOnTopHint
+		| Qt::BypassWindowManagerHint
 		| Qt::NoDropShadowWindowHint
 		| Qt::Dialog);
 	setAttribute(Qt::WA_MacAlwaysShowToolWindow);
@@ -157,15 +124,8 @@ void SeparatePanel::initLayout() {
 	setAttribute(Qt::WA_TranslucentBackground, true);
 
 	createBorderImage();
-	subscribe(Window::Theme::Background(), [=](
-			const Window::Theme::BackgroundUpdate &update) {
-		if (update.paletteChanged()) {
-			createBorderImage();
-			Ui::ForceFullRepaint(this);
-		}
-	});
 
-	Ui::Platform::InitOnTopPanel(this);
+	Platform::InitOnTopPanel(this);
 }
 
 void SeparatePanel::createBorderImage() {
@@ -229,11 +189,9 @@ void SeparatePanel::finishAnimating() {
 	_animationCache = QPixmap();
 	if (_visible) {
 		showControls();
-		if (_inner) {
-			_inner->setFocus();
-		}
+		_inner->setFocus();
 	} else {
-		finishClose();
+		destroyDelayed();
 	}
 }
 
@@ -244,43 +202,39 @@ void SeparatePanel::showControls() {
 	}
 }
 
-void SeparatePanel::finishClose() {
+void SeparatePanel::destroyDelayed() {
 	hide();
-	crl::on_main(this, [=] {
-		if (isHidden() && !_visible && !_opacityAnimation.animating()) {
-			LOG(("Export Info: Panel Closed."));
-			_closeEvents.fire({});
-		}
-	});
+	_destroyRequests.fire({});
 }
 
-int SeparatePanel::hideGetDuration() {
-	LOG(("Export Info: Panel Hide Requested."));
+int SeparatePanel::hideAndDestroyGetDuration() {
 	toggleOpacityAnimation(false);
 	if (_animationCache.isNull()) {
-		finishClose();
+		destroyDelayed();
 		return 0;
 	}
 	return st::callPanelDuration;
 }
 
 void SeparatePanel::showBox(
-		object_ptr<Ui::BoxContent> box,
-		Ui::LayerOptions options,
+		object_ptr<BoxContent> box,
+		LayerOptions options,
 		anim::type animated) {
 	ensureLayerCreated();
 	_layer->showBox(std::move(box), options, animated);
 }
 
 void SeparatePanel::showToast(const QString &text) {
-	Ui::Toast::Show(this, text);
+	auto toast = Ui::Toast::Config();
+	toast.text = text;
+	Ui::Toast::Show(this, toast);
 }
 
 void SeparatePanel::ensureLayerCreated() {
 	if (_layer) {
 		return;
 	}
-	_layer = base::make_unique_q<Ui::LayerStackWidget>(_body);
+	_layer.create(_body);
 	_layer->setHideByBackgroundClick(false);
 	_layer->move(0, 0);
 	_body->sizeValue(
@@ -288,24 +242,16 @@ void SeparatePanel::ensureLayerCreated() {
 		_layer->resize(size);
 	}, _layer->lifetime());
 	_layer->hideFinishEvents(
-	) | rpl::filter([=] {
-		return _layer != nullptr; // Last hide finish is sent from destructor.
-	}) | rpl::start_with_next([=] {
-		destroyLayer();
+	) | rpl::start_with_next([=, pointer = _layer.data()]{
+		if (_layer != pointer) {
+			return;
+		}
+		auto saved = std::exchange(_layer, nullptr);
+		if (Ui::InFocusChain(saved)) {
+			setFocus();
+		}
+		saved.destroyDelayed();
 	}, _layer->lifetime());
-}
-
-void SeparatePanel::destroyLayer() {
-	if (!_layer) {
-		return;
-	}
-
-	auto layer = base::take(_layer);
-	const auto resetFocus = Ui::InFocusChain(layer);
-	if (resetFocus) {
-		setFocus();
-	}
-	layer = nullptr;
 }
 
 void SeparatePanel::showInner(base::unique_qptr<Ui::RpWidget> inner) {
@@ -331,7 +277,7 @@ void SeparatePanel::focusInEvent(QFocusEvent *e) {
 	crl::on_main(this, [=] {
 		if (_layer) {
 			_layer->setInnerFocus();
-		} else if (_inner && !_inner->isHidden()) {
+		} else if (!_inner->isHidden()) {
 			_inner->setFocus();
 		}
 	});
@@ -348,8 +294,8 @@ void SeparatePanel::setInnerSize(QSize size) {
 }
 
 void SeparatePanel::initGeometry(QSize size) {
-	const auto center = Core::App().getPointForCallPanelCenter();
-	_useTransparency = Ui::Platform::TranslucentWindowsSupported(center);
+	const auto center = Messenger::Instance().getPointForCallPanelCenter();
+	_useTransparency = Platform::TranslucentWindowsSupported(center);
 	_padding = _useTransparency
 		? st::callShadow.extend
 		: style::margins(
@@ -358,25 +304,19 @@ void SeparatePanel::initGeometry(QSize size) {
 			st::lineWidth,
 			st::lineWidth);
 	setAttribute(Qt::WA_OpaquePaintEvent, !_useTransparency);
-	const auto rect = [&] {
-		const QRect initRect(QPoint(), size);
-		return initRect.translated(center - initRect.center()).marginsAdded(_padding);
-	}();
-	setGeometry(rect);
-	setMinimumSize(rect.size());
-	setMaximumSize(rect.size());
+	const auto screen = QApplication::desktop()->screenGeometry(center);
+	const auto rect = QRect(QPoint(), size);
+	setGeometry(
+		rect.translated(center - rect.center()).marginsAdded(_padding));
 	updateControlsGeometry();
 }
 
 void SeparatePanel::updateGeometry(QSize size) {
-	const auto rect = QRect(
+	setGeometry(
 		x(),
 		y(),
 		_padding.left() + size.width() + _padding.right(),
 		_padding.top() + size.height() + _padding.bottom());
-	setGeometry(rect);
-	setMinimumSize(rect.size());
-	setMaximumSize(rect.size());
 	updateControlsGeometry();
 	update();
 }
@@ -397,11 +337,14 @@ void SeparatePanel::updateControlsGeometry() {
 void SeparatePanel::paintEvent(QPaintEvent *e) {
 	Painter p(this);
 	if (!_animationCache.isNull()) {
-		auto opacity = _opacityAnimation.value(_visible ? 1. : 0.);
+		auto opacity = _opacityAnimation.current(
+			getms(),
+			_visible ? 1. : 0.);
 		if (!_opacityAnimation.animating()) {
 			finishAnimating();
 			if (isHidden()) return;
 		} else {
+			Platform::StartTranslucentPaint(p, e);
 			p.setOpacity(opacity);
 
 			PainterHighQualityEnabler hq(p);
@@ -422,6 +365,7 @@ void SeparatePanel::paintEvent(QPaintEvent *e) {
 	}
 
 	if (_useTransparency) {
+		Platform::StartTranslucentPaint(p, e);
 		paintShadowBorder(p);
 	} else {
 		paintOpaqueBorder(p);
@@ -541,8 +485,7 @@ void SeparatePanel::paintOpaqueBorder(Painter &p) const {
 }
 
 void SeparatePanel::closeEvent(QCloseEvent *e) {
-	e->ignore();
-	_userCloseRequests.fire({});
+	// #TODO passport
 }
 
 void SeparatePanel::mousePressEvent(QMouseEvent *e) {
@@ -553,25 +496,10 @@ void SeparatePanel::mousePressEvent(QMouseEvent *e) {
 		st::separatePanelTitleHeight);
 	if (e->button() == Qt::LeftButton) {
 		if (dragArea.contains(e->pos())) {
-			const auto dragViaSystem = [&] {
-				if (::Platform::StartSystemMove(windowHandle())) {
-					return true;
-				}
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0) || defined DESKTOP_APP_QT_PATCHED
-				if (windowHandle()->startSystemMove()) {
-					return true;
-				}
-#endif // Qt >= 5.15 || DESKTOP_APP_QT_PATCHED
-				return false;
-			}();
-			if (!dragViaSystem) {
-				_dragging = true;
-				_dragStartMousePosition = e->globalPos();
-				_dragStartMyPosition = QPoint(x(), y());
-			}
-		} else if (!rect().contains(e->pos()) && _hideOnDeactivate) {
-			LOG(("Export Info: Panel Hide On Click."));
-			hideGetDuration();
+			_dragging = true;
+			_dragStartMousePosition = e->globalPos();
+			_dragStartMyPosition = QPoint(x(), y());
+		} else if (!rect().contains(e->pos())) {
 		}
 	}
 }
@@ -588,7 +516,7 @@ void SeparatePanel::mouseMoveEvent(QMouseEvent *e) {
 }
 
 void SeparatePanel::mouseReleaseEvent(QMouseEvent *e) {
-	if (e->button() == Qt::LeftButton && _dragging) {
+	if (e->button() == Qt::LeftButton) {
 		_dragging = false;
 	}
 }

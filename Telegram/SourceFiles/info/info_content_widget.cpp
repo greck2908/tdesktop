@@ -10,7 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <rpl/never.h>
 #include <rpl/combine.h>
 #include <rpl/range.h>
-#include "window/window_session_controller.h"
+#include "window/window_controller.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/input_fields.h"
 #include "ui/wrap/padding_wrap.h"
@@ -23,12 +23,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_section_widget.h"
 #include "info/info_controller.h"
 #include "boxes/peer_list_box.h"
-#include "data/data_session.h"
-#include "main/main_session.h"
 #include "styles/style_info.h"
 #include "styles/style_profile.h"
-
-#include <QtCore/QCoreApplication>
 
 namespace Info {
 
@@ -94,7 +90,7 @@ void ContentWidget::updateControlsGeometry() {
 	}
 }
 
-std::shared_ptr<ContentMemento> ContentWidget::createMemento() {
+std::unique_ptr<ContentMemento> ContentWidget::createMemento() {
 	auto result = doCreateMemento();
 	_controller->saveSearchState(result.get());
 	return result;
@@ -115,7 +111,7 @@ void ContentWidget::setGeometryWithTopMoved(
 	}
 	if (!willBeResized) {
 		QResizeEvent fake(size(), size());
-		QCoreApplication::sendEvent(this, &fake);
+		QApplication::sendEvent(this, &fake);
 	}
 	_topDelta = 0;
 }
@@ -131,16 +127,15 @@ Ui::RpWidget *ContentWidget::doSetInnerWidget(
 			_innerWrap ? _innerWrap->padding() : style::margins()));
 	_innerWrap->move(0, 0);
 
-	// MSVC BUG + REGRESSION rpl::mappers::tuple :(
 	rpl::combine(
 		_scroll->scrollTopValue(),
 		_scroll->heightValue(),
-		_innerWrap->entity()->desiredHeightValue()
+		_innerWrap->entity()->desiredHeightValue(),
+		tuple(_1, _1 + _2, _3)
 	) | rpl::start_with_next([this](
 			int top,
-			int height,
+			int bottom,
 			int desired) {
-		const auto bottom = top + height;
 		_innerDesiredHeight = desired;
 		_innerWrap->setVisibleTopBottom(top, bottom);
 		_scrollTillBottomChanges.fire_copy(std::max(desired - bottom, 0));
@@ -162,6 +157,10 @@ rpl::producer<int> ContentWidget::scrollTillBottomChanges() const {
 
 void ContentWidget::setScrollTopSkip(int scrollTopSkip) {
 	_scrollTopSkip = scrollTopSkip;
+}
+
+rpl::producer<Section> ContentWidget::sectionRequest() const {
+	return rpl::never<Section>();
 }
 
 rpl::producer<int> ContentWidget::scrollHeightValue() const {
@@ -214,24 +213,16 @@ void ContentWidget::scrollTo(const Ui::ScrollToRequest &request) {
 	_scroll->scrollTo(request);
 }
 
-bool ContentWidget::floatPlayerHandleWheelEvent(QEvent *e) {
+bool ContentWidget::wheelEventFromFloatPlayer(QEvent *e) {
 	return _scroll->viewportEvent(e);
 }
 
-QRect ContentWidget::floatPlayerAvailableRect() const {
+QRect ContentWidget::rectForFloatPlayer() const {
 	return mapToGlobal(_scroll->geometry());
 }
 
 rpl::producer<SelectedItems> ContentWidget::selectedListValue() const {
 	return rpl::single(SelectedItems(Storage::SharedMediaType::Photo));
-}
-
-rpl::producer<bool> ContentWidget::canSaveChanges() const {
-	return rpl::single(false);
-}
-
-void ContentWidget::saveChanges(FnMut<void()> done) {
-	done();
 }
 
 void ContentWidget::refreshSearchField(bool shown) {
@@ -259,22 +250,6 @@ void ContentWidget::refreshSearchField(bool shown) {
 		_searchWrap = nullptr;
 		setScrollTopSkip(0);
 	}
-}
-
-Key ContentMemento::key() const {
-	if (const auto peer = this->peer()) {
-		return Key(peer);
-	//} else if (const auto feed = this->feed()) { // #feed
-	//	return Key(feed);
-	} else if (const auto poll = this->poll()) {
-		return Key(poll, pollContextId());
-	} else {
-		return Settings::Tag{ settingsSelf() };
-	}
-}
-
-ContentMemento::ContentMemento(Settings::Tag settings)
-: _settingsSelf(settings.self.get()) {
 }
 
 } // namespace Info

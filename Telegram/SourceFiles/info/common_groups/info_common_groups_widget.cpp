@@ -11,34 +11,25 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_controller.h"
 #include "ui/search_field_controller.h"
 #include "ui/widgets/scroll_area.h"
-#include "ui/ui_utility.h"
-#include "data/data_user.h"
-#include "data/data_session.h"
-#include "main/main_session.h"
 #include "styles/style_info.h"
 
 namespace Info {
 namespace CommonGroups {
 
-Memento::Memento(not_null<UserData*> user)
-: ContentMemento(user, 0) {
-}
-
 Section Memento::section() const {
 	return Section(Section::Type::CommonGroups);
-}
-
-not_null<UserData*> Memento::user() const {
-	return peer()->asUser();
 }
 
 object_ptr<ContentWidget> Memento::createWidget(
 		QWidget *parent,
 		not_null<Controller*> controller,
 		const QRect &geometry) {
-	auto result = object_ptr<Widget>(parent, controller, user());
+	auto result = object_ptr<Widget>(
+		parent,
+		controller,
+		App::user(userId()));
 	result->setInternalState(geometry, this);
-	return result;
+	return std::move(result);
 }
 
 void Memento::setListState(std::unique_ptr<PeerListState> state) {
@@ -71,7 +62,7 @@ bool Widget::showInternal(not_null<ContentMemento*> memento) {
 		return false;
 	}
 	if (auto groupsMemento = dynamic_cast<Memento*>(memento.get())) {
-		if (groupsMemento->user() == user()) {
+		if (groupsMemento->userId() == user()->bareId()) {
 			restoreState(groupsMemento);
 			return true;
 		}
@@ -87,10 +78,10 @@ void Widget::setInternalState(
 	restoreState(memento);
 }
 
-std::shared_ptr<ContentMemento> Widget::doCreateMemento() {
-	auto result = std::make_shared<Memento>(user());
+std::unique_ptr<ContentMemento> Widget::doCreateMemento() {
+	auto result = std::make_unique<Memento>(user()->bareId());
 	saveState(result.get());
-	return result;
+	return std::move(result);
 }
 
 void Widget::saveState(not_null<Memento*> memento) {

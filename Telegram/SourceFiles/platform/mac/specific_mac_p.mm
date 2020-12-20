@@ -9,24 +9,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "mainwindow.h"
 #include "mainwidget.h"
-#include "core/sandbox.h"
-#include "core/application.h"
-#include "core/core_settings.h"
-#include "core/crash_reports.h"
+#include "messenger.h"
 #include "storage/localstorage.h"
-#include "media/audio/media_audio.h"
 #include "media/player/media_player_instance.h"
-#include "base/platform/mac/base_utilities_mac.h"
-#include "base/platform/base_platform_info.h"
+#include "media/media_audio.h"
+#include "platform/mac/mac_utilities.h"
+#include "styles/style_window.h"
 #include "lang/lang_keys.h"
 #include "base/timer.h"
-#include "styles/style_window.h"
+#include "core/crash_reports.h"
 
-#include <QtGui/QWindow>
-#include <QtWidgets/QApplication>
-#if __has_include(<QtCore/QOperatingSystemVersion>)
-#include <QtCore/QOperatingSystemVersion>
-#endif // __has_include(<QtCore/QOperatingSystemVersion>)
 #include <Cocoa/Cocoa.h>
 #include <CoreFoundation/CFURL.h>
 #include <IOKit/IOKitLib.h>
@@ -40,6 +32,7 @@ constexpr auto kIgnoreActivationTimeoutMs = 500;
 } // namespace
 
 using Platform::Q2NSString;
+using Platform::NSlang;
 using Platform::NS2QString;
 
 @interface qVisualize : NSObject {
@@ -92,7 +85,6 @@ using Platform::NS2QString;
 - (BOOL) applicationShouldHandleReopen:(NSApplication *)theApplication hasVisibleWindows:(BOOL)flag;
 - (void) applicationDidFinishLaunching:(NSNotification *)aNotification;
 - (void) applicationDidBecomeActive:(NSNotification *)aNotification;
-- (void) applicationDidResignActive:(NSNotification *)aNotification;
 - (void) receiveWakeNote:(NSNotification*)note;
 
 - (void) setWatchingMediaKeys:(bool)watching;
@@ -126,12 +118,7 @@ ApplicationDelegate *_sharedDelegate = nil;
 	});
 #ifndef OS_MAC_STORE
 	if ([SPMediaKeyTap usesGlobalMediaKeyTap]) {
-		if (!Platform::IsMac10_14OrGreater()) {
-			_keyTap = [[SPMediaKeyTap alloc] initWithDelegate:self];
-		} else {
-			// In macOS Mojave it requires accessibility features.
-			LOG(("Media key monitoring disabled starting with Mojave."));
-		}
+		_keyTap = [[SPMediaKeyTap alloc] initWithDelegate:self];
 	} else {
 		LOG(("Media key monitoring disabled"));
 	}
@@ -139,34 +126,25 @@ ApplicationDelegate *_sharedDelegate = nil;
 }
 
 - (void) applicationDidBecomeActive:(NSNotification *)aNotification {
-	Core::Sandbox::Instance().customEnterFromEventLoop([&] {
-		if (Core::IsAppLaunched() && !_ignoreActivation) {
-			Core::App().handleAppActivated();
+	if (auto messenger = Messenger::InstancePointer()) {
+		if (!_ignoreActivation) {
+			messenger->handleAppActivated();
 			if (auto window = App::wnd()) {
 				if (window->isHidden()) {
 					window->showFromTray();
 				}
 			}
 		}
-	});
-}
-
-- (void) applicationDidResignActive:(NSNotification *)aNotification {
+	}
 }
 
 - (void) receiveWakeNote:(NSNotification*)aNotification {
-	if (!Core::IsAppLaunched()) {
-		return;
+	if (auto messenger = Messenger::InstancePointer()) {
+		messenger->checkLocalTime();
 	}
-	Core::Sandbox::Instance().customEnterFromEventLoop([&] {
-		Core::App().checkLocalTime();
 
-		LOG(("Audio Info: "
-			"-receiveWakeNote: received, scheduling detach from audio device"));
-		Media::Audio::ScheduleDetachFromDeviceSafe();
-
-		Core::App().settings().setSystemDarkMode(Platform::IsDarkMode());
-	});
+	LOG(("Audio Info: -receiveWakeNote: received, scheduling detach from audio device"));
+	Media::Audio::ScheduleDetachFromDeviceSafe();
 }
 
 - (void) setWatchingMediaKeys:(bool)watching {
@@ -189,11 +167,9 @@ ApplicationDelegate *_sharedDelegate = nil;
 }
 
 - (void) mediaKeyTap:(SPMediaKeyTap*)keyTap receivedMediaKeyEvent:(NSEvent*)e {
-	Core::Sandbox::Instance().customEnterFromEventLoop([&] {
-		if (e && [e type] == NSSystemDefined && [e subtype] == SPSystemDefinedEventMediaKeys) {
-			objc_handleMediaKeyEvent(e);
-		}
-	});
+	if (e && [e type] == NSSystemDefined && [e subtype] == SPSystemDefinedEventMediaKeys) {
+		objc_handleMediaKeyEvent(e);
+	}
 }
 
 - (void) ignoreApplicationActivationRightNow {
@@ -211,17 +187,74 @@ void SetWatchingMediaKeys(bool watching) {
 	}
 }
 
-void SetApplicationIcon(const QIcon &icon) {
-	NSImage *image = nil;
-	if (!icon.isNull()) {
-		auto pixmap = icon.pixmap(1024, 1024);
-		pixmap.setDevicePixelRatio(cRetinaFactor());
-		image = Q2NSImage(pixmap.toImage());
-	}
-	[[NSApplication sharedApplication] setApplicationIconImage:image];
+void InitOnTopPanel(QWidget *panel) {
+	Expects(!panel->windowHandle());
+
+	// Force creating windowHandle() without creating the platform window yet.
+	panel->setAttribute(Qt::WA_NativeWindow, true);
+	panel->windowHandle()->setProperty("_td_macNonactivatingPanelMask", QVariant(true));
+	panel->setAttribute(Qt::WA_NativeWindow, false);
+
+	panel->createWinId();
+
+	auto platformWindow = [reinterpret_cast<NSView*>(panel->winId()) window];
+	Assert([platformWindow isKindOfClass:[NSPanel class]]);
+
+	auto platformPanel = static_cast<NSPanel*>(platformWindow);
+	[platformPanel setLevel:NSPopUpMenuWindowLevel];
+	[platformPanel setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces|NSWindowCollectionBehaviorStationary|NSWindowCollectionBehaviorFullScreenAuxiliary|NSWindowCollectionBehaviorIgnoresCycle];
+	[platformPanel setFloatingPanel:YES];
+	[platformPanel setHidesOnDeactivate:NO];
+
+	objc_ignoreApplicationActivationRightNow();
+}
+
+void DeInitOnTopPanel(QWidget *panel) {
+	auto platformWindow = [reinterpret_cast<NSView*>(panel->winId()) window];
+	Assert([platformWindow isKindOfClass:[NSPanel class]]);
+
+	auto platformPanel = static_cast<NSPanel*>(platformWindow);
+	auto newBehavior = ([platformPanel collectionBehavior] & (~NSWindowCollectionBehaviorCanJoinAllSpaces)) | NSWindowCollectionBehaviorMoveToActiveSpace;
+	[platformPanel setCollectionBehavior:newBehavior];
+}
+
+void ReInitOnTopPanel(QWidget *panel) {
+	auto platformWindow = [reinterpret_cast<NSView*>(panel->winId()) window];
+	Assert([platformWindow isKindOfClass:[NSPanel class]]);
+
+	auto platformPanel = static_cast<NSPanel*>(platformWindow);
+	auto newBehavior = ([platformPanel collectionBehavior] & (~NSWindowCollectionBehaviorMoveToActiveSpace)) | NSWindowCollectionBehaviorCanJoinAllSpaces;
+	[platformPanel setCollectionBehavior:newBehavior];
 }
 
 } // namespace Platform
+
+bool objc_darkMode() {
+	bool result = false;
+	@autoreleasepool {
+
+	NSDictionary *dict = [[NSUserDefaults standardUserDefaults] persistentDomainForName:NSGlobalDomain];
+	id style = [dict objectForKey:Q2NSString(strStyleOfInterface())];
+	BOOL darkModeOn = (style && [style isKindOfClass:[NSString class]] && NSOrderedSame == [style caseInsensitiveCompare:@"dark"]);
+	result = darkModeOn ? true : false;
+
+	}
+	return result;
+}
+
+void objc_showOverAll(WId winId, bool canFocus) {
+	NSWindow *wnd = [reinterpret_cast<NSView *>(winId) window];
+	[wnd setLevel:NSPopUpMenuWindowLevel];
+	if (!canFocus) {
+		[wnd setStyleMask:NSUtilityWindowMask | NSNonactivatingPanelMask];
+		[wnd setCollectionBehavior:NSWindowCollectionBehaviorMoveToActiveSpace|NSWindowCollectionBehaviorStationary|NSWindowCollectionBehaviorFullScreenAuxiliary|NSWindowCollectionBehaviorIgnoresCycle];
+	}
+}
+
+void objc_bringToBack(WId winId) {
+	NSWindow *wnd = [reinterpret_cast<NSView *>(winId) window];
+	[wnd setLevel:NSModalPanelWindowLevel];
+}
 
 bool objc_handleMediaKeyEvent(void *ev) {
 	auto e = reinterpret_cast<NSEvent*>(ev);
@@ -276,18 +309,65 @@ void objc_outputDebugString(const QString &str) {
 	}
 }
 
-void objc_start() {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 9, 0)
-	// Patch: Fix macOS regression. On 10.14.4, it crashes on GPU switches.
-	// See https://bugreports.qt.io/browse/QTCREATORBUG-22215
-	const auto version = QOperatingSystemVersion::current();
-	if (version.majorVersion() == 10
-		&& version.minorVersion() == 14
-		&& version.microVersion() == 4) {
-		qputenv("QT_MAC_PRO_WEBENGINE_WORKAROUND", "1");
-	}
-#endif // Qt 5.9.0
+bool objc_idleSupported() {
+	auto idleTime = 0LL;
+	return objc_idleTime(idleTime);
+}
 
+bool objc_idleTime(TimeMs &idleTime) { // taken from https://github.com/trueinteractions/tint/issues/53
+	CFMutableDictionaryRef properties = 0;
+	CFTypeRef obj;
+	mach_port_t masterPort;
+	io_iterator_t iter;
+	io_registry_entry_t curObj;
+
+	IOMasterPort(MACH_PORT_NULL, &masterPort);
+
+	/* Get IOHIDSystem */
+	IOServiceGetMatchingServices(masterPort, IOServiceMatching("IOHIDSystem"), &iter);
+	if (iter == 0) {
+		return false;
+	} else {
+		curObj = IOIteratorNext(iter);
+	}
+	if (IORegistryEntryCreateCFProperties(curObj, &properties, kCFAllocatorDefault, 0) == KERN_SUCCESS && properties != NULL) {
+		obj = CFDictionaryGetValue(properties, CFSTR("HIDIdleTime"));
+		CFRetain(obj);
+	} else {
+		return false;
+	}
+
+	uint64 err = ~0L, result = err;
+	if (obj) {
+		CFTypeID type = CFGetTypeID(obj);
+
+		if (type == CFDataGetTypeID()) {
+			CFDataGetBytes((CFDataRef) obj, CFRangeMake(0, sizeof(result)), (UInt8*)&result);
+		} else if (type == CFNumberGetTypeID()) {
+			CFNumberGetValue((CFNumberRef)obj, kCFNumberSInt64Type, &result);
+		} else {
+			// error
+		}
+
+		CFRelease(obj);
+
+		if (result != err) {
+			result /= 1000000; // return as ms
+		}
+	} else {
+		// error
+	}
+
+	CFRelease((CFTypeRef)properties);
+	IOObjectRelease(curObj);
+	IOObjectRelease(iter);
+	if (result == err) return false;
+
+	idleTime = static_cast<TimeMs>(result);
+	return true;
+}
+
+void objc_start() {
 	_sharedDelegate = [[ApplicationDelegate alloc] init];
 	[[NSApplication sharedApplication] setDelegate:_sharedDelegate];
 	[[[NSWorkspace sharedWorkspace] notificationCenter] addObserver: _sharedDelegate
@@ -345,6 +425,14 @@ bool objc_moveFile(const QString &from, const QString &to) {
 	return false;
 }
 
+void objc_deleteDir(const QString &dir) {
+	@autoreleasepool {
+
+	[[NSFileManager defaultManager] removeItemAtPath:Q2NSString(dir) error:nil];
+
+	}
+}
+
 double objc_appkitVersion() {
 	return NSAppKitVersionNumber;
 }
@@ -360,7 +448,15 @@ QString objc_documentsPath() {
 QString objc_appDataPath() {
 	NSURL *url = [[NSFileManager defaultManager] URLForDirectory:NSApplicationSupportDirectory inDomain:NSUserDomainMask appropriateForURL:nil create:YES error:nil];
 	if (url) {
-		return QString::fromUtf8([[url path] fileSystemRepresentation]) + '/' + AppName.utf16() + '/';
+		return QString::fromUtf8([[url path] fileSystemRepresentation]) + '/' + str_const_toString(AppName) + '/';
+	}
+	return QString();
+}
+
+QString objc_downloadPath() {
+	NSURL *url = [[NSFileManager defaultManager] URLForDirectory:NSDownloadsDirectory inDomain:NSUserDomainMask appropriateForURL:nil create:YES error:nil];
+	if (url) {
+		return QString::fromUtf8([[url path] fileSystemRepresentation]) + '/' + str_const_toString(AppName) + '/';
 	}
 	return QString();
 }
@@ -378,6 +474,19 @@ QByteArray objc_downloadPathBookmark(const QString &path) {
 #endif // OS_MAC_STORE
 }
 
+QByteArray objc_pathBookmark(const QString &path) {
+#ifndef OS_MAC_STORE
+	return QByteArray();
+#else // OS_MAC_STORE
+	NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.toUtf8().constData()]];
+	if (!url) return QByteArray();
+
+	NSError *error = nil;
+	NSData *data = [url bookmarkDataWithOptions:(NSURLBookmarkCreationWithSecurityScope | NSURLBookmarkCreationSecurityScopeAllowOnlyReadAccess) includingResourceValuesForKeys:nil relativeToURL:nil error:&error];
+	return data ? QByteArray::fromNSData(data) : QByteArray();
+#endif // OS_MAC_STORE
+}
+
 void objc_downloadPathEnableAccess(const QByteArray &bookmark) {
 #ifdef OS_MAC_STORE
 	if (bookmark.isEmpty()) return;
@@ -391,16 +500,114 @@ void objc_downloadPathEnableAccess(const QByteArray &bookmark) {
 		if (_downloadPathUrl) {
 			[_downloadPathUrl stopAccessingSecurityScopedResource];
 		}
-		_downloadPathUrl = [url retain];
+		_downloadPathUrl = url;
 
-		Core::App().settings().setDownloadPath(NS2QString([_downloadPathUrl path]) + '/');
+		Global::SetDownloadPath(NS2QString([_downloadPathUrl path]) + '/');
 		if (isStale) {
 			NSData *data = [_downloadPathUrl bookmarkDataWithOptions:NSURLBookmarkCreationWithSecurityScope includingResourceValuesForKeys:nil relativeToURL:nil error:&error];
 			if (data) {
-				Core::App().settings().setDownloadPathBookmark(QByteArray::fromNSData(data));
-				Local::writeSettings();
+				Global::SetDownloadPathBookmark(QByteArray::fromNSData(data));
+				Local::writeUserSettings();
 			}
 		}
+	}
+#endif // OS_MAC_STORE
+}
+
+#ifdef OS_MAC_STORE
+namespace {
+	QMutex _bookmarksMutex;
+}
+
+class objc_FileBookmark::objc_FileBookmarkData {
+public:
+	~objc_FileBookmarkData() {
+		if (url) [url release];
+	}
+	NSURL *url = nil;
+	QString name;
+	QByteArray bookmark;
+	int counter = 0;
+};
+#endif // OS_MAC_STORE
+
+objc_FileBookmark::objc_FileBookmark(const QByteArray &bookmark) {
+#ifdef OS_MAC_STORE
+	if (bookmark.isEmpty()) return;
+
+	BOOL isStale = NO;
+	NSError *error = nil;
+	NSURL *url = [NSURL URLByResolvingBookmarkData:bookmark.toNSData() options:NSURLBookmarkResolutionWithSecurityScope relativeToURL:nil bookmarkDataIsStale:&isStale error:&error];
+	if (!url) return;
+
+	if ([url startAccessingSecurityScopedResource]) {
+		data = new objc_FileBookmarkData();
+		data->url = [url retain];
+		data->name = NS2QString([url path]);
+		data->bookmark = bookmark;
+		[url stopAccessingSecurityScopedResource];
+	}
+#endif // OS_MAC_STORE
+}
+
+bool objc_FileBookmark::valid() const {
+	if (enable()) {
+		disable();
+		return true;
+	}
+	return false;
+}
+
+bool objc_FileBookmark::enable() const {
+#ifndef OS_MAC_STORE
+	return true;
+#else // OS_MAC_STORE
+	if (!data) return false;
+
+	QMutexLocker lock(&_bookmarksMutex);
+	if (data->counter > 0 || [data->url startAccessingSecurityScopedResource] == YES) {
+		++data->counter;
+		return true;
+	}
+	return false;
+#endif // OS_MAC_STORE
+}
+
+void objc_FileBookmark::disable() const {
+#ifdef OS_MAC_STORE
+	if (!data) return;
+
+	QMutexLocker lock(&_bookmarksMutex);
+	if (data->counter > 0) {
+		--data->counter;
+		if (!data->counter) {
+			[data->url stopAccessingSecurityScopedResource];
+		}
+	}
+#endif // OS_MAC_STORE
+}
+
+const QString &objc_FileBookmark::name(const QString &original) const {
+#ifndef OS_MAC_STORE
+	return original;
+#else // OS_MAC_STORE
+	return (data && !data->name.isEmpty()) ? data->name : original;
+#endif // OS_MAC_STORE
+}
+
+QByteArray objc_FileBookmark::bookmark() const {
+#ifndef OS_MAC_STORE
+	return QByteArray();
+#else // OS_MAC_STORE
+	return data ? data->bookmark : QByteArray();
+#endif // OS_MAC_STORE
+}
+
+objc_FileBookmark::~objc_FileBookmark() {
+#ifdef OS_MAC_STORE
+	if (data && data->counter > 0) {
+		LOG(("Did not disable() bookmark, counter: %1").arg(data->counter));
+		[data->url stopAccessingSecurityScopedResource];
 	}
 #endif // OS_MAC_STORE
 }

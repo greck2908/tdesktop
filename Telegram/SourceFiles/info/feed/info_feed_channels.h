@@ -33,7 +33,7 @@ namespace FeedProfile {
 class Memento;
 struct ChannelsState {
 	std::unique_ptr<PeerListState> list;
-	std::optional<QString> search;
+	base::optional<QString> search;
 };
 
 class Channels

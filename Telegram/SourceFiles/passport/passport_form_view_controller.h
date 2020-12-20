@@ -8,24 +8,22 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "passport/passport_form_controller.h"
-#include "base/object_ptr.h"
 
 namespace Passport {
 
 struct Scope {
 	enum class Type {
-		PersonalDetails,
 		Identity,
-		AddressDetails,
 		Address,
 		Phone,
 		Email,
 	};
-	explicit Scope(Type type);
+	Scope(Type type, not_null<const Value*> fields);
 
 	Type type;
-	const Value *details = nullptr;
+	not_null<const Value*> fields;
 	std::vector<not_null<const Value*>> documents;
+	bool selfieRequired = false;
 };
 
 struct ScopeRow {
@@ -35,9 +33,8 @@ struct ScopeRow {
 	QString error;
 };
 
-bool CanHaveErrors(Value::Type type);
-bool ValidateForm(const Form &form);
-std::vector<Scope> ComputeScopes(const Form &form);
+std::vector<Scope> ComputeScopes(
+	not_null<const FormController*> controller);
 QString ComputeScopeRowReadyString(const Scope &scope);
 ScopeRow ComputeScopeRow(const Scope &scope);
 
@@ -46,12 +43,11 @@ public:
 	virtual void showAskPassword() = 0;
 	virtual void showNoPassword() = 0;
 	virtual void showCriticalError(const QString &error) = 0;
-	virtual void showUpdateAppBox() = 0;
 	virtual void editScope(int index) = 0;
 
 	virtual void showBox(
-		object_ptr<Ui::BoxContent> box,
-		Ui::LayerOptions options,
+		object_ptr<BoxContent> box,
+		LayerOptions options,
 		anim::type animated) = 0;
 	virtual void showToast(const QString &text) = 0;
 	virtual void suggestReset(Fn<void()> callback) = 0;
@@ -64,7 +60,7 @@ public:
 	template <typename BoxType>
 	QPointer<BoxType> show(
 			object_ptr<BoxType> box,
-			Ui::LayerOptions options = Ui::LayerOption::KeepOther,
+			LayerOptions options = LayerOption::KeepOther,
 			anim::type animated = anim::type::normal) {
 		auto result = QPointer<BoxType>(box.data());
 		showBox(std::move(box), options, animated);

@@ -7,13 +7,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "ui/rp_widget.h"
-#include "base/object_ptr.h"
-
 #include <rpl/variable.h>
+#include "ui/rp_widget.h"
 
 namespace Window {
-class SessionController;
+class Controller;
 } // namespace Window
 
 namespace Ui {

@@ -9,34 +9,31 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "lang/lang_cloud_manager.h"
 #include "boxes/abstract_box.h"
-#include "base/binary_guard.h"
+#include "mtproto/sender.h"
 
 namespace Ui {
-class MultiSelect;
-struct ScrollToRequest;
+class RadiobuttonGroup;
+class Radiobutton;
 } // namespace Ui
 
-class LanguageBox : public Ui::BoxContent {
+class LanguageBox : public BoxContent, private MTP::Sender  {
 public:
 	LanguageBox(QWidget*) {
 	}
 
-	void setInnerFocus() override;
-
-	static base::binary_guard Show();
-
 protected:
 	void prepare() override;
-
-	void keyPressEvent(QKeyEvent *e) override;
 
 private:
 	using Languages = Lang::CloudManager::Languages;
 
-	not_null<Ui::MultiSelect*> createMultiSelect();
-	int rowsInPage() const;
+	void refresh();
+	void refreshLanguages();
+	void refreshLang();
 
-	Fn<void()> _setInnerFocus;
-	Fn<Ui::ScrollToRequest(int rows)> _jump;
+	Languages _languages;
+
+	class Inner;
+	QPointer<Inner> _inner;
 
 };

@@ -36,7 +36,7 @@ void FeedMessages::add(FeedMessagesAddSlice &&query) {
 	feedIt->second.addSlice(
 		std::move(query.messageIds),
 		query.noSkipRange,
-		std::nullopt);
+		base::none);
 }
 
 void FeedMessages::remove(FeedMessagesRemoveOne &&query) {

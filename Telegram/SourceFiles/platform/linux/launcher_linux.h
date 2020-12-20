@@ -16,7 +16,6 @@ public:
 	Launcher(int argc, char *argv[]);
 
 private:
-	void initHook() override;
 	bool launchUpdater(UpdaterLaunch action) override;
 
 };

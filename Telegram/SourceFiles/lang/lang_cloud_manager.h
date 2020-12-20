@@ -17,32 +17,30 @@ class Instance;
 namespace Lang {
 
 class Instance;
-enum class Pack;
-struct Language;
 
-Language ParseLanguage(const MTPLangPackLanguage &data);
-
-class CloudManager : public base::has_weak_ptr, private base::Subscriber {
+class CloudManager : public base::has_weak_ptr, private MTP::Sender, private base::Subscriber {
 public:
-	explicit CloudManager(Instance &langpack);
+	CloudManager(Instance &langpack, not_null<MTP::Instance*> mtproto);
 
-	using Languages = std::vector<Language>;
+	struct Language {
+		QString id;
+		QString name;
+		QString nativeName;
+	};
+	using Languages = QVector<Language>;
 
 	void requestLanguageList();
-	const Languages &languageList() const {
+	Languages languageList() const {
 		return _languages;
 	}
 	base::Observable<void> &languageListChanged() {
 		return _languagesChanged;
 	}
-	void requestLangPackDifference(const QString &langId);
+	void requestLangPackDifference();
 	void applyLangPackDifference(const MTPLangPackDifference &difference);
-	void setCurrentVersions(int version, int baseVersion);
 
 	void resetToDefault();
-	void switchWithWarning(const QString &id);
-	void switchToLanguage(const QString &id);
-	void switchToLanguage(const Language &data);
+	void switchToLanguage(QString id);
 	void switchToTestLanguage();
 	void setSuggestedLanguage(const QString &langCode);
 	QString suggestedLanguage() const {
@@ -53,34 +51,23 @@ public:
 	}
 
 private:
-	mtpRequestId &packRequestId(Pack pack);
-	mtpRequestId packRequestId(Pack pack) const;
-	Pack packTypeFromId(const QString &id) const;
-	void requestLangPackDifference(Pack pack);
 	bool canApplyWithoutRestart(const QString &id) const;
 	void performSwitchToCustom();
-	void performSwitch(const Language &data);
-	void performSwitchAndAddToRecent(const Language &data);
-	void performSwitchAndRestart(const Language &data);
-	void restartAfterSwitch();
+	void performSwitch(const QString &id);
+	void performSwitchAndRestart(const QString &id);
 	void offerSwitchLangPack();
 	bool showOfferSwitchBox();
-	Language findOfferedLanguage() const;
+	QString findOfferedLanguageName();
 
-	void requestLanguageAndSwitch(const QString &id, bool warning);
-	void applyLangPackData(Pack pack, const MTPDlangPackDifference &data);
-	void switchLangPackId(const Language &data);
-	void changeIdAndReInitConnection(const Language &data);
+	bool needToApplyLangPack(const QString &id);
+	void applyLangPackData(const MTPDlangPackDifference &data);
+	void switchLangPackId(const QString &id);
+	void changeIdAndReInitConnection(const QString &id);
 
-	void sendSwitchingToLanguageRequest();
-	void resendRequests();
-
-	std::optional<MTP::Sender> _api;
 	Instance &_langpack;
 	Languages _languages;
 	base::Observable<void> _languagesChanged;
 	mtpRequestId _langPackRequestId = 0;
-	mtpRequestId _langPackBaseRequestId = 0;
 	mtpRequestId _languagesRequestId = 0;
 
 	QString _offerSwitchToId;
@@ -91,14 +78,16 @@ private:
 	base::Observable<void> _firstLanguageSuggestion;
 
 	mtpRequestId _switchingToLanguageRequest = 0;
-	QString _switchingToLanguageId;
-	bool _switchingToLanguageWarning = false;
-
-	mtpRequestId _getKeysForSwitchRequestId = 0;
-
-	rpl::lifetime _lifetime;
 
 };
+
+inline bool operator==(const CloudManager::Language &a, const CloudManager::Language &b) {
+	return (a.id == b.id) && (a.name == b.name);
+}
+
+inline bool operator!=(const CloudManager::Language &a, const CloudManager::Language &b) {
+	return !(a == b);
+}
 
 CloudManager &CurrentCloudManager();
 

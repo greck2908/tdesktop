@@ -101,7 +101,7 @@ base::unique_qptr<Ui::InputField> SearchFieldController::createField(
 	auto result = base::make_unique_q<Ui::InputField>(
 		parent,
 		st,
-		tr::lng_dlg_filter(),
+		langFactory(lng_dlg_filter),
 		_query.current());
 	auto field = result.get();
 	field->connect(field, &Ui::InputField::changed, [=] {

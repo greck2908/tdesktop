@@ -8,14 +8,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "chat_helpers/tabbed_panel.h"
 
 #include "ui/widgets/shadow.h"
-#include "ui/image/image_prepare.h"
-#include "ui/ui_utility.h"
-#include "chat_helpers/tabbed_selector.h"
-#include "window/window_session_controller.h"
-#include "mainwindow.h"
-#include "core/application.h"
-#include "app.h"
 #include "styles/style_chat_helpers.h"
+#include "chat_helpers/tabbed_selector.h"
+#include "window/window_controller.h"
+#include "mainwindow.h"
+#include "messenger.h"
 
 namespace ChatHelpers {
 namespace {
@@ -27,49 +24,35 @@ constexpr auto kDelayedHideTimeoutMs = 3000;
 
 TabbedPanel::TabbedPanel(
 	QWidget *parent,
-	not_null<Window::SessionController*> controller,
-	not_null<TabbedSelector*> selector)
-: TabbedPanel(parent, controller, { nullptr }, selector) {
+	not_null<Window::Controller*> controller)
+: TabbedPanel(
+	parent,
+	controller,
+	object_ptr<TabbedSelector>(nullptr, controller)) {
 }
 
 TabbedPanel::TabbedPanel(
 	QWidget *parent,
-	not_null<Window::SessionController*> controller,
+	not_null<Window::Controller*> controller,
 	object_ptr<TabbedSelector> selector)
-: TabbedPanel(parent, controller, std::move(selector), nullptr) {
-}
-
-TabbedPanel::TabbedPanel(
-	QWidget *parent,
-	not_null<Window::SessionController*> controller,
-	object_ptr<TabbedSelector> ownedSelector,
-	TabbedSelector *nonOwnedSelector)
 : RpWidget(parent)
 , _controller(controller)
-, _ownedSelector(std::move(ownedSelector))
-, _selector(nonOwnedSelector ? nonOwnedSelector : _ownedSelector.data())
-, _heightRatio(st::emojiPanHeightRatio)
-, _minContentHeight(st::emojiPanMinHeight)
-, _maxContentHeight(st::emojiPanMaxHeight) {
-	Expects(_selector != nullptr);
-
+, _selector(std::move(selector)) {
 	_selector->setParent(this);
-	_selector->setRoundRadius(st::roundRadiusSmall);
-	_selector->setAfterShownCallback([=](SelectorTab tab) {
-		if (tab == SelectorTab::Gifs || tab == SelectorTab::Stickers) {
-			_controller->enableGifPauseReason(
-				Window::GifPauseReason::SavedGifs);
+	_selector->setRoundRadius(st::buttonRadius);
+	_selector->setAfterShownCallback([this](SelectorTab tab) {
+		if (tab == SelectorTab::Gifs) {
+			_controller->enableGifPauseReason(Window::GifPauseReason::SavedGifs);
 		}
 	});
-	_selector->setBeforeHidingCallback([=](SelectorTab tab) {
-		if (tab == SelectorTab::Gifs || tab == SelectorTab::Stickers) {
-			_controller->disableGifPauseReason(
-				Window::GifPauseReason::SavedGifs);
+	_selector->setBeforeHidingCallback([this](SelectorTab tab) {
+		if (tab == SelectorTab::Gifs) {
+			_controller->disableGifPauseReason(Window::GifPauseReason::SavedGifs);
 		}
 	});
 	_selector->showRequests(
-	) | rpl::start_with_next([=] {
-		showFromSelector();
+	) | rpl::start_with_next([this] {
+		this->showFromSelector();
 	}, lifetime());
 
 	resize(QRect(0, 0, st::emojiPanWidth, st::emojiPanMaxHeight).marginsAdded(innerPadding()).size());
@@ -82,79 +65,45 @@ TabbedPanel::TabbedPanel(
 
 	_hideTimer.setCallback([this] { hideByTimerOrLeave(); });
 
-	_selector->checkForHide(
-	) | rpl::start_with_next([=] {
+	connect(_selector, &TabbedSelector::checkForHide, this, [this] {
 		if (!rect().contains(mapFromGlobal(QCursor::pos()))) {
 			_hideTimer.callOnce(kDelayedHideTimeoutMs);
 		}
-	}, lifetime());
-
-	_selector->cancelled(
-	) | rpl::start_with_next([=] {
+	});
+	connect(_selector, &TabbedSelector::cancelled, this, [this] {
 		hideAnimated();
-	}, lifetime());
-
-	_selector->slideFinished(
-	) | rpl::start_with_next([=] {
-		InvokeQueued(this, [=] {
+	});
+	connect(_selector, &TabbedSelector::slideFinished, this, [this] {
+		InvokeQueued(this, [this] {
 			if (_hideAfterSlide) {
 				startOpacityAnimation(true);
 			}
 		});
-	}, lifetime());
+	});
 
-	macWindowDeactivateEvents(
-	) | rpl::filter([=] {
-		return !isHidden() && !preventAutoHide();
-	}) | rpl::start_with_next([=] {
-		hideAnimated();
-	}, lifetime());
-
+	if (cPlatform() == dbipMac || cPlatform() == dbipMacOld) {
+		connect(App::wnd()->windowHandle(), SIGNAL(activeChanged()), this, SLOT(onWndActiveChanged()));
+	}
 	setAttribute(Qt::WA_OpaquePaintEvent, false);
 
 	hideChildren();
-	hide();
 }
 
-not_null<TabbedSelector*> TabbedPanel::selector() const {
-	return _selector;
-}
-
-bool TabbedPanel::isSelectorStolen() const {
-	return (_selector->parent() != this);
-}
-
-void TabbedPanel::moveBottomRight(int bottom, int right) {
-	const auto isNew = (_bottom != bottom || _right != right);
+void TabbedPanel::moveBottom(int bottom) {
 	_bottom = bottom;
-	_right = right;
-	// If the panel is already shown, update the position.
-	if (!isHidden() && isNew) {
-		moveByBottom();
-	} else {
-		updateContentHeight();
-	}
-}
-
-void TabbedPanel::setDesiredHeightValues(
-		float64 ratio,
-		int minHeight,
-		int maxHeight) {
-	_heightRatio = ratio;
-	_minContentHeight = minHeight;
-	_maxContentHeight = maxHeight;
 	updateContentHeight();
 }
 
 void TabbedPanel::updateContentHeight() {
+	if (isDestroying()) {
+		return;
+	}
+
 	auto addedHeight = innerPadding().top() + innerPadding().bottom();
 	auto marginsHeight = _selector->marginTop() + _selector->marginBottom();
 	auto availableHeight = _bottom - marginsHeight;
-	auto wantedContentHeight = qRound(_heightRatio * availableHeight) - addedHeight;
-	auto contentHeight = marginsHeight + snap(
-		wantedContentHeight,
-		_minContentHeight,
-		_maxContentHeight);
+	auto wantedContentHeight = qRound(st::emojiPanHeightRatio * availableHeight) - addedHeight;
+	auto contentHeight = marginsHeight + snap(wantedContentHeight, st::emojiPanMinHeight, st::emojiPanMaxHeight);
 	auto resultTop = _bottom - addedHeight - contentHeight;
 	if (contentHeight == _contentHeight) {
 		move(x(), resultTop);
@@ -172,16 +121,24 @@ void TabbedPanel::updateContentHeight() {
 	update();
 }
 
+void TabbedPanel::onWndActiveChanged() {
+	if (!App::wnd()->windowHandle()->isActive() && !isHidden() && !preventAutoHide()) {
+		hideAnimated();
+	}
+}
+
 void TabbedPanel::paintEvent(QPaintEvent *e) {
 	Painter p(this);
 
-	// This call can finish _a_show animation and destroy _showAnimation.
-	auto opacityAnimating = _a_opacity.animating();
+	auto ms = getms();
 
-	auto showAnimating = _a_show.animating();
+	// This call can finish _a_show animation and destroy _showAnimation.
+	auto opacityAnimating = _a_opacity.animating(ms);
+
+	auto showAnimating = _a_show.animating(ms);
 	if (_showAnimation && !showAnimating) {
 		_showAnimation.reset();
-		if (!opacityAnimating) {
+		if (!opacityAnimating && !isDestroying()) {
 			showChildren();
 			_selector->afterShown();
 		}
@@ -189,11 +146,11 @@ void TabbedPanel::paintEvent(QPaintEvent *e) {
 
 	if (showAnimating) {
 		Assert(_showAnimation != nullptr);
-		if (auto opacity = _a_opacity.value(_hiding ? 0. : 1.)) {
-			_showAnimation->paintFrame(p, 0, 0, width(), _a_show.value(1.), opacity);
+		if (auto opacity = _a_opacity.current(_hiding ? 0. : 1.)) {
+			_showAnimation->paintFrame(p, 0, 0, width(), _a_show.current(1.), opacity);
 		}
 	} else if (opacityAnimating) {
-		p.setOpacity(_a_opacity.value(_hiding ? 0. : 1.));
+		p.setOpacity(_a_opacity.current(_hiding ? 0. : 1.));
 		p.drawPixmap(0, 0, _cache);
 	} else if (_hiding || isHidden()) {
 		hideFinished();
@@ -204,26 +161,29 @@ void TabbedPanel::paintEvent(QPaintEvent *e) {
 }
 
 void TabbedPanel::moveByBottom() {
-	const auto right = std::max(parentWidget()->width() - _right, 0);
-	moveToRight(right, y());
+	moveToRight(0, y());
 	updateContentHeight();
 }
 
 void TabbedPanel::enterEventHook(QEvent *e) {
-	Core::App().registerLeaveSubscription(this);
+	Messenger::Instance().registerLeaveSubscription(this);
 	showAnimated();
 }
 
 bool TabbedPanel::preventAutoHide() const {
+	if (isDestroying()) {
+		return false;
+	}
 	return _selector->preventAutoHide();
 }
 
 void TabbedPanel::leaveEventHook(QEvent *e) {
-	Core::App().unregisterLeaveSubscription(this);
+	Messenger::Instance().unregisterLeaveSubscription(this);
 	if (preventAutoHide()) {
 		return;
 	}
-	if (_a_show.animating() || _a_opacity.animating()) {
+	auto ms = getms();
+	if (_a_show.animating(ms) || _a_opacity.animating(ms)) {
 		hideAnimated();
 	} else {
 		_hideTimer.callOnce(kHideTimeoutMs);
@@ -240,7 +200,8 @@ void TabbedPanel::otherLeave() {
 		return;
 	}
 
-	if (_a_opacity.animating()) {
+	auto ms = getms();
+	if (_a_opacity.animating(ms)) {
 		hideByTimerOrLeave();
 	} else {
 		_hideTimer.callOnce(0);
@@ -250,19 +211,16 @@ void TabbedPanel::otherLeave() {
 void TabbedPanel::hideFast() {
 	if (isHidden()) return;
 
-	if (_selector && !_selector->isHidden()) {
-		_selector->beforeHiding();
-	}
 	_hideTimer.cancel();
 	_hiding = false;
-	_a_opacity.stop();
+	_a_opacity.finish();
 	hideFinished();
 }
 
 void TabbedPanel::opacityAnimationCallback() {
 	update();
 	if (!_a_opacity.animating()) {
-		if (_hiding) {
+		if (_hiding || isDestroying()) {
 			_hiding = false;
 			hideFinished();
 		} else if (!_a_show.animating()) {
@@ -278,22 +236,15 @@ void TabbedPanel::hideByTimerOrLeave() {
 	hideAnimated();
 }
 
-void TabbedPanel::prepareCacheFor(bool hiding) {
-	if (_a_opacity.animating()) {
-		_hiding = hiding;
-		return;
-	}
+void TabbedPanel::prepareCache() {
+	if (_a_opacity.animating()) return;
 
 	auto showAnimation = base::take(_a_show);
 	auto showAnimationData = base::take(_showAnimation);
-	_hiding = false;
 	showChildren();
-
 	_cache = Ui::GrabWidget(this);
-
-	_a_show = base::take(showAnimation);
 	_showAnimation = base::take(showAnimationData);
-	_hiding = hiding;
+	_a_show = base::take(showAnimation);
 	if (_a_show.animating()) {
 		hideChildren();
 	}
@@ -303,13 +254,11 @@ void TabbedPanel::startOpacityAnimation(bool hiding) {
 	if (_selector && !_selector->isHidden()) {
 		_selector->beforeHiding();
 	}
-	prepareCacheFor(hiding);
+	_hiding = false;
+	prepareCache();
+	_hiding = hiding;
 	hideChildren();
-	_a_opacity.start(
-		[=] { opacityAnimationCallback(); },
-		_hiding ? 1. : 0.,
-		_hiding ? 0. : 1.,
-		st::emojiPanDuration);
+	_a_opacity.start([this] { opacityAnimationCallback(); }, _hiding ? 1. : 0., _hiding ? 0. : 1., st::emojiPanDuration);
 }
 
 void TabbedPanel::startShowAnimation() {
@@ -319,7 +268,8 @@ void TabbedPanel::startShowAnimation() {
 		_showAnimation = std::make_unique<Ui::PanelAnimation>(st::emojiPanAnimation, Ui::PanelAnimation::Origin::BottomRight);
 		auto inner = rect().marginsRemoved(st::emojiPanMargins);
 		_showAnimation->setFinalImage(std::move(image), QRect(inner.topLeft() * cIntRetinaFactor(), inner.size() * cIntRetinaFactor()));
-		_showAnimation->setCornerMasks(Images::CornersMask(ImageRoundRadius::Small));
+		auto corners = App::cornersMask(ImageRoundRadius::Small);
+		_showAnimation->setCornerMasks(corners[0], corners[1], corners[2], corners[3]);
 		_showAnimation->start();
 	}
 	hideChildren();
@@ -335,14 +285,11 @@ QImage TabbedPanel::grabForAnimation() {
 	showChildren();
 	Ui::SendPendingMoveResizeEvents(this);
 
-	auto result = QImage(
-		size() * cIntRetinaFactor(),
-		QImage::Format_ARGB32_Premultiplied);
+	auto result = QImage(size() * cIntRetinaFactor(), QImage::Format_ARGB32_Premultiplied);
 	result.setDevicePixelRatio(cRetinaFactor());
 	result.fill(Qt::transparent);
 	if (_selector) {
-		QPainter p(&result);
-		Ui::RenderWidget(p, _selector, _selector->pos());
+		_selector->render(&result, _selector->geometry().topLeft());
 	}
 
 	_a_show = base::take(showAnimation);
@@ -359,18 +306,17 @@ void TabbedPanel::hideAnimated() {
 	}
 
 	_hideTimer.cancel();
-	if (_selector->isSliding()) {
+	if (!isDestroying() && _selector->isSliding()) {
 		_hideAfterSlide = true;
 	} else {
 		startOpacityAnimation(true);
 	}
-
-	// There is no reason to worry about the message scheduling box
-	// while it moves the user to the separate scheduled section.
-	_shouldFinishHide = _selector->hasMenu();
 }
 
 void TabbedPanel::toggleAnimated() {
+	if (isDestroying()) {
+		return;
+	}
 	if (isHidden() || _hiding || _hideAfterSlide) {
 		showAnimated();
 	} else {
@@ -378,14 +324,28 @@ void TabbedPanel::toggleAnimated() {
 	}
 }
 
+object_ptr<TabbedSelector> TabbedPanel::takeSelector() {
+	if (!isHidden() && !_hiding) {
+		startOpacityAnimation(true);
+	}
+	return std::move(_selector);
+}
+
+QPointer<TabbedSelector> TabbedPanel::getSelector() const {
+	return _selector.data();
+}
+
 void TabbedPanel::hideFinished() {
 	hide();
-	_a_show.stop();
+	_a_show.finish();
 	_showAnimation.reset();
 	_cache = QPixmap();
 	_hiding = false;
-	_shouldFinishHide = false;
-	_selector->hideFinished();
+	if (isDestroying()) {
+		deleteLater();
+	} else {
+		_selector->hideFinished();
+	}
 }
 
 void TabbedPanel::showAnimated() {
@@ -395,13 +355,12 @@ void TabbedPanel::showAnimated() {
 }
 
 void TabbedPanel::showStarted() {
-	if (_shouldFinishHide) {
+	if (isDestroying()) {
 		return;
 	}
 	if (isHidden()) {
 		_selector->showStarted();
 		moveByBottom();
-		raise();
 		show();
 		startShowAnimation();
 	} else if (_hiding) {
@@ -410,6 +369,9 @@ void TabbedPanel::showStarted() {
 }
 
 bool TabbedPanel::eventFilter(QObject *obj, QEvent *e) {
+	if (isDestroying()) {
+		return false;
+	}
 	if (e->type() == QEvent::Enter) {
 		otherEnter();
 	} else if (e->type() == QEvent::Leave) {
@@ -436,20 +398,23 @@ QRect TabbedPanel::innerRect() const {
 	return rect().marginsRemoved(innerPadding());
 }
 
+QRect TabbedPanel::horizontalRect() const {
+	return innerRect().marginsRemoved(style::margins(0, st::buttonRadius, 0, st::buttonRadius));
+}
+
+QRect TabbedPanel::verticalRect() const {
+	return innerRect().marginsRemoved(style::margins(st::buttonRadius, 0, st::buttonRadius, 0));
+}
+
 bool TabbedPanel::overlaps(const QRect &globalRect) const {
 	if (isHidden() || !_cache.isNull()) return false;
 
 	auto testRect = QRect(mapFromGlobal(globalRect.topLeft()), globalRect.size());
 	auto inner = rect().marginsRemoved(st::emojiPanMargins);
-	return inner.marginsRemoved(QMargins(st::roundRadiusSmall, 0, st::roundRadiusSmall, 0)).contains(testRect)
-		|| inner.marginsRemoved(QMargins(0, st::roundRadiusSmall, 0, st::roundRadiusSmall)).contains(testRect);
+	return inner.marginsRemoved(QMargins(st::buttonRadius, 0, st::buttonRadius, 0)).contains(testRect)
+		|| inner.marginsRemoved(QMargins(0, st::buttonRadius, 0, st::buttonRadius)).contains(testRect);
 }
 
-TabbedPanel::~TabbedPanel() {
-	hideFast();
-	if (!_ownedSelector) {
-		_controller->takeTabbedSelectorOwnershipFrom(this);
-	}
-}
+TabbedPanel::~TabbedPanel() = default;
 
 } // namespace ChatHelpers

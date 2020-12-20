@@ -9,7 +9,7 @@ Param2="$2"
 Param3="$3"
 Param4="$4"
 
-if [ ! -d "$FullScriptPath/../../../DesktopPrivate" ]; then
+if [ ! -d "$FullScriptPath/../../../TelegramPrivate" ]; then
   echo ""
   echo "This script is for building the production version of Telegram Desktop."
   echo ""
@@ -30,14 +30,14 @@ while IFS='' read -r line || [[ -n "$line" ]]; do
 done < "$FullScriptPath/version"
 
 VersionForPacker="$AppVersion"
-if [ "$AlphaVersion" != "0" ]; then
-  Error "No releases for closed alpha versions"
-elif [ "$BetaChannel" == "0" ]; then
+if [ "$BetaVersion" != "0" ]; then
+  Error "No releases for closed beta versions"
+elif [ "$AlphaChannel" == "0" ]; then
   AppVersionStrFull="$AppVersionStr"
   AlphaBetaParam=''
 else
-  AppVersionStrFull="$AppVersionStr.beta"
-  AlphaBetaParam='-beta'
+  AppVersionStrFull="$AppVersionStr.alpha"
+  AlphaBetaParam='-alpha'
 fi
 
 cd "$FullScriptPath"

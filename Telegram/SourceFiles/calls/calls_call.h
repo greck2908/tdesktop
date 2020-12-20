@@ -11,7 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 #include "base/bytes.h"
 #include "mtproto/sender.h"
-#include "mtproto/mtproto_auth_key.h"
+#include "mtproto/auth_key.h"
 
 namespace Media {
 namespace Audio {
@@ -19,18 +19,9 @@ class Track;
 } // namespace Audio
 } // namespace Media
 
-namespace tgcalls {
-class Instance;
-class VideoCaptureInterface;
-enum class State;
-enum class VideoState;
-enum class AudioState;
-} // namespace tgcalls
-
-namespace Webrtc {
-enum class VideoState;
-class VideoTrack;
-} // namespace Webrtc
+namespace tgvoip {
+class VoIPController;
+} // namespace tgvoip
 
 namespace Calls {
 
@@ -40,20 +31,7 @@ struct DhConfig {
 	bytes::vector p;
 };
 
-enum class ErrorType {
-	NoCamera,
-	NoMicrophone,
-	NotStartedCall,
-	NotVideoCall,
-	Unknown,
-};
-
-struct Error {
-	ErrorType type = ErrorType::Unknown;
-	QString details;
-};
-
-class Call : public base::has_weak_ptr {
+class Call : public base::has_weak_ptr, private MTP::Sender {
 public:
 	class Delegate {
 	public:
@@ -62,20 +40,12 @@ public:
 		virtual void callFailed(not_null<Call*> call) = 0;
 		virtual void callRedial(not_null<Call*> call) = 0;
 
-		enum class CallSound {
+		enum class Sound {
 			Connecting,
 			Busy,
 			Ended,
 		};
-		virtual void callPlaySound(CallSound sound) = 0;
-		virtual void callRequestPermissionsOrFail(
-			Fn<void()> onSuccess,
-			bool video) = 0;
-
-		virtual auto getVideoCapture()
-			-> std::shared_ptr<tgcalls::VideoCaptureInterface> = 0;
-
-		virtual ~Delegate() = default;
+		virtual void playSound(Sound sound) = 0;
 
 	};
 
@@ -85,19 +55,18 @@ public:
 		Incoming,
 		Outgoing,
 	};
-	Call(not_null<Delegate*> delegate, not_null<UserData*> user, Type type, bool video);
+	Call(not_null<Delegate*> delegate, not_null<UserData*> user, Type type);
 
-	[[nodiscard]] Type type() const {
+	Type type() const {
 		return _type;
 	}
-	[[nodiscard]] not_null<UserData*> user() const {
+	not_null<UserData*> user() const {
 		return _user;
 	}
-	[[nodiscard]] bool isIncomingWaiting() const;
+	bool isIncomingWaiting() const;
 
 	void start(bytes::const_span random);
 	bool handleUpdate(const MTPPhoneCall &call);
-	bool handleSignalingData(const MTPDupdatePhoneCallSignalingData &data);
 
 	enum State {
 		Starting,
@@ -116,59 +85,31 @@ public:
 		Ringing,
 		Busy,
 	};
-	[[nodiscard]] State state() const {
-		return _state.current();
+	State state() const {
+		return _state;
 	}
-	[[nodiscard]] rpl::producer<State> stateValue() const {
-		return _state.value();
-	}
-
-	[[nodiscard]] rpl::producer<Error> errors() const {
-		return _errors.events();
-	}
-
-	enum class RemoteAudioState {
-		Muted,
-		Active,
-	};
-	[[nodiscard]] RemoteAudioState remoteAudioState() const {
-		return _remoteAudioState.current();
-	}
-	[[nodiscard]] auto remoteAudioStateValue() const
-	-> rpl::producer<RemoteAudioState> {
-		return _remoteAudioState.value();
-	}
-
-	[[nodiscard]] Webrtc::VideoState remoteVideoState() const {
-		return _remoteVideoState.current();
-	}
-	[[nodiscard]] auto remoteVideoStateValue() const
-	-> rpl::producer<Webrtc::VideoState> {
-		return _remoteVideoState.value();
+	base::Observable<State> &stateChanged() {
+		return _stateChanged;
 	}
 
 	static constexpr auto kSignalBarStarting = -1;
 	static constexpr auto kSignalBarFinished = -2;
 	static constexpr auto kSignalBarCount = 4;
-	[[nodiscard]] rpl::producer<int> signalBarCountValue() const {
-		return _signalBarCount.value();
+	base::Observable<int> &signalBarCountChanged() {
+		return _signalBarCountChanged;
 	}
 
-	void setMuted(bool mute);
-	[[nodiscard]] bool muted() const {
-		return _muted.current();
+	void setMute(bool mute);
+	bool isMute() const {
+		return _mute;
 	}
-	[[nodiscard]] rpl::producer<bool> mutedValue() const {
-		return _muted.value();
+	base::Observable<bool> &muteChanged() {
+		return _muteChanged;
 	}
 
-	[[nodiscard]] not_null<Webrtc::VideoTrack*> videoIncoming() const;
-	[[nodiscard]] not_null<Webrtc::VideoTrack*> videoOutgoing() const;
-
-	crl::time getDurationMs() const;
+	TimeMs getDurationMs() const;
 	float64 getWaitingSoundPeakValue() const;
 
-	void switchVideoOutgoing();
 	void answer();
 	void hangup();
 	void redial();
@@ -178,38 +119,45 @@ public:
 
 	QString getDebugLog() const;
 
-	void setCurrentAudioDevice(bool input, const QString &deviceId);
-	void setCurrentVideoDevice(const QString &deviceId);
-	//void setAudioVolume(bool input, float level);
-	void setAudioDuckingEnabled(bool enabled);
-
-	[[nodiscard]] rpl::lifetime &lifetime() {
-		return _lifetime;
-	}
-
 	~Call();
 
 private:
+	class ControllerPointer {
+	public:
+		void create();
+		void reset();
+		bool empty() const;
+
+		bool operator==(std::nullptr_t) const;
+		explicit operator bool() const;
+		tgvoip::VoIPController *operator->() const;
+		tgvoip::VoIPController &operator*() const;
+
+		~ControllerPointer();
+
+	private:
+		std::unique_ptr<tgvoip::VoIPController> _data;
+
+	};
 	enum class FinishType {
 		None,
 		Ended,
 		Failed,
 	};
-
 	void handleRequestError(const RPCError &error);
-	void handleControllerError(const QString &error);
-	void finish(
-		FinishType type,
-		const MTPPhoneCallDiscardReason &reason
-			= MTP_phoneCallDiscardReasonDisconnect());
+	void handleControllerError(int error);
+	void finish(FinishType type, const MTPPhoneCallDiscardReason &reason = MTP_phoneCallDiscardReasonDisconnect());
 	void startOutgoing();
 	void startIncoming();
 	void startWaitingTrack();
-	void sendSignalingData(const QByteArray &data);
 
 	void generateModExpFirst(bytes::const_span randomSeed);
-	void handleControllerStateChange(tgcalls::State state);
-	void handleControllerBarCountChange(int count);
+	void handleControllerStateChange(
+		tgvoip::VoIPController *controller,
+		int state);
+	void handleControllerBarCountChange(
+		tgvoip::VoIPController *controller,
+		int count);
 	void createAndStartController(const MTPDphoneCall &call);
 
 	template <typename T>
@@ -217,36 +165,29 @@ private:
 	bool checkCallFields(const MTPDphoneCall &call);
 	bool checkCallFields(const MTPDphoneCallAccepted &call);
 
-	void actuallyAnswer();
 	void confirmAcceptedCall(const MTPDphoneCallAccepted &call);
 	void startConfirmedCall(const MTPDphoneCall &call);
 	void setState(State state);
 	void setStateQueued(State state);
-	void setFailedQueued(const QString &error);
+	void setFailedQueued(int error);
 	void setSignalBarCount(int count);
 	void destroyController();
 
-	void setupOutgoingVideo();
-	void updateRemoteMediaState(
-		tgcalls::AudioState audio,
-		tgcalls::VideoState video);
-
-	const not_null<Delegate*> _delegate;
-	const not_null<UserData*> _user;
-	MTP::Sender _api;
+	not_null<Delegate*> _delegate;
+	not_null<UserData*> _user;
 	Type _type = Type::Outgoing;
-	rpl::variable<State> _state = State::Starting;
-	rpl::variable<RemoteAudioState> _remoteAudioState = RemoteAudioState::Active;
-	rpl::variable<Webrtc::VideoState> _remoteVideoState;
-	rpl::event_stream<Error> _errors;
+	State _state = State::Starting;
 	FinishType _finishAfterRequestingCall = FinishType::None;
 	bool _answerAfterDhConfigReceived = false;
-	rpl::variable<int> _signalBarCount = kSignalBarStarting;
-	crl::time _startTime = 0;
+	base::Observable<State> _stateChanged;
+	int _signalBarCount = kSignalBarStarting;
+	base::Observable<int> _signalBarCountChanged;
+	TimeMs _startTime = 0;
 	base::DelayedCallTimer _finishByTimeoutTimer;
 	base::Timer _discardByTimeoutTimer;
 
-	rpl::variable<bool> _muted = false;
+	bool _mute = false;
+	base::Observable<bool> _muteChanged;
 
 	DhConfig _dhConfig;
 	bytes::vector _ga;
@@ -260,17 +201,12 @@ private:
 	uint64 _accessHash = 0;
 	uint64 _keyFingerprint = 0;
 
-	std::unique_ptr<tgcalls::Instance> _instance;
-	std::shared_ptr<tgcalls::VideoCaptureInterface> _videoCapture;
-	const std::unique_ptr<Webrtc::VideoTrack> _videoIncoming;
-	const std::unique_ptr<Webrtc::VideoTrack> _videoOutgoing;
+	ControllerPointer _controller;
 
 	std::unique_ptr<Media::Audio::Track> _waitingTrack;
 
-	rpl::lifetime _lifetime;
-
 };
 
-void UpdateConfig(const std::string &data);
+void UpdateConfig(const std::map<std::string, std::string> &data);
 
 } // namespace Calls

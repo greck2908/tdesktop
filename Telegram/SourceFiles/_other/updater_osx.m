@@ -6,7 +6,6 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #import <Cocoa/Cocoa.h>
-#include <sys/xattr.h>
 
 NSString *appName = @"Telegram.app";
 NSString *appDir = nil;
@@ -45,20 +44,6 @@ void writeLog(NSString *msg) {
 	[_logFile synchronizeFile];
 }
 
-void RemoveQuarantineAttribute(NSString *path) {
-	const char *kQuarantineAttribute = "com.apple.quarantine";
-
-	writeLog([@"Removing quarantine: " stringByAppendingString:path]);
-	removexattr([path fileSystemRepresentation], kQuarantineAttribute, 0);
-}
-
-void RemoveQuarantineFromBundle(NSString *path) {
-	RemoveQuarantineAttribute(path);
-	RemoveQuarantineAttribute([path stringByAppendingString:@"/Contents/MacOS/Telegram"]);
-	RemoveQuarantineAttribute([path stringByAppendingString:@"/Contents/Helpers/crashpad_handler"]);
-	RemoveQuarantineAttribute([path stringByAppendingString:@"/Contents/Frameworks/Updater"]);
-}
-
 void delFolder() {
 	writeLog([@"Fully clearing old path: " stringByAppendingString:[workDir stringByAppendingString:@"tupdates/ready"]]);
 	if (![[NSFileManager defaultManager] removeItemAtPath:[workDir stringByAppendingString:@"tupdates/ready"] error:nil]) {
@@ -90,7 +75,7 @@ int main(int argc, const char * argv[]) {
 
 	openLog();
 	pid_t procId = 0;
-	BOOL update = YES, toSettings = NO, autoStart = NO, startInTray = NO, testMode = NO, freeType = NO, externalUpdater = NO;
+	BOOL update = YES, toSettings = NO, autoStart = NO, startInTray = NO, testMode = NO;
 	BOOL customWorkingDir = NO;
 	NSString *key = nil;
 	for (int i = 0; i < argc; ++i) {
@@ -116,10 +101,6 @@ int main(int argc, const char * argv[]) {
 			startInTray = YES;
 		} else if ([@"-testmode" isEqualToString:[NSString stringWithUTF8String:argv[i]]]) {
 			testMode = YES;
-		} else if ([@"-freetype" isEqualToString:[NSString stringWithUTF8String:argv[i]]]) {
-			freeType = YES;
-		} else if ([@"-externalupdater" isEqualToString:[NSString stringWithUTF8String:argv[i]]]) {
-			externalUpdater = YES;
 		} else if ([@"-workdir_custom" isEqualToString:[NSString stringWithUTF8String:argv[i]]]) {
 			customWorkingDir = YES;
 		} else if ([@"-key" isEqualToString:[NSString stringWithUTF8String:argv[i]]]) {
@@ -249,16 +230,11 @@ int main(int argc, const char * argv[]) {
 	}
 
 	NSString *appPath = [[NSArray arrayWithObjects:appDir, appRealName, nil] componentsJoinedByString:@""];
-
-	RemoveQuarantineFromBundle(appPath);
-
 	NSMutableArray *args = [[NSMutableArray alloc] initWithObjects: @"-noupdate", nil];
 	if (toSettings) [args addObject:@"-tosettings"];
 	if (_debug) [args addObject:@"-debug"];
 	if (startInTray) [args addObject:@"-startintray"];
 	if (testMode) [args addObject:@"-testmode"];
-	if (freeType) [args addObject:@"-freetype"];
-	if (externalUpdater) [args addObject:@"-externalupdater"];
 	if (autoStart) [args addObject:@"-autostart"];
 	if (key) {
 		[args addObject:@"-key"];
@@ -269,24 +245,18 @@ int main(int argc, const char * argv[]) {
 		[args addObject:workDir];
 	}
 	writeLog([[NSArray arrayWithObjects:@"Running application '", appPath, @"' with args '", [args componentsJoinedByString:@"' '"], @"'..", nil] componentsJoinedByString:@""]);
-
-	for (int i = 0; i < 5; ++i) {
-		NSError *error = nil;
-		NSRunningApplication *result = [[NSWorkspace sharedWorkspace]
+	NSError *error = nil;
+	NSRunningApplication *result = [[NSWorkspace sharedWorkspace]
 					launchApplicationAtURL:[NSURL fileURLWithPath:appPath]
 					options:NSWorkspaceLaunchDefault
 					configuration:[NSDictionary
 								   dictionaryWithObject:args
 								   forKey:NSWorkspaceLaunchConfigurationArguments]
 					error:&error];
-		if (result) {
-			closeLog();
-			return 0;
-		}
+	if (!result) {
 		writeLog([[NSString stringWithFormat:@"Could not run application, error %ld: ", (long)[error code]] stringByAppendingString: error ? [error localizedDescription] : @"(nil)"]);
-		usleep(200000);
 	}
 	closeLog();
-	return -1;
+	return result ? 0 : -1;
 }
 

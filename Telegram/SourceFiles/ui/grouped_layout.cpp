@@ -117,7 +117,7 @@ std::string Layouter::CountProportions(const std::vector<float64> &ratios) {
 		ratios
 	) | ranges::view::transform([](float64 ratio) {
 		return (ratio > 1.2) ? 'w' : (ratio < 0.8) ? 'n' : 'q';
-	}) | ranges::to<std::string>();
+	}) | ranges::to_<std::string>();
 }
 
 std::vector<GroupMediaLayout> Layouter::layout() const {
@@ -374,7 +374,7 @@ std::vector<GroupMediaLayout> Layouter::layoutFourTopAndOther() const {
 		},
 		{
 			QRect(w0 + _spacing + w1 + _spacing, h0 + _spacing, w2, h1),
-			RectPart::Right | RectPart::Bottom
+			RectPart::Right | RectPart::BottomLeft
 		},
 	};
 }
@@ -444,8 +444,8 @@ std::vector<float64> ComplexLayouter::CropRatios(
 		constexpr auto kMaxRatio = 2.75;
 		constexpr auto kMinRatio = 0.6667;
 		return (averageRatio > 1.1)
-			? std::clamp(ratio, 1., kMaxRatio)
-			: std::clamp(ratio, kMinRatio, 1.);
+			? snap(ratio, 1., kMaxRatio)
+			: snap(ratio, kMinRatio, 1.);
 	}) | ranges::to_vector;
 }
 

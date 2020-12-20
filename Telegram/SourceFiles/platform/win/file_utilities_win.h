@@ -13,11 +13,7 @@ namespace Platform {
 namespace File {
 
 inline QString UrlToLocal(const QUrl &url) {
-	return ::File::internal::UrlToLocalDefault(url);
-}
-
-inline void UnsafeOpenUrl(const QString &url) {
-	return ::File::internal::UnsafeOpenUrlDefault(url);
+	return url.toLocalFile();
 }
 
 } // namespace File

@@ -41,7 +41,7 @@ void EmptyWidget::setType(Type type) {
 		case Type::MusicFile: return &st::infoEmptyAudio;
 		case Type::File: return &st::infoEmptyFile;
 		case Type::Link: return &st::infoEmptyLink;
-		case Type::RoundVoiceFile: return &st::infoEmptyVoice;
+		case Type::VoiceFile: return &st::infoEmptyVoice;
 		}
 		Unexpected("Bad type in EmptyWidget::setType()");
 	}();
@@ -49,29 +49,30 @@ void EmptyWidget::setType(Type type) {
 }
 
 void EmptyWidget::setSearchQuery(const QString &query) {
-	_text->setText([&] {
+	auto key = [&] {
 		switch (_type) {
 		case Type::Photo:
-			return tr::lng_media_photo_empty(tr::now);
+			return lng_media_photo_empty;
 		case Type::Video:
-			return tr::lng_media_video_empty(tr::now);
+			return lng_media_video_empty;
 		case Type::MusicFile:
 			return query.isEmpty()
-				? tr::lng_media_song_empty(tr::now)
-				: tr::lng_media_song_empty_search(tr::now);
+				? lng_media_song_empty
+				: lng_media_song_empty_search;
 		case Type::File:
 			return query.isEmpty()
-				? tr::lng_media_file_empty(tr::now)
-				: tr::lng_media_file_empty_search(tr::now);
+				? lng_media_file_empty
+				: lng_media_file_empty_search;
 		case Type::Link:
 			return query.isEmpty()
-				? tr::lng_media_link_empty(tr::now)
-				: tr::lng_media_link_empty_search(tr::now);
-		case Type::RoundVoiceFile:
-			return tr::lng_media_audio_empty(tr::now);
+				? lng_media_link_empty
+				: lng_media_link_empty_search;
+		case Type::VoiceFile:
+			return lng_media_audio_empty;
 		}
 		Unexpected("Bad type in EmptyWidget::setSearchQuery()");
-	}());
+	}();
+	_text->setText(lang(key));
 	resizeToWidth(width());
 }
 

@@ -14,7 +14,7 @@ class LinkButton;
 class FlatLabel;
 } // namespace Ui
 
-class AboutBox : public Ui::BoxContent {
+class AboutBox : public BoxContent {
 public:
 	AboutBox(QWidget*);
 

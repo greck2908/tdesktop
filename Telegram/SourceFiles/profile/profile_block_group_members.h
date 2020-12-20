@@ -9,15 +9,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "profile/profile_block_peer_list.h"
 
-#include <QtCore/QTimer>
-
 namespace Ui {
 class FlatLabel;
+class LeftOutlineButton;
 } // namespace Ui
 
-namespace Data {
+namespace Notify {
 struct PeerUpdate;
-} // namespace Data
+} // namespace Notify
 
 namespace Profile {
 
@@ -25,16 +24,25 @@ class GroupMembersWidget : public PeerListWidget {
 	Q_OBJECT
 
 public:
-	GroupMembersWidget(
-		QWidget *parent,
-		not_null<PeerData*> peer,
-		const style::PeerListItem &st);
+	enum class TitleVisibility {
+		Visible,
+		Hidden,
+	};
+	GroupMembersWidget(QWidget *parent, PeerData *peer, TitleVisibility titleVisibility = TitleVisibility::Visible, const style::PeerListItem &st = st::profileMemberItem);
 
 	int onlineCount() const {
 		return _onlineCount;
 	}
 
 	~GroupMembersWidget();
+
+protected:
+	// Resizes content and counts natural widget height for the desired width.
+	int resizeGetHeight(int newWidth) override;
+
+	void paintContents(Painter &p) override;
+
+	Ui::PopupMenu *fillPeerMenu(PeerData *peer) override;
 
 signals:
 	void onlineCountUpdated(int onlineCount);
@@ -44,23 +52,33 @@ private slots:
 
 private:
 	// Observed notifications.
-	void notifyPeerUpdated(const Data::PeerUpdate &update);
+	void notifyPeerUpdated(const Notify::PeerUpdate &update);
 
+	void editAdmin(not_null<UserData*> user);
+	void restrictUser(not_null<UserData*> user);
 	void removePeer(PeerData *selectedPeer);
 	void refreshMembers();
-	void fillChatMembers(not_null<ChatData*> chat);
-	void fillMegagroupMembers(not_null<ChannelData*> megagroup);
+	void fillChatMembers(ChatData *chat);
+	void fillMegagroupMembers(ChannelData *megagroup);
 	void sortMembers();
 	void updateOnlineCount();
-	void checkSelfAdmin(not_null<ChatData*> chat);
+	void checkSelfAdmin(ChatData *chat);
+	void refreshLimitReached();
+
 	void preloadMore();
+
+	bool limitReachedHook(const ClickHandlerPtr &handler, Qt::MouseButton button);
 
 	void refreshUserOnline(UserData *user);
 
-	struct Member : public Item {
-		explicit Member(not_null<UserData*> user);
-		not_null<UserData*> user() const;
+	int getListTop() const override;
 
+	struct Member : public Item {
+		explicit Member(UserData *user) : Item(user) {
+		}
+		UserData *user() const {
+			return static_cast<UserData*>(peer);
+		}
 		TimeId onlineTextTill = 0;
 		TimeId onlineTill = 0;
 		TimeId onlineForSort = 0;
@@ -70,14 +88,14 @@ private:
 	}
 
 	void updateItemStatusText(Item *item);
-	not_null<Member*> computeMember(not_null<UserData*> user);
-	not_null<Member*> addUser(not_null<ChatData*> chat, not_null<UserData*> user);
-	not_null<Member*> addUser(not_null<ChannelData*> megagroup, not_null<UserData*> user);
-	void setItemFlags(not_null<Item*> item, not_null<ChatData*> chat);
-	void setItemFlags(
-		not_null<Item*> item,
-		not_null<ChannelData*> megagroup);
-	bool addUsersToEnd(not_null<ChannelData*> megagroup);
+	Member *computeMember(UserData *user);
+	Member *addUser(ChatData *chat, UserData *user);
+	Member *addUser(ChannelData *megagroup, UserData *user);
+	void setItemFlags(Item *item, ChatData *chat);
+	void setItemFlags(Item *item, ChannelData *megagroup);
+	bool addUsersToEnd(ChannelData *megagroup);
+
+	object_ptr<Ui::FlatLabel> _limitReachedInfo = { nullptr };
 
 	QMap<UserData*, Member*> _membersByUser;
 	bool _sortByOnline = false;

@@ -9,40 +9,34 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "passport/passport_panel_controller.h"
 #include "passport/passport_panel_details_row.h"
+#include "info/profile/info_profile_button.h"
+#include "info/profile/info_profile_values.h"
 #include "ui/widgets/input_fields.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/shadow.h"
-#include "ui/widgets/box_content_divider.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/fade_wrap.h"
-#include "ui/text/text_utilities.h" // Ui::Text::ToUpper
-#include "ui/special_fields.h"
 #include "boxes/abstract_box.h"
 #include "boxes/confirm_phone_box.h"
-#include "data/data_user.h"
-#include "main/main_session.h"
 #include "lang/lang_keys.h"
-#include "app.h"
 #include "styles/style_passport.h"
-#include "styles/style_layers.h"
+#include "styles/style_boxes.h"
 
 namespace Passport {
 namespace {
 
-class VerifyBox : public Ui::BoxContent {
+class VerifyBox : public BoxContent {
 public:
 	VerifyBox(
 		QWidget*,
-		rpl::producer<QString> title,
+		const QString &title,
 		const QString &text,
 		int codeLength,
 		Fn<void(QString code)> submit,
-		Fn<void()> resend,
 		rpl::producer<QString> call,
-		rpl::producer<QString> error,
-		rpl::producer<QString> resent);
+		rpl::producer<QString> error);
 
 	void setInnerFocus() override;
 
@@ -54,110 +48,60 @@ private:
 		const QString &text,
 		int codeLength,
 		Fn<void(QString code)> submit,
-		Fn<void()> resend,
 		rpl::producer<QString> call,
-		rpl::producer<QString> error,
-		rpl::producer<QString> resent);
+		rpl::producer<QString> error);
 
-	rpl::producer<QString> _title;
+	QString _title;
 	Fn<void()> _submit;
 	QPointer<SentCodeField> _code;
-	QPointer<Ui::VerticalLayout> _content;
+	int _height = 0;
 
 };
 
 VerifyBox::VerifyBox(
 	QWidget*,
-	rpl::producer<QString> title,
+	const QString &title,
 	const QString &text,
 	int codeLength,
 	Fn<void(QString code)> submit,
-	Fn<void()> resend,
 	rpl::producer<QString> call,
-	rpl::producer<QString> error,
-	rpl::producer<QString> resent)
-: _title(std::move(title)) {
+	rpl::producer<QString> error)
+: _title(title) {
 	setupControls(
 		text,
 		codeLength,
 		submit,
-		resend,
 		std::move(call),
-		std::move(error),
-		std::move(resent));
+		std::move(error));
 }
 
 void VerifyBox::setupControls(
 		const QString &text,
 		int codeLength,
 		Fn<void(QString code)> submit,
-		Fn<void()> resend,
 		rpl::producer<QString> call,
-		rpl::producer<QString> error,
-		rpl::producer<QString> resent) {
-	_content = Ui::CreateChild<Ui::VerticalLayout>(this);
+		rpl::producer<QString> error) {
+	const auto description = Ui::CreateChild<Ui::FlatLabel>(
+		this,
+		text,
+		Ui::FlatLabel::InitType::Simple,
+		st::boxLabel);
+	_code = Ui::CreateChild<SentCodeField>(
+		this,
+		st::defaultInputField,
+		langFactory(lng_change_phone_code_title));
 
-	const auto small = style::margins(
-		st::boxPadding.left(),
-		0,
-		st::boxPadding.right(),
-		st::boxPadding.bottom());
-	const auto description = _content->add(
+	const auto problem = Ui::CreateChild<Ui::FadeWrap<Ui::FlatLabel>>(
+		this,
 		object_ptr<Ui::FlatLabel>(
-			_content,
-			text,
-			st::boxLabel),
-		small);
-	_code = _content->add(
-		object_ptr<SentCodeField>(
-			_content,
-			st::defaultInputField,
-			tr::lng_change_phone_code_title()),
-		small);
-
-	const auto problem = _content->add(
-		object_ptr<Ui::FadeWrap<Ui::FlatLabel>>(
-			_content,
-			object_ptr<Ui::FlatLabel>(
-				_content,
-				QString(),
-				st::passportVerifyErrorLabel)),
-		small);
-	const auto waiter = _content->add(
-		object_ptr<Ui::FlatLabel>(
-			_content,
-			std::move(call),
-			st::boxDividerLabel),
-		small);
-	if (resend) {
-		auto link = TextWithEntities{ tr::lng_cloud_password_resend(tr::now) };
-		link.entities.push_back({
-			EntityType::CustomUrl,
-			0,
-			link.text.size(),
-			QString("internal:resend") });
-		const auto label = _content->add(
-			object_ptr<Ui::FlatLabel>(
-				_content,
-				rpl::single(
-					link
-				) | rpl::then(rpl::duplicate(
-					resent
-				) | rpl::map([](const QString &value) {
-					return TextWithEntities{ value };
-				})),
-				st::boxDividerLabel),
-			small);
-		std::move(
-			resent
-		) | rpl::start_with_next([=] {
-			_content->resizeToWidth(st::boxWidth);
-		}, _content->lifetime());
-		label->setClickHandlerFilter([=](auto&&...) {
-			resend();
-			return false;
-		});
-	}
+			this,
+			QString(),
+			Ui::FlatLabel::InitType::Simple,
+			st::passportVerifyErrorLabel));
+	const auto waiter = Ui::CreateChild<Ui::FlatLabel>(
+		this,
+		std::move(call),
+		st::boxDividerLabel);
 	std::move(
 		error
 	) | rpl::start_with_next([=](const QString &error) {
@@ -165,14 +109,31 @@ void VerifyBox::setupControls(
 			problem->hide(anim::type::normal);
 		} else {
 			problem->entity()->setText(error);
-			_content->resizeToWidth(st::boxWidth);
 			problem->show(anim::type::normal);
 			_code->showError();
 		}
 	}, lifetime());
 
+	auto y = 0;
+	const auto innerWidth = st::boxWidth
+		- st::boxPadding.left()
+		- st::boxPadding.right();
+	description->resizeToWidth(innerWidth);
+	description->moveToLeft(st::boxPadding.left(), y);
+	y += description->height() + st::boxPadding.bottom();
+	_code->resizeToWidth(innerWidth);
+	_code->moveToLeft(st::boxPadding.left(), y);
+	y += _code->height() + st::boxPadding.bottom();
+	problem->resizeToWidth(innerWidth);
+	problem->moveToLeft(st::boxPadding.left(), y);
+	y += problem->height() + st::boxPadding.top();
+	waiter->resizeToWidth(innerWidth);
+	waiter->moveToLeft(st::boxPadding.left(), y);
+	y += waiter->height() + st::boxPadding.bottom();
+	_height = y;
+
 	_submit = [=] {
-		submit(_code->getDigitsOnly());
+		submit(_code->getLastText());
 	};
 	if (codeLength > 0) {
 		_code->setAutoSubmit(codeLength, _submit);
@@ -189,16 +150,12 @@ void VerifyBox::setInnerFocus() {
 }
 
 void VerifyBox::prepare() {
-	setTitle(std::move(_title));
+	setTitle([=] { return _title; });
 
-	addButton(tr::lng_change_phone_new_submit(), _submit);
-	addButton(tr::lng_cancel(), [=] { closeBox(); });
+	addButton(langFactory(lng_change_phone_new_submit), _submit);
+	addButton(langFactory(lng_cancel), [=] { closeBox(); });
 
-	_content->resizeToWidth(st::boxWidth);
-	_content->heightValue(
-	) | rpl::start_with_next([=](int height) {
-		setDimensions(st::boxWidth, height);
-	}, _content->lifetime());
+	setDimensions(st::boxWidth, _height);
 }
 
 } // namespace
@@ -218,7 +175,7 @@ PanelEditContact::PanelEditContact(
 , _bottomShadow(this)
 , _done(
 		this,
-		tr::lng_passport_save_value(),
+		langFactory(lng_passport_save_value),
 		st::passportPanelSaveValue) {
 	setupControls(data, existing);
 }
@@ -231,18 +188,22 @@ void PanelEditContact::setupControls(
 		_content->resizeToWidth(width);
 	}, _content->lifetime());
 
-	_content->add(object_ptr<Ui::BoxContentDivider>(
+	_content->add(object_ptr<BoxContentDivider>(
 		_content,
 		st::passportFormDividerHeight));
 	if (!existing.isEmpty()) {
 		_content->add(
-			object_ptr<Ui::SettingsButton>(
+			object_ptr<Info::Profile::Button>(
 				_content,
-				tr::lng_passport_use_existing(
-					lt_existing,
-					rpl::single(_scheme.format
-						? _scheme.format(existing)
-						: existing)),
+				Lang::Viewer(
+					lng_passport_use_existing__tagged
+				) | rpl::map([=] {
+					return lng_passport_use_existing(
+						lt_existing,
+						(_scheme.format
+							? _scheme.format(existing)
+							: existing));
+				}),
 				st::passportUploadButton),
 			st::passportUploadButtonPadding
 		)->addClickHandler([=] {
@@ -254,12 +215,14 @@ void PanelEditContact::setupControls(
 				object_ptr<Ui::FlatLabel>(
 					_content,
 					_scheme.aboutExisting,
+					Ui::FlatLabel::InitType::Simple,
 					st::boxDividerLabel),
 				st::passportFormLabelPadding));
 		_content->add(
 			object_ptr<Ui::FlatLabel>(
 				_content,
 				_scheme.newHeader,
+				Ui::FlatLabel::InitType::Simple,
 				st::passportFormHeader),
 			st::passportDetailsHeaderPadding);
 	}
@@ -269,22 +232,21 @@ void PanelEditContact::setupControls(
 	const auto fieldPadding = existing.isEmpty()
 		? st::passportContactFieldPadding
 		: st::passportContactNewFieldPadding;
-	auto fieldPlaceholder = existing.isEmpty()
-		? rpl::duplicate(_scheme.newPlaceholder)
+	const auto fieldPlaceholder = existing.isEmpty()
+		? _scheme.newPlaceholder
 		: nullptr;
 	auto wrap = object_ptr<Ui::RpWidget>(_content);
 	if (_scheme.type == Scheme::ValueType::Phone) {
 		_field = Ui::CreateChild<Ui::PhoneInput>(
 			wrap.data(),
 			fieldStyle,
-			std::move(fieldPlaceholder),
-			ExtractPhonePrefix(_controller->bot()->session().user()->phone()),
+			fieldPlaceholder,
 			data);
 	} else {
 		_field = Ui::CreateChild<Ui::MaskedInputField>(
 			wrap.data(),
 			fieldStyle,
-			std::move(fieldPlaceholder),
+			fieldPlaceholder,
 			data);
 	}
 
@@ -305,6 +267,7 @@ void PanelEditContact::setupControls(
 			object_ptr<Ui::FlatLabel>(
 				_content,
 				QString(),
+				Ui::FlatLabel::InitType::Simple,
 				st::passportVerifyErrorLabel),
 			st::passportContactErrorPadding),
 		st::passportContactErrorMargin);
@@ -316,14 +279,15 @@ void PanelEditContact::setupControls(
 			object_ptr<Ui::FlatLabel>(
 				_content,
 				_scheme.aboutNew,
+				Ui::FlatLabel::InitType::Simple,
 				st::boxDividerLabel),
 			st::passportFormLabelPadding));
 
 	if (auto text = _controller->deleteValueLabel()) {
 		_content->add(
-			object_ptr<Ui::SettingsButton>(
+			object_ptr<Info::Profile::Button>(
 				_content,
-				std::move(*text) | Ui::Text::ToUpper(),
+				std::move(*text) | Info::Profile::ToUpperValue(),
 				st::passportDeleteButton),
 			st::passportUploadButtonPadding
 		)->addClickHandler([=] {
@@ -336,7 +300,6 @@ void PanelEditContact::setupControls(
 		if (error.key == QString("value")) {
 			_field->showError();
 			errorWrap->entity()->setText(error.text);
-			_content->resizeToWidth(width());
 			errorWrap->show(anim::type::normal);
 		}
 	}, lifetime());
@@ -389,42 +352,33 @@ void PanelEditContact::save(const QString &value) {
 	_controller->saveScope(std::move(data), {});
 }
 
-object_ptr<Ui::BoxContent> VerifyPhoneBox(
+object_ptr<BoxContent> VerifyPhoneBox(
 		const QString &phone,
 		int codeLength,
 		Fn<void(QString code)> submit,
 		rpl::producer<QString> call,
 		rpl::producer<QString> error) {
 	return Box<VerifyBox>(
-		tr::lng_passport_phone_title(),
-		tr::lng_passport_confirm_phone(
-			tr::now,
-			lt_phone,
-			App::formatPhone(phone)),
+		lang(lng_passport_phone_title),
+		lng_passport_confirm_phone(lt_phone, App::formatPhone(phone)),
 		codeLength,
 		submit,
-		nullptr,
 		std::move(call),
-		std::move(error),
-		nullptr);
+		std::move(error));
 }
 
-object_ptr<Ui::BoxContent> VerifyEmailBox(
+object_ptr<BoxContent> VerifyEmailBox(
 		const QString &email,
 		int codeLength,
 		Fn<void(QString code)> submit,
-		Fn<void()> resend,
-		rpl::producer<QString> error,
-		rpl::producer<QString> resent) {
+		rpl::producer<QString> error) {
 	return Box<VerifyBox>(
-		tr::lng_passport_email_title(),
-		tr::lng_passport_confirm_email(tr::now, lt_email, email),
+		lang(lng_passport_email_title),
+		lng_passport_confirm_email(lt_email, email),
 		codeLength,
 		submit,
-		resend,
 		rpl::single(QString()),
-		std::move(error),
-		std::move(resent));
+		std::move(error));
 }
 
 } // namespace Passport

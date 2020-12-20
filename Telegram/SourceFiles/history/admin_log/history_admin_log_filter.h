@@ -12,14 +12,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace AdminLog {
 
-class FilterBox : public Ui::BoxContent {
+class FilterBox : public BoxContent {
 public:
-	FilterBox(
-		QWidget*,
-		not_null<ChannelData*> channel,
-		const std::vector<not_null<UserData*>> &admins,
-		const FilterValue &filter,
-		Fn<void(FilterValue &&filter)> saveCallback);
+	FilterBox(QWidget*, not_null<ChannelData*> channel, const std::vector<not_null<UserData*>> &admins, const FilterValue &filter, Fn<void(FilterValue &&filter)> saveCallback);
 
 protected:
 	void prepare() override;

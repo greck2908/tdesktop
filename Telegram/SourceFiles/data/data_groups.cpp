@@ -64,14 +64,12 @@ void Groups::unregisterMessage(not_null<const HistoryItem*> item) {
 	}
 }
 
-void Groups::refreshMessage(
-	not_null<HistoryItem*> item,
-	bool justRefreshViews) {
+void Groups::refreshMessage(not_null<HistoryItem*> item) {
 	if (!isGrouped(item)) {
 		unregisterMessage(item);
 		return;
 	}
-	if (!IsServerMsgId(item->id) && !item->isScheduled()) {
+	if (!IsServerMsgId(item->id)) {
 		return;
 	}
 	const auto groupId = item->groupId();
@@ -81,12 +79,6 @@ void Groups::refreshMessage(
 		return;
 	}
 	auto &items = i->second.items;
-
-	if (justRefreshViews) {
-		refreshViews(items);
-		return;
-	}
-
 	const auto position = findPositionForItem(items, item);
 	auto current = ranges::find(items, item);
 	if (current == end(items)) {

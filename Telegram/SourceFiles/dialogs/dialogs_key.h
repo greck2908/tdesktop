@@ -10,10 +10,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/value_ordering.h"
 
 class History;
-class PeerData;
 
 namespace Data {
-class Folder;
+class Feed;
 } // namespace Data
 
 namespace Dialogs {
@@ -23,21 +22,21 @@ class Entry;
 class Key {
 public:
 	Key() = default;
-	Key(Entry *entry) : _value(entry) {
+	Key(History *history) : _value(history) {
 	}
-	Key(History *history);
-	Key(Data::Folder *folder);
-	Key(not_null<Entry*> entry) : _value(entry) {
+	Key(not_null<History*> history) : _value(history) {
 	}
-	Key(not_null<History*> history);
-	Key(not_null<Data::Folder*> folder);
+	Key(Data::Feed *feed) : _value(feed) {
+	}
+	Key(not_null<Data::Feed*> feed) : _value(feed) {
+	}
 
 	explicit operator bool() const {
-		return (_value != nullptr);
+		return !!_value;
 	}
 	not_null<Entry*> entry() const;
 	History *history() const;
-	Data::Folder *folder() const;
+	Data::Feed *feed() const;
 	PeerData *peer() const;
 
 	inline bool operator<(const Key &other) const {
@@ -59,13 +58,19 @@ public:
 		return !(*this == other);
 	}
 
+	base::optional_variant<
+		not_null<History*>,
+		not_null<Data::Feed*>> raw() const {
+		return _value;
+	}
+
 	// Not working :(
 	//friend inline auto value_ordering_helper(const Key &key) {
 	//	return key.value;
 	//}
 
 private:
-	Entry *_value = nullptr;
+	base::optional_variant<not_null<History*>, not_null<Data::Feed*>> _value;
 
 };
 
@@ -80,8 +85,7 @@ struct RowDescriptor {
 };
 
 inline bool operator==(const RowDescriptor &a, const RowDescriptor &b) {
-	return (a.key == b.key)
-		&& ((a.fullId == b.fullId) || (!a.fullId.msg && !b.fullId.msg));
+	return (a.key == b.key) && (a.fullId == b.fullId);
 }
 
 inline bool operator!=(const RowDescriptor &a, const RowDescriptor &b) {
@@ -108,22 +112,5 @@ inline bool operator<=(const RowDescriptor &a, const RowDescriptor &b) {
 inline bool operator>=(const RowDescriptor &a, const RowDescriptor &b) {
 	return !(a < b);
 }
-
-struct EntryState {
-	enum class Section {
-		History,
-		Profile,
-		ChatsList,
-		Scheduled,
-		Pinned,
-		Replies,
-	};
-
-	Key key;
-	Section section = Section::History;
-	FilterId filterId = 0;
-	MsgId rootId = 0;
-	MsgId currentReplyToId = 0;
-};
 
 } // namespace Dialogs

@@ -6,7 +6,13 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 
+#define NOMINMAX // no min() and max() macro declarations
 #define __HUGE
+
+// Fix Google Breakpad build for Mac App Store version
+#ifdef Q_OS_MAC
+#define __STDC_FORMAT_MACROS
+#endif // Q_OS_MAC
 
 #ifdef __cplusplus
 
@@ -23,7 +29,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma warning(disable:4180)
 #endif // __clang__ || _MSC_VER >= 1914
 
-#include <QtCore/QMap>
+#include <QtCore/QtCore>
 
 #ifdef __clang__
 #pragma clang diagnostic pop
@@ -31,65 +37,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma warning(pop)
 #endif // __clang__ || _MSC_VER >= 1914
 
-#include <QtCore/QtMath>
-#include <QtCore/QObject>
-#include <QtCore/QPointer>
-#include <QtCore/QMutex>
-#include <QtCore/QReadWriteLock>
-#include <QtCore/QDataStream>
-#include <QtCore/QDir>
-#include <QtCore/QFile>
-#include <QtCore/QFileInfo>
-#include <QtCore/QThread>
-#include <QtCore/QByteArray>
-#include <QtCore/QChar>
-#include <QtCore/QDateTime>
-#include <QtCore/QHash>
-#include <QtCore/QList>
-#include <QtCore/QMargins>
-#include <QtCore/QPair>
-#include <QtCore/QPoint>
-#include <QtCore/QRect>
-#include <QtCore/QRegularExpression>
-#include <QtCore/QSet>
-#include <QtCore/QSize>
-#include <QtCore/QString>
-#include <QtCore/QStringList>
-#include <QtCore/QVector>
+#if QT_VERSION < QT_VERSION_CHECK(5, 5, 0)
+#define OS_MAC_OLD
+#define RANGES_CXX_THREAD_LOCAL 0
+#endif // QT_VERSION < 5.5.0
 
-#include <QtGui/QIcon>
-#include <QtGui/QImage>
-#include <QtGui/QImageReader>
-#include <QtGui/QPixmap>
-#include <QtGui/QtEvents>
-#include <QtGui/QBrush>
-#include <QtGui/QColor>
-#include <QtGui/QPainter>
-#include <QtGui/QPainterPath>
-#include <QtGui/QPen>
-#include <QtGui/QRegion>
-#include <QtGui/QRgb>
-#include <QtGui/QFont>
-#include <QtGui/QFontInfo>
+#ifdef OS_MAC_STORE
+#define MAC_USE_BREAKPAD
+#endif // OS_MAC_STORE
 
-#include <QtWidgets/QWidget>
-
-#ifndef OS_MAC_OLD
-#include <QtWidgets/QOpenGLWidget>
-#endif // OS_MAC_OLD
-
-// Fix Google Breakpad build for Mac App Store and Linux version
-#ifdef Q_OS_UNIX
-#define __STDC_FORMAT_MACROS
-#endif // Q_OS_UNIX
-
-// Remove 'small' macro definition.
-#ifdef Q_OS_WIN
-#include <rpc.h>
-#ifdef small
-#undef small
-#endif // small
-#endif // Q_OS_WIN
+#include <QtWidgets/QtWidgets>
+#include <QtNetwork/QtNetwork>
 
 #include <array>
 #include <vector>
@@ -99,10 +57,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <unordered_set>
 #include <algorithm>
 #include <memory>
-#include <any>
-#include <optional>
 
 #include <range/v3/all.hpp>
+#ifdef Q_OS_WIN
+#include "platform/win/windows_range_v3_helpers.h"
+#endif // Q_OS_WIN
+
+// Ensures/Expects.
+#include <gsl/gsl_assert>
 
 // Redefine Ensures/Expects by our own assertions.
 #include "base/assertion.h"
@@ -114,27 +76,28 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/variant.h"
 #include "base/optional.h"
 #include "base/algorithm.h"
-#include "base/invoke_queued.h"
 #include "base/flat_set.h"
 #include "base/flat_map.h"
 #include "base/weak_ptr.h"
-#include "base/observer.h"
 
-#include "base/basic_types.h"
+#include "core/basic_types.h"
 #include "logs.h"
 #include "core/utils.h"
 #include "config.h"
 
-#include "scheme.h"
-#include "mtproto/type_utils.h"
+#include "mtproto/facade.h"
 
 #include "ui/style/style_core.h"
 #include "styles/palette.h"
 #include "styles/style_basic.h"
 
-#include "ui/image/image_location.h"
+#include "ui/animation.h"
+#include "ui/twidget.h"
+#include "ui/images.h"
 #include "ui/text/text.h"
 
 #include "data/data_types.h"
+#include "app.h"
+#include "facades.h"
 
 #endif // __cplusplus

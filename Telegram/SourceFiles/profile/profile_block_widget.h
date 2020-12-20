@@ -15,6 +15,8 @@ namespace Profile {
 class SectionMemento;
 
 class BlockWidget : public Ui::RpWidget, protected base::Subscriber {
+	Q_OBJECT
+
 public:
 	BlockWidget(QWidget *parent, PeerData *peer, const QString &title);
 
@@ -38,7 +40,9 @@ protected:
 	int resizeGetHeight(int newWidth) override = 0;
 
 	void contentSizeUpdated() {
+		auto oldHeight = height();
 		resizeToWidth(width());
+		emit heightUpdated();
 	}
 
 	PeerData *peer() const {
@@ -56,5 +60,7 @@ private:
 	QString _title;
 
 };
+
+int defaultOutlineButtonLeft();
 
 } // namespace Profile

@@ -7,10 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "mtproto/mtproto_auth_key.h"
-#include "base/bytes.h"
-
-#include <QtCore/QDataStream>
+#include "ui/images.h"
+#include "mtproto/auth_key.h"
 
 namespace Serialize {
 
@@ -25,13 +23,6 @@ inline int bytearraySize(const QByteArray &arr) {
 inline int bytesSize(bytes::const_span bytes) {
 	return sizeof(quint32) + bytes.size();
 }
-
-inline int colorSize() {
-	return sizeof(quint32);
-}
-
-void writeColor(QDataStream &stream, const QColor &color);
-QColor readColor(QDataStream &stream);
 
 struct ReadBytesVectorWrap {
 	bytes::vector &bytes;
@@ -93,6 +84,10 @@ inline QDataStream &operator<<(QDataStream &stream, ReadBytesVectorWrap data) {
 inline int dateTimeSize() {
 	return (sizeof(qint64) + sizeof(quint32) + sizeof(qint8));
 }
+
+void writeStorageImageLocation(QDataStream &stream, const StorageImageLocation &loc);
+StorageImageLocation readStorageImageLocation(QDataStream &stream);
+int storageImageLocationSize();
 
 template <typename T>
 inline T read(QDataStream &stream) {

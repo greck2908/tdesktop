@@ -7,8 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-class History;
-
 namespace HistoryView {
 class ElementDelegate;
 class Element;
@@ -17,17 +15,18 @@ class Element;
 namespace AdminLog {
 
 class OwnedItem;
+class LocalIdManager;
 
 void GenerateItems(
 	not_null<HistoryView::ElementDelegate*> delegate,
 	not_null<History*> history,
+	not_null<LocalIdManager*> idManager,
 	const MTPDchannelAdminLogEvent &event,
 	Fn<void(OwnedItem item)> callback);
 
 // Smart pointer wrapper for HistoryItem* that destroys the owned item.
 class OwnedItem {
 public:
-	OwnedItem(std::nullptr_t = nullptr);
 	OwnedItem(
 		not_null<HistoryView::ElementDelegate*> delegate,
 		not_null<HistoryItem*> data);

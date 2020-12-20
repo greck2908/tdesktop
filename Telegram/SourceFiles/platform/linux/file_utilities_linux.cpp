@@ -7,88 +7,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "platform/linux/file_utilities_linux.h"
 
+#include <private/qguiapplication_p.h>
 #include "platform/linux/linux_libs.h"
 #include "platform/linux/linux_gdk_helper.h"
-#include "platform/linux/linux_desktop_environment.h"
-#include "platform/linux/specific_linux.h"
+#include "messenger.h"
+#include "mainwindow.h"
 #include "storage/localstorage.h"
-#include "base/qt_adapters.h"
-#include "window/window_controller.h"
-#include "core/application.h"
 
-#include <QtGui/QDesktopServices>
-
-extern "C" {
-#undef signals
-#include <gio/gio.h>
-#define signals public
-} // extern "C"
-
-#ifndef TDESKTOP_DISABLE_GTK_INTEGRATION
-#include <private/qguiapplication_p.h>
-
-extern "C" {
-#undef signals
-#include <gtk/gtk.h>
-#include <gdk/gdk.h>
-#define signals public
-} // extern "C"
-#endif // !TDESKTOP_DISABLE_GTK_INTEGRATION
+QStringList qt_make_filter_list(const QString &filter);
 
 namespace Platform {
 namespace File {
-namespace {
-
-#ifndef TDESKTOP_DISABLE_GTK_INTEGRATION
-bool ShowOpenWithSupported() {
-	return Platform::internal::GdkHelperLoaded()
-		&& (Libs::gtk_app_chooser_dialog_new != nullptr)
-		&& (Libs::gtk_app_chooser_get_app_info != nullptr)
-		&& (Libs::gtk_app_chooser_get_type != nullptr)
-		&& (Libs::gtk_widget_get_type != nullptr)
-		&& (Libs::gtk_widget_get_window != nullptr)
-		&& (Libs::gtk_widget_realize != nullptr)
-		&& (Libs::gtk_widget_show != nullptr)
-		&& (Libs::gtk_widget_destroy != nullptr);
-}
-
-void HandleAppChooserResponse(
-		GtkDialog *dialog,
-		int responseId,
-		GFile *file) {
-	GAppInfo *chosenAppInfo = nullptr;
-
-	switch (responseId) {
-	case GTK_RESPONSE_OK:
-		chosenAppInfo = Libs::gtk_app_chooser_get_app_info(
-			Libs::gtk_app_chooser_cast(dialog));
-
-		if (chosenAppInfo) {
-			GList *uris = nullptr;
-			uris = g_list_prepend(uris, g_file_get_uri(file));
-			g_app_info_launch_uris(chosenAppInfo, uris, nullptr, nullptr);
-			g_list_free(uris);
-			g_object_unref(chosenAppInfo);
-		}
-
-		g_object_unref(file);
-		Libs::gtk_widget_destroy(Libs::gtk_widget_cast(dialog));
-		break;
-
-	case GTK_RESPONSE_CANCEL:
-	case GTK_RESPONSE_DELETE_EVENT:
-		g_object_unref(file);
-		Libs::gtk_widget_destroy(Libs::gtk_widget_cast(dialog));
-		break;
-
-	default:
-		break;
-	}
-}
-#endif // !TDESKTOP_DISABLE_GTK_INTEGRATION
-
-} // namespace
-
 namespace internal {
 
 QByteArray EscapeShell(const QByteArray &content) {
@@ -119,67 +48,33 @@ QByteArray EscapeShell(const QByteArray &content) {
 
 } // namespace internal
 
-void UnsafeOpenUrl(const QString &url) {
-	if (!g_app_info_launch_default_for_uri(
-		url.toUtf8(),
-		nullptr,
-		nullptr)) {
-		QDesktopServices::openUrl(url);
+void UnsafeShowInFolder(const QString &filepath) {
+	Ui::hideLayer(anim::type::instant); // Hide mediaview to make other apps visible.
+
+	auto absolutePath = QFileInfo(filepath).absoluteFilePath();
+	QProcess process;
+	process.start("xdg-mime", QStringList() << "query" << "default" << "inode/directory");
+	process.waitForFinished();
+	auto output = QString::fromLatin1(process.readLine().simplified());
+	auto command = qsl("xdg-open");
+	auto arguments = QStringList();
+	if (output == qstr("dolphin.desktop") || output == qstr("org.kde.dolphin.desktop")) {
+		command = qsl("dolphin");
+		arguments << "--select" << absolutePath;
+	} else if (output == qstr("nautilus.desktop") || output == qstr("org.gnome.Nautilus.desktop") || output == qstr("nautilus-folder-handler.desktop")) {
+		command = qsl("nautilus");
+		arguments << "--no-desktop" << absolutePath;
+	} else if (output == qstr("nemo.desktop")) {
+		command = qsl("nemo");
+		arguments << "--no-desktop" << absolutePath;
+	} else if (output == qstr("konqueror.desktop") || output == qstr("kfmclient_dir.desktop")) {
+		command = qsl("konqueror");
+		arguments << "--select" << absolutePath;
+	} else {
+		arguments << QFileInfo(filepath).absoluteDir().absolutePath();
 	}
-}
-
-void UnsafeOpenEmailLink(const QString &email) {
-	UnsafeOpenUrl(qstr("mailto:") + email);
-}
-
-bool UnsafeShowOpenWith(const QString &filepath) {
-#ifndef TDESKTOP_DISABLE_GTK_INTEGRATION
-	if (InFlatpak()
-		|| InSnap()
-		|| !ShowOpenWithSupported()) {
-		return false;
-	}
-
-	const auto absolutePath = QFileInfo(filepath).absoluteFilePath();
-	auto gfileInstance = g_file_new_for_path(absolutePath.toUtf8());
-
-	auto appChooserDialog = Libs::gtk_app_chooser_dialog_new(
-		nullptr,
-		GTK_DIALOG_MODAL,
-		gfileInstance);
-
-	g_signal_connect(
-		appChooserDialog,
-		"response",
-		G_CALLBACK(HandleAppChooserResponse),
-		gfileInstance);
-
-	Libs::gtk_widget_realize(appChooserDialog);
-
-	if (const auto activeWindow = Core::App().activeWindow()) {
-		Platform::internal::XSetTransientForHint(
-			Libs::gtk_widget_get_window(appChooserDialog),
-			activeWindow->widget().get()->windowHandle()->winId());
-	}
-
-	Libs::gtk_widget_show(appChooserDialog);
-
-	return true;
-#else // !TDESKTOP_DISABLE_GTK_INTEGRATION
-	return false;
-#endif // TDESKTOP_DISABLE_GTK_INTEGRATION
-}
-
-void UnsafeLaunch(const QString &filepath) {
-	const auto absolutePath = QFileInfo(filepath).absoluteFilePath();
-
-	if (!g_app_info_launch_default_for_uri(
-		g_filename_to_uri(absolutePath.toUtf8(), nullptr, nullptr),
-		nullptr,
-		nullptr)) {
-		if (!UnsafeShowOpenWith(filepath)) {
-			QDesktopServices::openUrl(QUrl::fromLocalFile(filepath));
-		}
+	if (!process.startDetached(command, arguments)) {
+		LOG(("Failed to launch '%1 %2'").arg(command).arg(arguments.join(' ')));
 	}
 }
 
@@ -203,27 +98,6 @@ constexpr auto kPreviewHeight = 512;
 using Type = ::FileDialog::internal::Type;
 
 #ifndef TDESKTOP_DISABLE_GTK_INTEGRATION
-bool UseNative(Type type = Type::ReadFile) {
-	// use gtk file dialog on gtk-based desktop environments
-	// or if QT_QPA_PLATFORMTHEME=(gtk2|gtk3)
-	// or if portals are used and operation is to open folder
-	// and portal doesn't support folder choosing
-	const auto sandboxedOrCustomPortal = InFlatpak()
-		|| InSnap()
-		|| UseXDGDesktopPortal();
-
-	const auto neededForPortal = (type == Type::ReadFolder)
-		&& !CanOpenDirectoryWithPortal();
-
-	const auto neededNonForced = DesktopEnvironment::IsGtkBased()
-		|| (sandboxedOrCustomPortal && neededForPortal);
-
-	const auto excludeNonForced = sandboxedOrCustomPortal && !neededForPortal;
-
-	return IsGtkIntegrationForced()
-		|| (neededNonForced && !excludeNonForced);
-}
-
 bool NativeSupported() {
 	return Platform::internal::GdkHelperLoaded()
 		&& (Libs::gtk_widget_hide_on_delete != nullptr)
@@ -297,7 +171,7 @@ bool GetNative(
 	QString path = dialog.directory().absolutePath();
 	if (path != cDialogLastPath()) {
 		cSetDialogLastPath(path);
-		Local::writeSettings();
+		Local::writeUserSettings();
 	}
 
 	if (res == QDialog::Accepted) {
@@ -325,11 +199,8 @@ bool Get(
 		const QString &filter,
 		Type type,
 		QString startFile) {
-	if (parent) {
-		parent = parent->window();
-	}
 #ifndef TDESKTOP_DISABLE_GTK_INTEGRATION
-	if (UseNative(type) && NativeSupported()) {
+	if (NativeSupported()) {
 		return GetNative(
 			parent,
 			files,
@@ -354,11 +225,11 @@ bool Get(
 namespace internal {
 
 QGtkDialog::QGtkDialog(GtkWidget *gtkWidget) : gtkWidget(gtkWidget) {
-	g_signal_connect_swapped(G_OBJECT(gtkWidget), "response", G_CALLBACK(onResponse), this);
-	g_signal_connect(G_OBJECT(gtkWidget), "delete-event", G_CALLBACK(Libs::gtk_widget_hide_on_delete), nullptr);
+	Libs::g_signal_connect_swapped_helper(Libs::g_object_cast(gtkWidget), "response", GCallback(onResponse), this);
+	Libs::g_signal_connect_helper(Libs::g_object_cast(gtkWidget), "delete-event", GCallback(Libs::gtk_widget_hide_on_delete), nullptr);
 	if (PreviewSupported()) {
 		_preview = Libs::gtk_image_new();
-		g_signal_connect_swapped(G_OBJECT(gtkWidget), "update-preview", G_CALLBACK(onUpdatePreview), this);
+		Libs::g_signal_connect_swapped_helper(Libs::g_object_cast(gtkWidget), "update-preview", GCallback(onUpdatePreview), this);
 		Libs::gtk_file_chooser_set_preview_widget(Libs::gtk_file_chooser_cast(gtkWidget), _preview);
 	}
 }
@@ -373,6 +244,9 @@ GtkDialog *QGtkDialog::gtkDialog() const {
 }
 
 void QGtkDialog::exec() {
+	if (auto w = App::wnd()) {
+		w->reActivateWindow();
+	}
 	if (modality() == Qt::ApplicationModal) {
 		// block input to the whole app, including other GTK dialogs
 		Libs::gtk_dialog_run(gtkDialog());
@@ -430,17 +304,17 @@ void QGtkDialog::onUpdatePreview(QGtkDialog* dialog) {
 	// this may hang. See https://crbug.com/534754.
 	struct stat stat_buf;
 	if (stat(filename, &stat_buf) != 0 || !S_ISREG(stat_buf.st_mode)) {
-		g_free(filename);
+		Libs::g_free(filename);
 		Libs::gtk_file_chooser_set_preview_widget_active(Libs::gtk_file_chooser_cast(dialog->gtkWidget), false);
 		return;
 	}
 
 	// This will preserve the image's aspect ratio.
 	auto pixbuf = Libs::gdk_pixbuf_new_from_file_at_size(filename, kPreviewWidth, kPreviewHeight, nullptr);
-	g_free(filename);
+	Libs::g_free(filename);
 	if (pixbuf) {
 		Libs::gtk_image_set_from_pixbuf(Libs::gtk_image_cast(dialog->_preview), pixbuf);
-		g_object_unref(pixbuf);
+		Libs::g_object_unref(pixbuf);
 	}
 	Libs::gtk_file_chooser_set_preview_widget_active(Libs::gtk_file_chooser_cast(dialog->gtkWidget), pixbuf ? true : false);
 }
@@ -456,24 +330,6 @@ namespace {
 const char *filterRegExp =
 "^(.*)\\(([a-zA-Z0-9_.,*? +;#\\-\\[\\]@\\{\\}/!<>\\$%&=^~:\\|]*)\\)$";
 
-QStringList makeFilterList(const QString &filter) {
-	QString f(filter);
-
-	if (f.isEmpty())
-		return QStringList();
-
-	QString sep(QLatin1String(";;"));
-	int i = f.indexOf(sep, 0);
-	if (i == -1) {
-		if (f.indexOf(QLatin1Char('\n'), 0) != -1) {
-			sep = QLatin1Char('\n');
-			i = f.indexOf(sep, 0);
-		}
-	}
-
-	return f.split(sep);
-}
-
 // Makes a list of filters from a normal filter string "Image Files (*.png *.jpg)"
 QStringList cleanFilterList(const QString &filter) {
 	QRegExp regexp(QString::fromLatin1(filterRegExp));
@@ -482,7 +338,7 @@ QStringList cleanFilterList(const QString &filter) {
 	int i = regexp.indexIn(f);
 	if (i >= 0)
 		f = regexp.cap(2);
-	return f.split(QLatin1Char(' '), base::QStringSkipEmptyParts);
+	return f.split(QLatin1Char(' '), QString::SkipEmptyParts);
 }
 
 } // namespace
@@ -491,7 +347,7 @@ QStringList cleanFilterList(const QString &filter) {
 GtkFileDialog::GtkFileDialog(QWidget *parent, const QString &caption, const QString &directory, const QString &filter) : QDialog(parent)
 , _windowTitle(caption)
 , _initialDirectory(directory) {
-	auto filters = makeFilterList(filter);
+	auto filters = qt_make_filter_list(filter);
 	const int numFilters = filters.count();
 	_nameFilters.reserve(numFilters);
 	for (int i = 0; i < numFilters; ++i) {
@@ -500,15 +356,13 @@ GtkFileDialog::GtkFileDialog(QWidget *parent, const QString &caption, const QStr
 
 	d.reset(new QGtkDialog(Libs::gtk_file_chooser_dialog_new("", nullptr,
 		GTK_FILE_CHOOSER_ACTION_OPEN,
-		// https://developer.gnome.org/gtk3/stable/GtkFileChooserDialog.html#gtk-file-chooser-dialog-new
-		// first_button_text doesn't need explicit conversion to char*, while all others are vardict
-		tr::lng_cancel(tr::now).toUtf8(), GTK_RESPONSE_CANCEL,
-		tr::lng_box_ok(tr::now).toUtf8().constData(), GTK_RESPONSE_OK, nullptr)));
+		GTK_STOCK_CANCEL, GTK_RESPONSE_CANCEL,
+		GTK_STOCK_OK, GTK_RESPONSE_OK, NULL)));
 	connect(d.data(), SIGNAL(accept()), this, SLOT(onAccepted()));
 	connect(d.data(), SIGNAL(reject()), this, SLOT(onRejected()));
 
-	g_signal_connect(Libs::gtk_file_chooser_cast(d->gtkDialog()), "selection-changed", G_CALLBACK(onSelectionChanged), this);
-	g_signal_connect_swapped(Libs::gtk_file_chooser_cast(d->gtkDialog()), "current-folder-changed", G_CALLBACK(onCurrentFolderChanged), this);
+	Libs::g_signal_connect_helper(Libs::gtk_file_chooser_cast(d->gtkDialog()), "selection-changed", G_CALLBACK(onSelectionChanged), this);
+	Libs::g_signal_connect_swapped_helper(Libs::gtk_file_chooser_cast(d->gtkDialog()), "current-folder-changed", G_CALLBACK(onCurrentFolderChanged), this);
 }
 
 GtkFileDialog::~GtkFileDialog() {
@@ -596,7 +450,7 @@ QDir GtkFileDialog::directory() const {
 	gchar *folder = Libs::gtk_file_chooser_get_current_folder(Libs::gtk_file_chooser_cast(gtkDialog));
 	if (folder) {
 		ret = QString::fromUtf8(folder);
-		g_free(folder);
+		Libs::g_free(folder);
 	}
 	return QDir(ret);
 }
@@ -617,7 +471,7 @@ QStringList GtkFileDialog::selectedFiles() const {
 	GSList *filenames = Libs::gtk_file_chooser_get_filenames(Libs::gtk_file_chooser_cast(gtkDialog));
 	for (GSList *it  = filenames; it; it = it->next)
 		selection += QString::fromUtf8((const char*)it->data);
-	g_slist_free(filenames);
+	Libs::g_slist_free(filenames);
 	return selection;
 }
 
@@ -682,6 +536,7 @@ GtkFileChooserAction gtkFileChooserAction(QFileDialog::FileMode fileMode, QFileD
 		else
 			return GTK_FILE_CHOOSER_ACTION_SAVE;
 	case QFileDialog::Directory:
+	case QFileDialog::DirectoryOnly:
 	default:
 		if (acceptMode == QFileDialog::AcceptOpen)
 			return GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER;
@@ -739,9 +594,9 @@ void GtkFileDialog::applyOptions() {
 			/*if (opts->isLabelExplicitlySet(QFileDialogOptions::Accept))
 				Libs::gtk_button_set_label(Libs::gtk_button_cast(acceptButton), opts->labelText(QFileDialogOptions::Accept).toUtf8());
 			else*/ if (_acceptMode == QFileDialog::AcceptOpen)
-				Libs::gtk_button_set_label(Libs::gtk_button_cast(acceptButton), tr::lng_open_link(tr::now).toUtf8());
+				Libs::gtk_button_set_label(Libs::gtk_button_cast(acceptButton), GTK_STOCK_OPEN);
 			else
-				Libs::gtk_button_set_label(Libs::gtk_button_cast(acceptButton), tr::lng_settings_save(tr::now).toUtf8());
+				Libs::gtk_button_set_label(Libs::gtk_button_cast(acceptButton), GTK_STOCK_SAVE);
 		}
 
 		GtkWidget *rejectButton = Libs::gtk_dialog_get_widget_for_response(gtkDialog, GTK_RESPONSE_CANCEL);
@@ -749,7 +604,7 @@ void GtkFileDialog::applyOptions() {
 			/*if (opts->isLabelExplicitlySet(QFileDialogOptions::Reject))
 				Libs::gtk_button_set_label(Libs::gtk_button_cast(rejectButton), opts->labelText(QFileDialogOptions::Reject).toUtf8());
 			else*/
-				Libs::gtk_button_set_label(Libs::gtk_button_cast(rejectButton), tr::lng_cancel(tr::now).toUtf8());
+				Libs::gtk_button_set_label(Libs::gtk_button_cast(rejectButton), GTK_STOCK_CANCEL);
 		}
 	}
 }

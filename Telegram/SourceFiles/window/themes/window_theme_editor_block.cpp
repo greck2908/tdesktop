@@ -12,8 +12,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/shadow.h"
 #include "boxes/edit_color_box.h"
 #include "lang/lang_keys.h"
-#include "base/call_delayed.h"
-#include "base/qt_adapters.h"
 
 namespace Window {
 namespace Theme {
@@ -45,9 +43,9 @@ public:
 	}
 
 	QString description() const {
-		return _description.toString();
+		return _description.originalText();
 	}
-	const Ui::Text::String &descriptionText() const {
+	const Text &descriptionText() const {
 		return _description;
 	}
 	void setDescription(const QString &description) {
@@ -104,7 +102,7 @@ private:
 	QString _copyOf;
 	QColor _value;
 	QString _valueString;
-	Ui::Text::String _description = { st::windowMinWidth / 2 };
+	Text _description = { st::windowMinWidth / 2 };
 
 	OrderedSet<QString> _searchWords;
 	OrderedSet<QChar> _searchStartChars;
@@ -154,8 +152,8 @@ void EditorBlock::Row::fillValueString() {
 void EditorBlock::Row::fillSearchIndex() {
 	_searchWords.clear();
 	_searchStartChars.clear();
-	auto toIndex = _name + ' ' + _copyOf + ' ' + TextUtilities::RemoveAccents(_description.toString()) + ' ' + _valueString;
-	auto words = toIndex.toLower().split(SearchSplitter, base::QStringSkipEmptyParts);
+	auto toIndex = _name + ' ' + _copyOf + ' ' + TextUtilities::RemoveAccents(_description.originalText()) + ' ' + _valueString;
+	auto words = toIndex.toLower().split(SearchSplitter, QString::SkipEmptyParts);
 	for_const (auto &word, words) {
 		_searchWords.insert(word);
 		_searchStartChars.insert(word[0]);
@@ -239,7 +237,6 @@ void EditorBlock::removeRow(const QString &name, bool removeCopyReferences) {
 			row.setCopyOf(QString());
 		}
 	}
-	removeFromSearch(_data[index]);
 	_data.erase(_data.begin() + index);
 	_indices.erase(it);
 	for (auto i = index, count = static_cast<int>(_data.size()); i != count; ++i) {
@@ -296,7 +293,7 @@ void EditorBlock::activateRow(const Row &row) {
 		}
 	} else {
 		_editing = findRowIndex(&row);
-		if (auto box = Ui::show(Box<EditColorBox>(row.name(), EditColorBox::Mode::RGBA, row.value()))) {
+		if (auto box = Ui::show(Box<EditColorBox>(row.name(), row.value()))) {
 			box->setSaveCallback(crl::guard(this, [this](QColor value) {
 				saveEditing(value);
 			}));
@@ -313,9 +310,7 @@ void EditorBlock::activateRow(const Row &row) {
 bool EditorBlock::selectSkip(int direction) {
 	_mouseSelection = false;
 
-	auto maxSelected = size_type(isSearch()
-		? _searchResults.size()
-		: _data.size()) - 1;
+	auto maxSelected = (isSearch() ? _searchResults.size() : _data.size()) - 1;
 	auto newSelected = _selected + direction;
 	if (newSelected < -1 || newSelected > maxSelected) {
 		newSelected = maxSelected;
@@ -397,29 +392,6 @@ bool EditorBlock::feedDescription(const QString &name, const QString &descriptio
 	return false;
 }
 
-void EditorBlock::sortByDistance(const QColor &to) {
-	auto toHue = int();
-	auto toSaturation = int();
-	auto toLightness = int();
-	to.getHsl(&toHue, &toSaturation, &toLightness);
-	ranges::sort(_data, ranges::less(), [&](const Row &row) {
-		auto fromHue = int();
-		auto fromSaturation = int();
-		auto fromLightness = int();
-		row.value().getHsl(&fromHue, &fromSaturation, &fromLightness);
-		if (!row.copyOf().isEmpty()) {
-			return 365;
-		}
-		const auto a = std::abs(fromHue - toHue);
-		const auto b = 360 + fromHue - toHue;
-		const auto c = 360 + toHue - fromHue;
-		if (std::min(a, std::min(b, c)) > 15) {
-			return 363;
-		}
-		return 255 - fromSaturation;
-	});
-}
-
 template <typename Callback>
 void EditorBlock::enumerateRows(Callback callback) {
 	if (isSearch()) {
@@ -446,7 +418,7 @@ void EditorBlock::enumerateRows(Callback callback) const {
 			}
 		}
 	} else {
-		for (const auto &row : _data) {
+		for_const (auto &row, _data) {
 			if (!callback(row)) {
 				break;
 			}
@@ -524,7 +496,7 @@ void EditorBlock::mouseReleaseEvent(QMouseEvent *e) {
 		if (_context->box) {
 			chooseRow();
 		} else if (_selected >= 0) {
-			base::call_delayed(st::defaultRippleAnimation.hideDuration, this, [this, index = findRowIndex(&rowAtIndex(_selected))] {
+			App::CallDelayed(st::defaultRippleAnimation.hideDuration, this, [this, index = findRowIndex(&rowAtIndex(_selected))] {
 				if (index >= 0 && index < _data.size()) {
 					activateRow(_data[index]);
 				}
@@ -646,21 +618,22 @@ void EditorBlock::paintEvent(QPaintEvent *e) {
 		p.fillRect(clip, st::dialogsBg);
 		p.setFont(st::noContactsFont);
 		p.setPen(st::noContactsColor);
-		p.drawText(QRect(0, 0, width(), st::noContactsHeight), tr::lng_theme_editor_no_keys(tr::now));
+		p.drawText(QRect(0, 0, width(), st::noContactsHeight), lang(lng_theme_editor_no_keys));
 	}
 
+	auto ms = getms();
 	auto cliptop = clip.y();
 	auto clipbottom = cliptop + clip.height();
-	enumerateRowsFrom(cliptop, [&](int index, const Row &row) {
+	enumerateRowsFrom(cliptop, [this, &p, clipbottom, ms](int index, const Row &row) {
 		if (row.top() >= clipbottom) {
 			return false;
 		}
-		paintRow(p, index, row);
+		paintRow(p, index, row, ms);
 		return true;
 	});
 }
 
-void EditorBlock::paintRow(Painter &p, int index, const Row &row) {
+void EditorBlock::paintRow(Painter &p, int index, const Row &row, TimeMs ms) {
 	auto rowTop = row.top() + st::themeEditorMargin.top();
 
 	auto rect = QRect(0, row.top(), width(), row.height());
@@ -668,7 +641,7 @@ void EditorBlock::paintRow(Painter &p, int index, const Row &row) {
 	auto active = (findRowIndex(&row) == _editing);
 	p.fillRect(rect, active ? st::dialogsBgActive : selected ? st::dialogsBgOver : st::dialogsBg);
 	if (auto ripple = row.ripple()) {
-		ripple->paint(p, 0, row.top(), width(), &(active ? st::activeButtonBgRipple : st::windowBgRipple)->c);
+		ripple->paint(p, 0, row.top(), width(), ms, &(active ? st::activeButtonBgRipple : st::windowBgRipple)->c);
 		if (ripple->empty()) {
 			row.resetRipple();
 		}

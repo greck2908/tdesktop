@@ -9,25 +9,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "passport/passport_panel_controller.h"
 #include "passport/passport_panel_details_row.h"
+#include "info/profile/info_profile_button.h"
+#include "info/profile/info_profile_values.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
-#include "ui/widgets/box_content_divider.h"
 #include "ui/wrap/fade_wrap.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/vertical_layout.h"
-#include "ui/chat/attach/attach_prepare.h"
-#include "ui/text/text_utilities.h" // Ui::Text::ToUpper
-#include "ui/text/text_options.h"
+#include "ui/text_options.h"
 #include "core/file_utilities.h"
 #include "lang/lang_keys.h"
 #include "boxes/abstract_box.h"
 #include "storage/storage_media_prepare.h"
-#include "storage/file_upload.h" // For Storage::kUseBigFilesFrom.
-#include "app.h"
-#include "styles/style_layers.h"
+#include "styles/style_boxes.h"
 #include "styles/style_passport.h"
-
-#include <QtCore/QBuffer>
 
 namespace Passport {
 namespace {
@@ -36,13 +31,13 @@ constexpr auto kMaxDimensions = 2048;
 constexpr auto kMaxSize = 10 * 1024 * 1024;
 constexpr auto kJpegQuality = 89;
 
-static_assert(kMaxSize <= Storage::kUseBigFilesFrom);
+static_assert(kMaxSize <= UseBigFilesFrom);
 
-std::variant<ReadScanError, QByteArray> ProcessImage(QByteArray &&bytes) {
+base::variant<ReadScanError, QByteArray> ProcessImage(QByteArray &&bytes) {
 	auto image = App::readImage(base::take(bytes));
 	if (image.isNull()) {
 		return ReadScanError::CantReadImage;
-	} else if (!Ui::ValidateThumbDimensions(image.width(), image.height())) {
+	} else if (!Storage::ValidateThumbDimensions(image.width(), image.height())) {
 		return ReadScanError::BadImageSize;
 	}
 	if (std::max(image.width(), image.height()) > kMaxDimensions) {
@@ -86,10 +81,10 @@ public:
 	void setError(bool error);
 
 	rpl::producer<> deleteClicks() const {
-		return _delete->entity()->clicks() | rpl::to_empty;
+		return _delete->entity()->clicks();
 	}
 	rpl::producer<> restoreClicks() const {
-		return _restore->entity()->clicks() | rpl::to_empty;
+		return _restore->entity()->clicks();
 	}
 
 protected:
@@ -101,8 +96,8 @@ private:
 	int countAvailableWidth() const;
 
 	const style::PassportScanRow &_st;
-	Ui::Text::String _name;
-	Ui::Text::String _status;
+	Text _name;
+	Text _status;
 	int _nameHeight = 0;
 	int _statusHeight = 0;
 	bool _error = false;
@@ -119,177 +114,11 @@ struct EditScans::SpecialScan {
 	QPointer<Ui::SlideWrap<Ui::FlatLabel>> header;
 	QPointer<Ui::VerticalLayout> wrap;
 	base::unique_qptr<Ui::SlideWrap<ScanButton>> row;
-	QPointer<Ui::SettingsButton> upload;
+	QPointer<Info::Profile::Button> upload;
 	bool errorShown = false;
-	Ui::Animations::Simple errorAnimation;
-	rpl::variable<bool> rowCreated;
+	Animation errorAnimation;
+
 };
-
-void UpdateFileRow(
-		not_null<ScanButton*> button,
-		const ScanInfo &info) {
-	button->setStatus(info.status);
-	button->setImage(info.thumb);
-	button->setDeleted(info.deleted);
-	button->setError(!info.error.isEmpty());
-}
-
-base::unique_qptr<Ui::SlideWrap<ScanButton>> CreateScan(
-		not_null<Ui::VerticalLayout*> parent,
-		const ScanInfo &info,
-		const QString &name) {
-	auto result = base::unique_qptr<Ui::SlideWrap<ScanButton>>(
-		parent->add(object_ptr<Ui::SlideWrap<ScanButton>>(
-			parent,
-			object_ptr<ScanButton>(
-				parent,
-				st::passportScanRow,
-				name,
-				info.status,
-				info.deleted,
-				!info.error.isEmpty()))));
-	result->entity()->setImage(info.thumb);
-	return result;
-}
-
-EditScans::List::List(
-	not_null<PanelController*> controller,
-	ScanListData &&data)
-: controller(controller)
-, files(std::move(data.files))
-, initialCount(int(files.size()))
-, errorMissing(data.errorMissing) {
-}
-
-EditScans::List::List(
-	not_null<PanelController*> controller,
-	std::optional<ScanListData> &&data)
-: controller(controller)
-, files(data ? std::move(data->files) : std::vector<ScanInfo>())
-, initialCount(data ? base::make_optional(int(files.size())) : std::nullopt)
-, errorMissing(data ? std::move(data->errorMissing) : QString()) {
-}
-
-bool EditScans::List::uploadedSomeMore() const {
-	if (!initialCount) {
-		return false;
-	}
-	const auto from = begin(files) + *initialCount;
-	const auto till = end(files);
-	return std::find_if(from, till, [](const ScanInfo &file) {
-		return !file.deleted;
-	}) != till;
-}
-
-bool EditScans::List::uploadMoreRequired() const {
-	if (!upload) {
-		return false;
-	}
-	const auto exists = ranges::any_of(
-		files,
-		[](const ScanInfo &file) { return !file.deleted; });
-	if (!exists) {
-		return true;
-	}
-	const auto errorExists = ranges::any_of(
-		files,
-		[](const ScanInfo &file) { return !file.error.isEmpty(); });
-	return (errorExists || uploadMoreError) && !uploadedSomeMore();
-}
-
-Ui::SlideWrap<ScanButton> *EditScans::List::nonDeletedErrorRow() const {
-	const auto nonDeletedErrorIt = ranges::find_if(
-		files,
-		[](const ScanInfo &file) {
-			return !file.error.isEmpty() && !file.deleted;
-		});
-	if (nonDeletedErrorIt == end(files)) {
-		return nullptr;
-	}
-	const auto index = (nonDeletedErrorIt - begin(files));
-	return rows[index].get();
-}
-
-rpl::producer<QString> EditScans::List::uploadButtonText() const {
-	return (files.empty()
-		? tr::lng_passport_upload_scans
-		: tr::lng_passport_upload_more)() | Ui::Text::ToUpper();
-}
-
-void EditScans::List::hideError() {
-	toggleError(false);
-}
-
-void EditScans::List::toggleError(bool shown) {
-	if (errorShown != shown) {
-		errorShown = shown;
-		errorAnimation.start(
-			[=] { errorAnimationCallback(); },
-			errorShown ? 0. : 1.,
-			errorShown ? 1. : 0.,
-			st::passportDetailsField.duration);
-	}
-}
-
-void EditScans::List::errorAnimationCallback() {
-	const auto error = errorAnimation.value(errorShown ? 1. : 0.);
-	if (error == 0.) {
-		upload->setColorOverride(std::nullopt);
-	} else {
-		upload->setColorOverride(anim::color(
-			st::passportUploadButton.textFg,
-			st::boxTextFgError,
-			error));
-	}
-}
-
-void EditScans::List::updateScan(ScanInfo &&info, int width) {
-	const auto i = ranges::find(files, info.key, [](const ScanInfo &file) {
-		return file.key;
-	});
-	if (i != files.end()) {
-		*i = std::move(info);
-		const auto scan = rows[i - files.begin()]->entity();
-		UpdateFileRow(scan, *i);
-		if (!i->deleted) {
-			hideError();
-		}
-	} else {
-		files.push_back(std::move(info));
-		pushScan(files.back());
-		wrap->resizeToWidth(width);
-		rows.back()->show(anim::type::normal);
-		if (divider) {
-			divider->hide(anim::type::normal);
-		}
-		header->show(anim::type::normal);
-		uploadTexts.fire(uploadButtonText());
-	}
-}
-
-void EditScans::List::pushScan(const ScanInfo &info) {
-	const auto index = rows.size();
-	const auto type = info.type;
-	rows.push_back(CreateScan(
-		wrap,
-		info,
-		tr::lng_passport_scan_index(tr::now, lt_index, QString::number(index + 1))));
-	rows.back()->hide(anim::type::instant);
-
-	const auto scan = rows.back()->entity();
-
-	scan->deleteClicks(
-	) | rpl::start_with_next([=] {
-		controller->deleteScan(type, index);
-	}, scan->lifetime());
-
-	scan->restoreClicks(
-	) | rpl::start_with_next([=] {
-		controller->restoreScan(type, index);
-	}, scan->lifetime());
-
-	hideError();
-}
 
 ScanButton::ScanButton(
 	QWidget *parent,
@@ -314,7 +143,7 @@ ScanButton::ScanButton(
 	this,
 	object_ptr<Ui::RoundButton>(
 		this,
-		tr::lng_passport_delete_scan_undo(),
+		langFactory(lng_passport_delete_scan_undo),
 		_st.restore)) {
 	_delete->toggle(!deleted, anim::type::instant);
 	_restore->toggle(deleted, anim::type::instant);
@@ -428,286 +257,216 @@ EditScans::EditScans(
 	QWidget *parent,
 	not_null<PanelController*> controller,
 	const QString &header,
-	const QString &error,
-	ScanListData &&scans,
-	std::optional<ScanListData> &&translations)
+	const QString &errorMissing,
+	std::vector<ScanInfo> &&files)
 : RpWidget(parent)
 , _controller(controller)
-, _error(error)
-, _content(this)
-, _scansList(_controller, std::move(scans))
-, _translationsList(_controller, std::move(translations)) {
+, _files(std::move(files))
+, _initialCount(_files.size())
+, _errorMissing(errorMissing)
+, _content(this) {
 	setupScans(header);
 }
 
 EditScans::EditScans(
 	QWidget *parent,
 	not_null<PanelController*> controller,
-	const QString &header,
-	const QString &error,
-	std::map<FileType, ScanInfo> &&specialFiles,
-	std::optional<ScanListData> &&translations)
+	std::map<SpecialFile, ScanInfo> &&specialFiles)
 : RpWidget(parent)
 , _controller(controller)
-, _error(error)
-, _content(this)
-, _scansList(_controller)
-, _translationsList(_controller, std::move(translations)) {
-	setupSpecialScans(header, std::move(specialFiles));
+, _initialCount(-1)
+, _content(this) {
+	setupSpecialScans(std::move(specialFiles));
 }
 
-std::optional<int> EditScans::validateGetErrorTop() {
-	auto result = std::optional<int>();
+bool EditScans::uploadedSomeMore() const {
+	const auto from = begin(_files) + _initialCount;
+	const auto till = end(_files);
+	return std::find_if(from, till, [](const ScanInfo &file) {
+		return !file.deleted;
+	}) != till;
+}
+
+base::optional<int> EditScans::validateGetErrorTop() {
+	auto result = base::optional<int>();
 	const auto suggestResult = [&](int value) {
 		if (!result || *result > value) {
 			result = value;
 		}
 	};
 
-	if (_commonError && !somethingChanged()) {
-		suggestResult(_commonError->y());
+	const auto exists = ranges::find_if(
+		_files,
+		[](const ScanInfo &file) { return !file.deleted; }) != end(_files);
+	const auto errorExists = ranges::find_if(
+		_files,
+		[](const ScanInfo &file) { return !file.error.isEmpty(); }
+	) != end(_files);
+
+	if (_upload && (!exists
+		|| ((errorExists || _uploadMoreError) && !uploadedSomeMore()))) {
+		toggleError(true);
+		suggestResult((_files.size() > 5) ? _upload->y() : _header->y());
 	}
-	const auto suggestList = [&](FileType type) {
-		auto &list = this->list(type);
-		if (list.uploadMoreRequired()) {
-			list.toggleError(true);
-			suggestResult((list.files.size() > 5)
-				? list.upload->y()
-				: list.header->y());
-		}
-		if (const auto row = list.nonDeletedErrorRow()) {
-			//toggleError(true);
-			suggestResult(row->y());
-		}
-	};
-	suggestList(FileType::Scan);
+
+	const auto nonDeletedErrorIt = ranges::find_if(
+		_files,
+		[](const ScanInfo &file) {
+			return !file.error.isEmpty() && !file.deleted;
+		});
+	if (nonDeletedErrorIt != end(_files)) {
+		const auto index = (nonDeletedErrorIt - begin(_files));
+//		toggleError(true);
+		suggestResult(_rows[index]->y());
+	}
 	for (const auto &[type, scan] : _specialScans) {
 		if (!scan.file.key.id
 			|| scan.file.deleted
 			|| !scan.file.error.isEmpty()) {
 			toggleSpecialScanError(type, true);
-			suggestResult(scan.header ? scan.header->y() : scan.wrap->y());
+			suggestResult(scan.header->y());
 		}
 	}
-	suggestList(FileType::Translation);
 	return result;
-}
-
-EditScans::List &EditScans::list(FileType type) {
-	switch (type) {
-	case FileType::Scan: return _scansList;
-	case FileType::Translation: return _translationsList;
-	}
-	Unexpected("Type in EditScans::list().");
-}
-
-const EditScans::List &EditScans::list(FileType type) const {
-	switch (type) {
-	case FileType::Scan: return _scansList;
-	case FileType::Translation: return _translationsList;
-	}
-	Unexpected("Type in EditScans::list() const.");
 }
 
 void EditScans::setupScans(const QString &header) {
 	const auto inner = _content.data();
 	inner->move(0, 0);
 
-	if (!_error.isEmpty()) {
-		_commonError = inner->add(
+	_divider = inner->add(
+		object_ptr<Ui::SlideWrap<BoxContentDivider>>(
+			inner,
+			object_ptr<BoxContentDivider>(
+				inner,
+				st::passportFormDividerHeight)));
+	_divider->toggle(_files.empty(), anim::type::instant);
+
+	_header = inner->add(
+		object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
+			inner,
+			object_ptr<Ui::FlatLabel>(
+				inner,
+				header,
+				Ui::FlatLabel::InitType::Simple,
+				st::passportFormHeader),
+			st::passportUploadHeaderPadding));
+	_header->toggle(!_files.empty(), anim::type::instant);
+	if (!_errorMissing.isEmpty()) {
+		_uploadMoreError = inner->add(
 			object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
 				inner,
 				object_ptr<Ui::FlatLabel>(
 					inner,
-					_error,
+					_errorMissing,
+					Ui::FlatLabel::InitType::Simple,
 					st::passportVerifyErrorLabel),
-				st::passportValueErrorPadding));
-		_commonError->toggle(true, anim::type::instant);
+				st::passportUploadErrorPadding));
+		_uploadMoreError->toggle(true, anim::type::instant);
+	}
+	_wrap = inner->add(object_ptr<Ui::VerticalLayout>(inner));
+	for (const auto &scan : _files) {
+		pushScan(scan);
+		_rows.back()->show(anim::type::instant);
 	}
 
-	setupList(inner, FileType::Scan, header);
-	setupList(inner, FileType::Translation, tr::lng_passport_translation(tr::now));
+	_upload = inner->add(
+		object_ptr<Info::Profile::Button>(
+			inner,
+			_uploadTexts.events_starting_with(
+				uploadButtonText()
+			) | rpl::flatten_latest(),
+			st::passportUploadButton),
+		st::passportUploadButtonPadding);
+	_upload->addClickHandler([=] {
+		chooseScan();
+	});
+
+	inner->add(object_ptr<BoxContentDivider>(
+		inner,
+		st::passportFormDividerHeight));
 
 	init();
 }
 
-void EditScans::setupList(
-		not_null<Ui::VerticalLayout*> container,
-		FileType type,
-		const QString &header) {
-	auto &list = this->list(type);
-	if (!list.initialCount) {
-		return;
-	}
-
-	if (type == FileType::Scan) {
-		list.divider = container->add(
-			object_ptr<Ui::SlideWrap<Ui::BoxContentDivider>>(
-				container,
-				object_ptr<Ui::BoxContentDivider>(
-					container,
-					st::passportFormDividerHeight)));
-		list.divider->toggle(list.files.empty(), anim::type::instant);
-	}
-	list.header = container->add(
-		object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
-			container,
-			object_ptr<Ui::FlatLabel>(
-				container,
-				header,
-				st::passportFormHeader),
-			st::passportUploadHeaderPadding));
-	list.header->toggle(
-		!list.divider || !list.files.empty(),
-		anim::type::instant);
-	if (!list.errorMissing.isEmpty()) {
-		list.uploadMoreError = container->add(
-			object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
-				container,
-				object_ptr<Ui::FlatLabel>(
-					container,
-					list.errorMissing,
-					st::passportVerifyErrorLabel),
-				st::passportUploadErrorPadding));
-		list.uploadMoreError->toggle(true, anim::type::instant);
-	}
-	list.wrap = container->add(object_ptr<Ui::VerticalLayout>(container));
-	for (const auto &scan : list.files) {
-		list.pushScan(scan);
-		list.rows.back()->show(anim::type::instant);
-	}
-
-	list.upload = container->add(
-		object_ptr<Ui::SettingsButton>(
-			container,
-			list.uploadTexts.events_starting_with(
-				list.uploadButtonText()
-			) | rpl::flatten_latest(),
-			st::passportUploadButton),
-		st::passportUploadButtonPadding);
-	list.upload->addClickHandler([=] {
-		chooseScan(type);
-	});
-
-	container->add(object_ptr<Ui::BoxContentDivider>(
-		container,
-		st::passportFormDividerHeight));
-}
-
-void EditScans::setupSpecialScans(
-		const QString &header,
-		std::map<FileType, ScanInfo> &&files) {
-	const auto requiresBothSides = files.find(FileType::ReverseSide)
-		!= end(files);
-	const auto title = [&](FileType type) {
+void EditScans::setupSpecialScans(std::map<SpecialFile, ScanInfo> &&files) {
+	const auto title = [](SpecialFile type) {
 		switch (type) {
-		case FileType::FrontSide:
-			return requiresBothSides
-				? tr::lng_passport_front_side_title(tr::now)
-				: tr::lng_passport_main_page_title(tr::now);
-		case FileType::ReverseSide:
-			return tr::lng_passport_reverse_side_title(tr::now);
-		case FileType::Selfie:
-			return tr::lng_passport_selfie_title(tr::now);
+		case SpecialFile::FrontSide:
+			return lang(lng_passport_front_side_title);
+		case SpecialFile::ReverseSide:
+			return lang(lng_passport_reverse_side_title);
+		case SpecialFile::Selfie:
+			return lang(lng_passport_selfie_title);
 		}
 		Unexpected("Type in special row title.");
 	};
-	const auto uploadText = [=](FileType type, bool hasScan) {
+	const auto uploadKey = [](SpecialFile type) {
 		switch (type) {
-		case FileType::FrontSide:
-			return requiresBothSides
-				? (hasScan
-					? tr::lng_passport_reupload_front_side
-					: tr::lng_passport_upload_front_side)
-				: (hasScan
-					? tr::lng_passport_reupload_main_page
-					: tr::lng_passport_upload_main_page);
-		case FileType::ReverseSide:
-			return hasScan
-				? tr::lng_passport_reupload_reverse_side
-				: tr::lng_passport_upload_reverse_side;
-		case FileType::Selfie:
-			return hasScan
-				? tr::lng_passport_reupload_selfie
-				: tr::lng_passport_upload_selfie;
+		case SpecialFile::FrontSide:
+			return lng_passport_upload_front_side;
+		case SpecialFile::ReverseSide:
+			return lng_passport_upload_reverse_side;
+		case SpecialFile::Selfie:
+			return lng_passport_upload_selfie;
 		}
 		Unexpected("Type in special row upload key.");
 	};
-	const auto description = [&](FileType type) {
+	const auto description = [](SpecialFile type) {
 		switch (type) {
-		case FileType::FrontSide:
-			return requiresBothSides
-				? tr::lng_passport_front_side_description
-				: tr::lng_passport_main_page_description;
-		case FileType::ReverseSide:
-			return tr::lng_passport_reverse_side_description;
-		case FileType::Selfie:
-			return tr::lng_passport_selfie_description;
+		case SpecialFile::FrontSide:
+			return lang(lng_passport_front_side_description);
+		case SpecialFile::ReverseSide:
+			return lang(lng_passport_reverse_side_description);
+		case SpecialFile::Selfie:
+			return lang(lng_passport_selfie_description);
 		}
 		Unexpected("Type in special row upload key.");
 	};
 
 	const auto inner = _content.data();
 	inner->move(0, 0);
-
-	if (!_error.isEmpty()) {
-		_commonError = inner->add(
-			object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
-				inner,
-				object_ptr<Ui::FlatLabel>(
-					inner,
-					_error,
-					st::passportVerifyErrorLabel),
-				st::passportValueErrorPadding));
-		_commonError->toggle(true, anim::type::instant);
-	}
-
 	for (auto &[type, info] : files) {
 		const auto i = _specialScans.emplace(
 			type,
 			SpecialScan(std::move(info))).first;
 		auto &scan = i->second;
 
-		if (_specialScans.size() == 1) {
-			scan.header = inner->add(
-				object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
+		scan.header = inner->add(
+			object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
+				inner,
+				object_ptr<Ui::FlatLabel>(
 					inner,
-					object_ptr<Ui::FlatLabel>(
-						inner,
-						header,
-						st::passportFormHeader),
-					st::passportUploadHeaderPadding));
-			scan.header->toggle(scan.file.key.id != 0, anim::type::instant);
-		}
+					title(type),
+					Ui::FlatLabel::InitType::Simple,
+					st::passportFormHeader),
+				st::passportUploadHeaderPadding));
+		scan.header->toggle(scan.file.key.id != 0, anim::type::instant);
 		scan.wrap = inner->add(object_ptr<Ui::VerticalLayout>(inner));
 		if (scan.file.key.id) {
-			createSpecialScanRow(scan, scan.file, requiresBothSides);
+			createSpecialScanRow(scan, scan.file);
 		}
-		auto label = scan.rowCreated.value(
-		) | rpl::map([=, type = type](bool created) {
-			return uploadText(type, created)();
-		}) | rpl::flatten_latest(
-		) | Ui::Text::ToUpper();
 		scan.upload = inner->add(
-			object_ptr<Ui::SettingsButton>(
+			object_ptr<Info::Profile::Button>(
 				inner,
-				std::move(label),
+				Lang::Viewer(
+					uploadKey(type)
+				) | Info::Profile::ToUpperValue(),
 				st::passportUploadButton),
 			st::passportUploadButtonPadding);
 		scan.upload->addClickHandler([=, type = type] {
-			chooseScan(type);
+			chooseSpecialScan(type);
 		});
 
 		inner->add(object_ptr<Ui::DividerLabel>(
 			inner,
 			object_ptr<Ui::FlatLabel>(
-				inner,
-				description(type)(tr::now),
+				_content,
+				description(type),
+				Ui::FlatLabel::InitType::Simple,
 				st::boxDividerLabel),
 			st::passportFormLabelPadding));
 	}
-
-	setupList(inner, FileType::Translation, tr::lng_passport_translation(tr::now));
 
 	init();
 }
@@ -730,118 +489,155 @@ void EditScans::init() {
 }
 
 void EditScans::updateScan(ScanInfo &&info) {
-	if (info.type != FileType::Scan && info.type != FileType::Translation) {
-		updateSpecialScan(std::move(info));
+	if (info.special) {
+		updateSpecialScan(*info.special, std::move(info));
 		return;
 	}
-	list(info.type).updateScan(std::move(info), width());
-	updateErrorLabels();
-}
-
-void EditScans::scanFieldsChanged(bool changed) {
-	if (_scanFieldsChanged != changed) {
-		_scanFieldsChanged = changed;
-		updateErrorLabels();
-	}
-}
-
-void EditScans::updateErrorLabels() {
-	const auto updateList = [&](FileType type) {
-		auto &list = this->list(type);
-		if (list.uploadMoreError) {
-			list.uploadMoreError->toggle(
-				!list.uploadedSomeMore(),
-				anim::type::normal);
+	const auto i = ranges::find(_files, info.key, [](const ScanInfo &file) {
+		return file.key;
+	});
+	if (i != _files.end()) {
+		*i = std::move(info);
+		const auto scan = _rows[i - _files.begin()]->entity();
+		updateFileRow(scan, *i);
+		if (!i->deleted) {
+			hideError();
 		}
-	};
-	updateList(FileType::Scan);
-	updateList(FileType::Translation);
-	if (_commonError) {
-		_commonError->toggle(!somethingChanged(), anim::type::normal);
+	} else {
+		_files.push_back(std::move(info));
+		pushScan(_files.back());
+		_wrap->resizeToWidth(width());
+		_rows.back()->show(anim::type::normal);
+		_divider->hide(anim::type::normal);
+		_header->show(anim::type::normal);
+		_uploadTexts.fire(uploadButtonText());
+	}
+	if (_uploadMoreError) {
+		_uploadMoreError->toggle(!uploadedSomeMore(), anim::type::normal);
 	}
 }
 
-bool EditScans::somethingChanged() const {
-	return list(FileType::Scan).uploadedSomeMore()
-		|| list(FileType::Translation).uploadedSomeMore()
-		|| _scanFieldsChanged
-		|| _specialScanChanged;
-}
-
-void EditScans::updateSpecialScan(ScanInfo &&info) {
+void EditScans::updateSpecialScan(SpecialFile type, ScanInfo &&info) {
 	Expects(info.key.id != 0);
 
-	const auto type = info.type;
 	const auto i = _specialScans.find(type);
 	if (i == end(_specialScans)) {
 		return;
 	}
 	auto &scan = i->second;
 	if (scan.file.key.id) {
-		UpdateFileRow(scan.row->entity(), info);
-		scan.rowCreated = !info.deleted;
-		if (scan.file.key.id != info.key.id) {
-			specialScanChanged(type, true);
+		updateFileRow(scan.row->entity(), info);
+		if (!info.deleted) {
+			hideSpecialScanError(type);
 		}
 	} else {
-		const auto requiresBothSides
-			= (_specialScans.find(FileType::ReverseSide)
-				!= end(_specialScans));
-		createSpecialScanRow(scan, info, requiresBothSides);
+		createSpecialScanRow(scan, info);
 		scan.wrap->resizeToWidth(width());
 		scan.row->show(anim::type::normal);
-		if (scan.header) {
-			scan.header->show(anim::type::normal);
-		}
-		specialScanChanged(type, true);
+		scan.header->show(anim::type::normal);
 	}
 	scan.file = std::move(info);
 }
 
+void EditScans::updateFileRow(
+		not_null<ScanButton*> button,
+		const ScanInfo &info) {
+	button->setStatus(info.status);
+	button->setImage(info.thumb);
+	button->setDeleted(info.deleted);
+	button->setError(!info.error.isEmpty());
+};
+
+
 void EditScans::createSpecialScanRow(
 		SpecialScan &scan,
-		const ScanInfo &info,
-		bool requiresBothSides) {
-	Expects(scan.file.type != FileType::Scan
-		&& scan.file.type != FileType::Translation);
+		const ScanInfo &info) {
+	Expects(scan.file.special.has_value());
 
-	const auto type = scan.file.type;
+	const auto type = *scan.file.special;
 	const auto name = [&] {
 		switch (type) {
-		case FileType::FrontSide:
-			return requiresBothSides
-				? tr::lng_passport_front_side_title(tr::now)
-				: tr::lng_passport_main_page_title(tr::now);
-		case FileType::ReverseSide:
-			return tr::lng_passport_reverse_side_title(tr::now);
-		case FileType::Selfie:
-			return tr::lng_passport_selfie_title(tr::now);
+		case SpecialFile::FrontSide:
+			return lang(lng_passport_front_side_name);
+		case SpecialFile::ReverseSide:
+			return lang(lng_passport_reverse_side_name);
+		case SpecialFile::Selfie:
+			return lang(lng_passport_selfie_name);
 		}
 		Unexpected("Type in special file name.");
 	}();
-	scan.row = CreateScan(scan.wrap, info, name);
+	scan.row = createScan(scan.wrap, info, name);
 	const auto row = scan.row->entity();
 
 	row->deleteClicks(
 	) | rpl::start_with_next([=] {
-		_controller->deleteScan(type, std::nullopt);
+		_controller->deleteSpecialScan(type);
 	}, row->lifetime());
 
 	row->restoreClicks(
 	) | rpl::start_with_next([=] {
-		_controller->restoreScan(type, std::nullopt);
+		_controller->restoreSpecialScan(type);
 	}, row->lifetime());
 
-	scan.rowCreated = !info.deleted;
+	hideSpecialScanError(type);
 }
 
-void EditScans::chooseScan(FileType type) {
-	if (!_controller->canAddScan(type)) {
-		_controller->showToast(tr::lng_passport_scans_limit_reached(tr::now));
+void EditScans::pushScan(const ScanInfo &info) {
+	const auto index = _rows.size();
+	_rows.push_back(createScan(
+		_wrap,
+		info,
+		lng_passport_scan_index(lt_index, QString::number(index + 1))));
+	_rows.back()->hide(anim::type::instant);
+
+	const auto scan = _rows.back()->entity();
+
+	scan->deleteClicks(
+	) | rpl::start_with_next([=] {
+		_controller->deleteScan(index);
+	}, scan->lifetime());
+
+	scan->restoreClicks(
+	) | rpl::start_with_next([=] {
+		_controller->restoreScan(index);
+	}, scan->lifetime());
+
+	hideError();
+}
+
+base::unique_qptr<Ui::SlideWrap<ScanButton>> EditScans::createScan(
+		not_null<Ui::VerticalLayout*> parent,
+		const ScanInfo &info,
+		const QString &name) {
+	auto result = base::unique_qptr<Ui::SlideWrap<ScanButton>>(
+		parent->add(object_ptr<Ui::SlideWrap<ScanButton>>(
+			parent,
+			object_ptr<ScanButton>(
+				parent,
+				st::passportScanRow,
+				name,
+				info.status,
+				info.deleted,
+				!info.error.isEmpty()))));
+	result->entity()->setImage(info.thumb);
+	return result;
+}
+
+void EditScans::chooseScan() {
+	if (!_controller->canAddScan()) {
+		_controller->showToast(lang(lng_passport_scans_limit_reached));
 		return;
 	}
-	ChooseScan(this, type, [=](QByteArray &&content) {
-		_controller->uploadScan(type, std::move(content));
+	ChooseScan(this, [=](QByteArray &&content) {
+		_controller->uploadScan(std::move(content));
+	}, [=](ReadScanError error) {
+		_controller->readScanError(error);
+	});
+}
+
+void EditScans::chooseSpecialScan(SpecialFile type) {
+	ChooseScan(this, [=](QByteArray &&content) {
+		_controller->uploadSpecialScan(type, std::move(content));
 	}, [=](ReadScanError error) {
 		_controller->readScanError(error);
 	});
@@ -849,28 +645,42 @@ void EditScans::chooseScan(FileType type) {
 
 void EditScans::ChooseScan(
 		QPointer<QWidget> parent,
-		FileType type,
 		Fn<void(QByteArray&&)> doneCallback,
 		Fn<void(ReadScanError)> errorCallback) {
 	Expects(parent != nullptr);
 
-	const auto filter = FileDialog::AllOrImagesFilter();
+	const auto filter = FileDialog::AllFilesFilter()
+		+ qsl(";;Image files (*")
+		+ cImgExtensions().join(qsl(" *"))
+		+ qsl(")");
 	const auto guardedCallback = crl::guard(parent, doneCallback);
 	const auto guardedError = crl::guard(parent, errorCallback);
+	const auto onMainCallback = [=](QByteArray content) {
+		crl::on_main([=, bytes = std::move(content)]() mutable {
+			guardedCallback(std::move(bytes));
+		});
+	};
 	const auto onMainError = [=](ReadScanError error) {
 		crl::on_main([=] {
 			guardedError(error);
 		});
 	};
-	const auto processFiles = [=](
-			QStringList &&files,
-			const auto &handleImage) -> void {
-		while (!files.isEmpty()) {
-			auto file = files.front();
-			files.removeAt(0);
-
+	const auto processImage = [=](QByteArray &&content) {
+		crl::async([=, bytes = std::move(content)]() mutable {
+			auto result = ProcessImage(std::move(bytes));
+			if (const auto error = base::get_if<ReadScanError>(&result)) {
+				onMainError(*error);
+			} else {
+				auto content = base::get_if<QByteArray>(&result);
+				Assert(content != nullptr);
+				onMainCallback(std::move(*content));
+			}
+		});
+	};
+	const auto processFile = [=](FileDialog::OpenResult &&result) {
+		if (result.paths.size() == 1) {
 			auto content = [&] {
-				QFile f(file);
+				QFile f(result.paths.front());
 				if (f.size() > App::kImageSizeLimit) {
 					guardedError(ReadScanError::FileTooLarge);
 					return QByteArray();
@@ -881,78 +691,63 @@ void EditScans::ChooseScan(
 				return f.readAll();
 			}();
 			if (!content.isEmpty()) {
-				handleImage(
-					std::move(content),
-					std::move(files),
-					handleImage);
-				return;
+				processImage(std::move(content));
 			}
-		}
-	};
-	const auto processImage = [=](
-			QByteArray &&content,
-			QStringList &&remainingFiles,
-			const auto &repeatProcessImage) -> void {
-		crl::async([
-			=,
-			bytes = std::move(content),
-			remainingFiles = std::move(remainingFiles)
-		]() mutable {
-			auto result = ProcessImage(std::move(bytes));
-			if (const auto error = std::get_if<ReadScanError>(&result)) {
-				onMainError(*error);
-			} else {
-				auto content = std::get_if<QByteArray>(&result);
-				Assert(content != nullptr);
-				crl::on_main([
-					=,
-					bytes = std::move(*content),
-					remainingFiles = std::move(remainingFiles)
-				]() mutable {
-					guardedCallback(std::move(bytes));
-					processFiles(
-						std::move(remainingFiles),
-						repeatProcessImage);
-				});
-			}
-		});
-	};
-	const auto processOpened = [=](FileDialog::OpenResult &&result) {
-		if (result.paths.size() > 0) {
-			processFiles(std::move(result.paths), processImage);
 		} else if (!result.remoteContent.isEmpty()) {
-			processImage(std::move(result.remoteContent), {}, processImage);
+			processImage(std::move(result.remoteContent));
 		}
 	};
-	const auto allowMany = (type == FileType::Scan)
-		|| (type == FileType::Translation);
-	(allowMany ? FileDialog::GetOpenPaths : FileDialog::GetOpenPath)(
+	FileDialog::GetOpenPath(
 		parent,
-		tr::lng_passport_choose_image(tr::now),
+		lang(lng_passport_choose_image),
 		filter,
-		processOpened,
-		nullptr);
+		processFile);
 }
 
-void EditScans::hideSpecialScanError(FileType type) {
-	toggleSpecialScanError(type, false);
+rpl::producer<QString> EditScans::uploadButtonText() const {
+	return Lang::Viewer(_files.empty()
+		? lng_passport_upload_scans
+		: lng_passport_upload_more) | Info::Profile::ToUpperValue();
 }
 
-void EditScans::specialScanChanged(FileType type, bool changed) {
-	hideSpecialScanError(type);
-	if (_specialScanChanged != changed) {
-		_specialScanChanged = changed;
-		updateErrorLabels();
+void EditScans::hideError() {
+	toggleError(false);
+}
+
+void EditScans::toggleError(bool shown) {
+	if (_errorShown != shown) {
+		_errorShown = shown;
+		_errorAnimation.start(
+			[=] { errorAnimationCallback(); },
+			_errorShown ? 0. : 1.,
+			_errorShown ? 1. : 0.,
+			st::passportDetailsField.duration);
 	}
 }
 
-auto EditScans::findSpecialScan(FileType type) -> SpecialScan& {
+void EditScans::errorAnimationCallback() {
+	const auto error = _errorAnimation.current(_errorShown ? 1. : 0.);
+	if (error == 0.) {
+		_upload->setColorOverride(base::none);
+	} else {
+		_upload->setColorOverride(anim::color(
+			st::passportUploadButton.textFg,
+			st::boxTextFgError,
+			error));
+	}
+}
+
+void EditScans::hideSpecialScanError(SpecialFile type) {
+	toggleSpecialScanError(type, false);
+}
+
+auto EditScans::findSpecialScan(SpecialFile type) -> SpecialScan& {
 	const auto i = _specialScans.find(type);
 	Assert(i != end(_specialScans));
 	return i->second;
 }
 
-void EditScans::toggleSpecialScanError(FileType type, bool shown) {
+void EditScans::toggleSpecialScanError(SpecialFile type, bool shown) {
 	auto &scan = findSpecialScan(type);
 	if (scan.errorShown != shown) {
 		scan.errorShown = shown;
@@ -964,12 +759,12 @@ void EditScans::toggleSpecialScanError(FileType type, bool shown) {
 	}
 }
 
-void EditScans::specialScanErrorAnimationCallback(FileType type) {
+void EditScans::specialScanErrorAnimationCallback(SpecialFile type) {
 	auto &scan = findSpecialScan(type);
-	const auto error = scan.errorAnimation.value(
+	const auto error = scan.errorAnimation.current(
 		scan.errorShown ? 1. : 0.);
 	if (error == 0.) {
-		scan.upload->setColorOverride(std::nullopt);
+		scan.upload->setColorOverride(base::none);
 	} else {
 		scan.upload->setColorOverride(anim::color(
 			st::passportUploadButton.textFg,

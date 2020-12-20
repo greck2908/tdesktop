@@ -7,8 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "ui/rect_part.h"
-
 namespace Ui {
 
 struct GroupMediaLayout {

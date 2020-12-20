@@ -7,8 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <rpl/event_stream.h>
 #include "ui/rp_widget.h"
-#include "ui/effects/animations.h"
 #include "styles/style_widgets.h"
 
 namespace Ui {
@@ -41,15 +41,15 @@ protected:
 	int resizeGetHeight(int newWidth) override = 0;
 
 	struct Section {
-		Section(const QString &label, const style::TextStyle &st);
+		Section(const QString &label, const style::font &font);
 
-		int left = 0;
-		int width = 0;
-		Ui::Text::String label;
+		int left, width;
+		QString label;
+		int labelWidth;
 		std::unique_ptr<RippleAnimation> ripple;
 	};
 
-	int getCurrentActiveLeft();
+	int getCurrentActiveLeft(TimeMs ms);
 
 	int getSectionsCount() const {
 		return _sections.size();
@@ -65,14 +65,14 @@ protected:
 	}
 
 	void stopAnimation() {
-		_a_left.stop();
+		_a_left.finish();
 	}
 
 	void setSelectOnPress(bool selectOnPress);
 
 private:
 	void activateCallback();
-	virtual const style::TextStyle &getLabelStyle() const = 0;
+	virtual const style::font &getLabelFont() const = 0;
 	virtual int getAnimationDuration() const = 0;
 
 	int getIndexFromPosition(QPoint pos);
@@ -86,10 +86,10 @@ private:
 
 	int _pressed = -1;
 	int _selected = 0;
-	Ui::Animations::Simple _a_left;
+	Animation _a_left;
 
 	int _timerId = -1;
-	crl::time _callbackAfterMs = 0;
+	TimeMs _callbackAfterMs = 0;
 
 };
 
@@ -107,7 +107,7 @@ protected:
 	void startRipple(int sectionIndex) override;
 
 private:
-	const style::TextStyle &getLabelStyle() const override;
+	const style::font &getLabelFont() const override;
 	int getAnimationDuration() const override;
 	QImage prepareRippleMask(int sectionIndex, const Section &section);
 

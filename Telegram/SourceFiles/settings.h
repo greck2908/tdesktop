@@ -7,9 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "ui/style/style_core.h"
-#include "emoji.h"
-
 #define DeclareReadSetting(Type, Name) extern Type g##Name; \
 inline const Type &c##Name() { \
 	return g##Name; \
@@ -25,22 +22,24 @@ inline Type &cRef##Name() { \
 	return g##Name; \
 }
 
+DeclareSetting(bool, Rtl);
 DeclareSetting(Qt::LayoutDirection, LangDir);
 inline bool rtl() {
-	return style::RightToLeft();
+	return cRtl();
 }
 
-DeclareSetting(bool, InstallBetaVersion);
-DeclareSetting(uint64, AlphaVersion);
-DeclareSetting(uint64, RealAlphaVersion);
-DeclareSetting(QByteArray, AlphaPrivateKey);
+DeclareSetting(bool, AlphaVersion);
+DeclareSetting(uint64, BetaVersion);
+DeclareSetting(uint64, RealBetaVersion);
+DeclareSetting(QByteArray, BetaPrivateKey);
 
+DeclareSetting(bool, TestMode);
+DeclareSetting(QString, LoggedPhoneNumber);
 DeclareSetting(bool, AutoStart);
 DeclareSetting(bool, StartMinimized);
 DeclareSetting(bool, StartInTray);
 DeclareSetting(bool, SendToMenu);
 DeclareSetting(bool, UseExternalVideoPlayer);
-DeclareSetting(bool, UseFreeType);
 enum LaunchMode {
 	LaunchModeNormal = 0,
 	LaunchModeAutoStart,
@@ -65,6 +64,7 @@ DeclareSetting(QString, DialogHelperPath);
 inline const QString &cDialogHelperPathFinal() {
 	return cDialogHelperPath().isEmpty() ? cExeDir() : cDialogHelperPath();
 }
+DeclareSetting(bool, CtrlEnter);
 
 DeclareSetting(bool, AutoUpdate);
 
@@ -79,6 +79,7 @@ struct TWindowPos {
 	int h = 0;
 };
 DeclareSetting(TWindowPos, WindowPos);
+DeclareSetting(bool, SupportTray);
 DeclareSetting(bool, SeenTrayTooltip);
 DeclareSetting(bool, RestartingUpdate);
 DeclareSetting(bool, Restarting);
@@ -87,14 +88,44 @@ DeclareSetting(bool, WriteProtected);
 DeclareSetting(int32, LastUpdateCheck);
 DeclareSetting(bool, NoStartUpdate);
 DeclareSetting(bool, StartToSettings);
-DeclareSetting(bool, DebugMode);
 DeclareReadSetting(bool, ManyInstance);
 
 DeclareSetting(QByteArray, LocalSalt);
-DeclareSetting(int, ScreenScale);
-DeclareSetting(int, ConfigScale);
+DeclareSetting(DBIScale, RealScale);
+DeclareSetting(DBIScale, ScreenScale);
+DeclareSetting(DBIScale, ConfigScale);
 DeclareSetting(QString, TimeFormat);
 
+inline void cChangeTimeFormat(const QString &newFormat) {
+	if (!newFormat.isEmpty()) cSetTimeFormat(newFormat);
+}
+
+inline DBIScale cEvalScale(DBIScale scale) {
+	return (scale == dbisAuto) ? cScreenScale() : scale;
+}
+inline DBIScale cScale() {
+	return cEvalScale(cRealScale());
+}
+
+template <typename T>
+T convertScale(T v) {
+	switch (cScale()) {
+		case dbisOneAndQuarter: return qRound(float64(v) * 1.25 - 0.01);
+		case dbisOneAndHalf: return qRound(float64(v) * 1.5 - 0.01);
+		case dbisTwo: return v * 2;
+	}
+	return v;
+}
+
+namespace Ui {
+namespace Emoji {
+class One;
+} // namespace Emoji
+} // namespace Ui
+
+using EmojiPtr = const Ui::Emoji::One*;
+
+using EmojiPack = QVector<EmojiPtr>;
 using RecentEmojiPreloadOldOld = QVector<QPair<uint32, ushort>>;
 using RecentEmojiPreloadOld = QVector<QPair<uint64, ushort>>;
 using RecentEmojiPreload = QVector<QPair<QString, ushort>>;
@@ -124,25 +155,11 @@ DeclareRefSetting(RecentInlineBots, RecentInlineBots);
 DeclareSetting(bool, PasswordRecovered);
 
 DeclareSetting(int32, PasscodeBadTries);
-DeclareSetting(crl::time, PasscodeLastTry);
-
-DeclareSetting(QStringList, SendPaths);
-DeclareSetting(QString, StartUrl);
-
-DeclareSetting(int, OtherOnline);
-
-inline void cChangeTimeFormat(const QString &newFormat) {
-	if (!newFormat.isEmpty()) cSetTimeFormat(newFormat);
-}
-
-RecentEmojiPack &GetRecentEmoji();
-QVector<EmojiPtr> GetRecentEmojiSection();
-void AddRecentEmoji(EmojiPtr emoji);
-[[nodiscard]] rpl::producer<> UpdatedRecentEmoji();
+DeclareSetting(TimeMs, PasscodeLastTry);
 
 inline bool passcodeCanTry() {
 	if (cPasscodeBadTries() < 3) return true;
-	auto dt = crl::now() - cPasscodeLastTry();
+	auto dt = getms(true) - cPasscodeLastTry();
 	switch (cPasscodeBadTries()) {
 	case 3: return dt >= 5000;
 	case 4: return dt >= 10000;
@@ -153,27 +170,35 @@ inline bool passcodeCanTry() {
 	return dt >= 30000;
 }
 
-inline float64 cRetinaFactor() {
-	return style::DevicePixelRatio();
-}
+DeclareSetting(QStringList, SendPaths);
+DeclareSetting(QString, StartUrl);
 
-inline int32 cIntRetinaFactor() {
-	return style::DevicePixelRatio();
-}
+DeclareSetting(bool, Retina);
+DeclareSetting(float64, RetinaFactor);
+DeclareSetting(int32, IntRetinaFactor);
 
-inline int cEvalScale(int scale) {
-	return (scale == style::kScaleAuto) ? cScreenScale() : scale;
-}
+DeclareReadSetting(DBIPlatform, Platform);
+DeclareReadSetting(QString, PlatformString);
+DeclareReadSetting(bool, IsElCapitan);
+DeclareReadSetting(bool, IsSnowLeopard);
 
-inline int cScale() {
-	return style::Scale();
-}
+DeclareSetting(int, OtherOnline);
 
-inline void SetScaleChecked(int scale) {
-	cSetConfigScale(style::CheckScale(scale));
-}
+class PeerData;
+typedef QMap<PeerData*, QDateTime> SavedPeers;
+typedef QMultiMap<QDateTime, PeerData*> SavedPeersByTime;
+DeclareRefSetting(SavedPeers, SavedPeers);
+DeclareRefSetting(SavedPeersByTime, SavedPeersByTime);
 
-inline void ValidateScale() {
-	SetScaleChecked(cConfigScale());
-	style::SetScale(cEvalScale(cConfigScale()));
-}
+typedef QMap<uint64, DBIPeerReportSpamStatus> ReportSpamStatuses;
+DeclareRefSetting(ReportSpamStatuses, ReportSpamStatuses);
+
+enum DBIAutoDownloadFlags {
+	dbiadNoPrivate = 0x01,
+	dbiadNoGroups  = 0x02,
+};
+
+DeclareSetting(int32, AutoDownloadPhoto);
+DeclareSetting(int32, AutoDownloadAudio);
+DeclareSetting(int32, AutoDownloadGif);
+DeclareSetting(bool, AutoPlayGif);

@@ -61,7 +61,7 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 		_scrollToRequests.fire({ min, max });
 	}, _channels->lifetime());
 
-	return result;
+	return std::move(result);
 }
 
 int InnerWidget::countDesiredHeight() const {

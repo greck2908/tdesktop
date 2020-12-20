@@ -8,11 +8,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/variant.h"
-#include "mtproto/mtproto_rpc_sender.h"
-#include "mtproto/mtp_instance.h"
-#include "mtproto/facade.h"
 
 namespace MTP {
+
+class Instance;
+Instance *MainInstance();
 
 class Sender {
 	class RequestBuilder {
@@ -54,18 +54,15 @@ class Sender {
 			DoneHandler(not_null<Sender*> sender, Callback handler) : _sender(sender), _handler(std::move(handler)) {
 			}
 
-			bool operator()(mtpRequestId requestId, const mtpPrime *from, const mtpPrime *end) override {
+			void operator()(mtpRequestId requestId, const mtpPrime *from, const mtpPrime *end) override {
 				auto handler = std::move(_handler);
 				_sender->senderRequestHandled(requestId);
 
-				auto result = Response();
-				if (!result.read(from, end)) {
-					return false;
-				}
 				if (handler) {
+					auto result = Response();
+					result.read(from, end);
 					Policy::handle(std::move(handler), requestId, std::move(result));
 				}
-				return true;
 			}
 
 		private:
@@ -101,11 +98,11 @@ class Sender {
 
 			bool operator()(mtpRequestId requestId, const RPCError &error) override {
 				if (_skipPolicy == FailSkipPolicy::Simple) {
-					if (isDefaultHandledError(error)) {
+					if (MTP::isDefaultHandledError(error)) {
 						return false;
 					}
 				} else if (_skipPolicy == FailSkipPolicy::HandleFlood) {
-					if (isDefaultHandledError(error) && !isFloodError(error)) {
+					if (MTP::isDefaultHandledError(error) && !MTP::isFloodError(error)) {
 						return false;
 					}
 				}
@@ -133,7 +130,7 @@ class Sender {
 		void setToDC(ShiftedDcId dcId) noexcept {
 			_dcId = dcId;
 		}
-		void setCanWait(crl::time ms) noexcept {
+		void setCanWait(TimeMs ms) noexcept {
 			_canWait = ms;
 		}
 		void setDoneHandler(RPCDoneHandlerPtr &&handler) noexcept {
@@ -155,25 +152,19 @@ class Sender {
 		ShiftedDcId takeDcId() const noexcept {
 			return _dcId;
 		}
-		crl::time takeCanWait() const noexcept {
+		TimeMs takeCanWait() const noexcept {
 			return _canWait;
 		}
 		RPCDoneHandlerPtr takeOnDone() noexcept {
 			return std::move(_done);
 		}
 		RPCFailHandlerPtr takeOnFail() {
-			return v::match(_fail, [&](FailPlainHandler &value)
-			-> RPCFailHandlerPtr {
-				return std::make_shared<FailHandler<FailPlainPolicy>>(
-					_sender,
-					std::move(value),
-					_failSkipPolicy);
-			}, [&](FailRequestIdHandler &value) -> RPCFailHandlerPtr {
-				return std::make_shared<FailHandler<FailRequestIdPolicy>>(
-					_sender,
-					std::move(value),
-					_failSkipPolicy);
-			});
+			if (auto handler = base::get_if<FailPlainHandler>(&_fail)) {
+				return std::make_shared<FailHandler<FailPlainPolicy>>(_sender, std::move(*handler), _failSkipPolicy);
+			} else if (auto handler = base::get_if<FailRequestIdHandler>(&_fail)) {
+				return std::make_shared<FailHandler<FailRequestIdPolicy>>(_sender, std::move(*handler), _failSkipPolicy);
+			}
+			return RPCFailHandlerPtr();
 		}
 		mtpRequestId takeAfter() const noexcept {
 			return _afterRequestId;
@@ -189,21 +180,16 @@ class Sender {
 	private:
 		not_null<Sender*> _sender;
 		ShiftedDcId _dcId = 0;
-		crl::time _canWait = 0;
+		TimeMs _canWait = 0;
 		RPCDoneHandlerPtr _done;
-		std::variant<FailPlainHandler, FailRequestIdHandler> _fail;
+		base::variant<FailPlainHandler, FailRequestIdHandler> _fail;
 		FailSkipPolicy _failSkipPolicy = FailSkipPolicy::Simple;
 		mtpRequestId _afterRequestId = 0;
 
 	};
 
 public:
-	explicit Sender(not_null<Instance*> instance) noexcept
-	: _instance(instance) {
-	}
-
-	[[nodiscard]] Instance &instance() const {
-		return *_instance;
+	Sender() noexcept {
 	}
 
 	template <typename Request>
@@ -219,7 +205,7 @@ public:
 			setToDC(dcId);
 			return *this;
 		}
-		[[nodiscard]] SpecificRequestBuilder &afterDelay(crl::time ms) noexcept {
+		[[nodiscard]] SpecificRequestBuilder &afterDelay(TimeMs ms) noexcept {
 			setCanWait(ms);
 			return *this;
 		}
@@ -253,7 +239,7 @@ public:
 		}
 
 		mtpRequestId send() {
-			const auto id = sender()->_instance->send(
+			const auto id = MainInstance()->send(
 				_request,
 				takeOnDone(),
 				takeOnFail(),
@@ -277,9 +263,7 @@ public:
 
 	public:
 		void cancel() {
-			if (_requestId) {
-				_sender->senderRequestCancel(_requestId);
-			}
+			_sender->senderRequestCancel(_requestId);
 		}
 
 	private:
@@ -303,33 +287,31 @@ public:
 	}
 
 	void requestSendDelayed() {
-		_instance->sendAnything();
+		MainInstance()->sendAnything();
 	}
 	void requestCancellingDiscard() {
-		for (auto &request : base::take(_requests)) {
+		for (auto &request : _requests) {
 			request.handled();
 		}
+	}
+	not_null<Instance*> requestMTP() const {
+		return MainInstance();
 	}
 
 private:
 	class RequestWrap {
 	public:
 		RequestWrap(
-			not_null<Instance*> instance,
+			Instance *instance,
 			mtpRequestId requestId) noexcept
-		: _instance(instance)
-		, _id(requestId) {
+		: _id(requestId) {
 		}
 
 		RequestWrap(const RequestWrap &other) = delete;
 		RequestWrap &operator=(const RequestWrap &other) = delete;
-		RequestWrap(RequestWrap &&other)
-		: _instance(other._instance)
-		, _id(base::take(other._id)) {
+		RequestWrap(RequestWrap &&other) : _id(base::take(other._id)) {
 		}
 		RequestWrap &operator=(RequestWrap &&other) {
-			Expects(_instance == other._instance);
-
 			if (_id != other._id) {
 				cancelRequest();
 				_id = base::take(other._id);
@@ -341,7 +323,6 @@ private:
 			return _id;
 		}
 		void handled() const noexcept {
-			_id = 0;
 		}
 
 		~RequestWrap() {
@@ -351,11 +332,12 @@ private:
 	private:
 		void cancelRequest() {
 			if (_id) {
-				_instance->cancel(_id);
+				if (auto instance = MainInstance()) {
+					instance->cancel(_id);
+				}
 			}
 		}
-		const not_null<Instance*> _instance;
-		mutable mtpRequestId _id = 0;
+		mtpRequestId _id = 0;
 
 	};
 
@@ -382,13 +364,13 @@ private:
 	};
 
 	template <typename Request>
-	friend class SpecificRequestBuilder;
+	friend class SpecialRequestBuilder;
 	friend class RequestBuilder;
 	friend class RequestWrap;
 	friend class SentRequestWrap;
 
 	void senderRequestRegister(mtpRequestId requestId) {
-		_requests.emplace(_instance, requestId);
+		_requests.emplace(MainInstance(), requestId);
 	}
 	void senderRequestHandled(mtpRequestId requestId) {
 		auto it = _requests.find(requestId);
@@ -404,7 +386,6 @@ private:
 		}
 	}
 
-	const not_null<Instance*> _instance;
 	base::flat_set<RequestWrap, RequestWrapComparator> _requests;
 
 };

@@ -17,8 +17,7 @@ class Service : public Element {
 public:
 	Service(
 		not_null<ElementDelegate*> delegate,
-		not_null<HistoryService*> data,
-		Element *replacing);
+		not_null<HistoryService*> data);
 
 	int marginTop() const override;
 	int marginBottom() const override;
@@ -27,13 +26,13 @@ public:
 		Painter &p,
 		QRect clip,
 		TextSelection selection,
-		crl::time ms) const override;
+		TimeMs ms) const override;
 	PointState pointState(QPoint point) const override;
 	TextState textState(
 		QPoint point,
 		StateRequest request) const override;
 	void updatePressed(QPoint point) override;
-	TextForMimeData selectedText(TextSelection selection) const override;
+	TextWithEntities selectedText(TextSelection selection) const override;
 	TextSelection adjustSelection(
 		TextSelection selection,
 		TextSelectType type) const override;
@@ -51,12 +50,12 @@ private:
 int WideChatWidth();
 
 struct PaintContext {
-	PaintContext(crl::time ms, const QRect &clip, TextSelection selection)
+	PaintContext(TimeMs ms, const QRect &clip, TextSelection selection)
 		: ms(ms)
 		, clip(clip)
 		, selection(selection) {
 	}
-	crl::time ms;
+	TimeMs ms;
 	const QRect &clip;
 	TextSelection selection;
 };
@@ -64,33 +63,18 @@ struct PaintContext {
 class ServiceMessagePainter {
 public:
 	static void paintDate(Painter &p, const QDateTime &date, int y, int w);
-	static void paintDate(Painter &p, const QString &dateText, int y, int w);
 	static void paintDate(Painter &p, const QString &dateText, int dateTextWidth, int y, int w);
 
 	static void paintBubble(Painter &p, int x, int y, int w, int h);
 
-	static void paintComplexBubble(Painter &p, int left, int width, const Ui::Text::String &text, const QRect &textRect);
+	static void paintComplexBubble(Painter &p, int left, int width, const Text &text, const QRect &textRect);
 
 private:
-	static QVector<int> countLineWidths(const Ui::Text::String &text, const QRect &textRect);
+	static QVector<int> countLineWidths(const Text &text, const QRect &textRect);
 
 };
 
-class EmptyPainter {
-public:
-	explicit EmptyPainter(not_null<History*> history);
-
-	void paint(Painter &p, int width, int height);
-
-private:
-	void fillAboutGroup();
-
-	not_null<History*> _history;
-	Ui::Text::String _header = { st::msgMinWidth };
-	Ui::Text::String _text = { st::msgMinWidth };
-	std::vector<Ui::Text::String> _phrases;
-
-};
+void paintEmpty(Painter &p, int width, int height);
 
 void serviceColorsUpdated();
 

@@ -8,33 +8,29 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "profile/profile_block_widget.h"
-
-namespace Data {
-class CloudImageView;
-} // namespace Data
+#include "styles/style_profile.h"
 
 namespace Ui {
 class RippleAnimation;
 class PopupMenu;
 } // namespace Ui
 
-namespace style {
-struct PeerListItem;
-} // namespace style
+namespace Notify {
+struct PeerUpdate;
+} // namespace Notify
 
 namespace Profile {
 
 class PeerListWidget : public BlockWidget {
 public:
-	PeerListWidget(QWidget *parent, PeerData *peer, const QString &title, const style::PeerListItem &st, const QString &removeText);
+	PeerListWidget(QWidget *parent, PeerData *peer, const QString &title, const style::PeerListItem &st = st::profileMemberItem, const QString &removeText = QString());
 
 	struct Item {
-		explicit Item(not_null<PeerData*> peer);
+		explicit Item(PeerData *peer);
 		~Item();
 
-		const not_null<PeerData*> peer;
-		std::shared_ptr<Data::CloudImageView> userpic;
-		Ui::Text::String name;
+		PeerData * const peer;
+		Text name;
 		QString statusText;
 		bool statusHasOnlineColor = false;
 		enum class AdminState {
@@ -46,7 +42,7 @@ public:
 		bool hasRemoveLink = false;
 		std::unique_ptr<Ui::RippleAnimation> ripple;
 	};
-	int getListTop() const {
+	virtual int getListTop() const {
 		return contentTop();
 	}
 
@@ -72,7 +68,7 @@ public:
 	}
 	template <typename Predicate>
 	void sortItems(Predicate predicate) {
-		std::sort(_items.begin(), _items.end(), std::move(predicate));
+		qSort(_items.begin(), _items.end(), std::move(predicate));
 	}
 
 	void setPreloadMoreCallback(Fn<void()> callback) {
@@ -94,7 +90,7 @@ protected:
 		int visibleTop,
 		int visibleBottom) override;
 
-	void paintItemRect(Painter &p, int x, int y, int w, int h) const;
+	void paintOutlinedRect(Painter &p, int x, int y, int w, int h) const;
 	void refreshVisibility();
 
 	void paintContents(Painter &p) override;
@@ -102,6 +98,7 @@ protected:
 	void mouseMoveEvent(QMouseEvent *e) override;
 	void mousePressEvent(QMouseEvent *e) override;
 	void mouseReleaseEvent(QMouseEvent *e) override;
+	void contextMenuEvent(QContextMenuEvent *e) override;
 	void enterEventHook(QEvent *e) override;
 	void enterFromChildEvent(QEvent *e, QWidget *child) override {
 		enterEventHook(e);
@@ -109,6 +106,10 @@ protected:
 	void leaveEventHook(QEvent *e) override;
 	void leaveToChildEvent(QEvent *e, QWidget *child) override {
 		leaveEventHook(e);
+	}
+
+	virtual Ui::PopupMenu *fillPeerMenu(PeerData *peer) {
+		return nullptr;
 	}
 
 private:
@@ -120,7 +121,7 @@ private:
 	void preloadPhotos();
 	int rowWidth() const;
 
-	void paintItem(Painter &p, int x, int y, Item *item, bool selected, bool selectedRemove);
+	void paintItem(Painter &p, int x, int y, Item *item, bool selected, bool selectedRemove, TimeMs ms);
 
 	const style::PeerListItem &_st;
 
@@ -143,6 +144,9 @@ private:
 
 	QString _removeText;
 	int _removeWidth = 0;
+
+	Ui::PopupMenu *_menu = nullptr;
+	int _menuRowIndex = -1;
 
 };
 

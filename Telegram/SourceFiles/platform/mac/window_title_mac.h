@@ -17,7 +17,7 @@ namespace Platform {
 
 class MainWindow;
 
-class TitleWidget : public Window::TitleWidget {
+class TitleWidget : public Window::TitleWidget, private base::Subscriber {
 public:
 	TitleWidget(MainWindow *parent, int height);
 
@@ -32,15 +32,7 @@ private:
 
 };
 
-inline bool AllowNativeWindowFrameToggle() {
-	return false;
-}
-
 object_ptr<Window::TitleWidget> CreateTitleWidget(QWidget *parent);
-
-inline bool NativeTitleRequiresShadow() {
-	return false;
-}
 
 int PreviewTitleHeight();
 void PreviewWindowFramePaint(QImage &preview, const style::palette &palette, QRect body, int outerWidth);

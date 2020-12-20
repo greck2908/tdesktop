@@ -7,16 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "data/data_cloud_file.h"
-#include "api/api_common.h"
+#include "core/basic_types.h"
 
 class FileLoader;
-class History;
-class UserData;
-
-namespace Data {
-class LocationPoint;
-} // namespace Data
 
 namespace InlineBots {
 
@@ -34,14 +27,13 @@ private:
 	struct Creator;
 
 public:
+
 	// Constructor is public only for std::make_unique<>() to work.
 	// You should use create() static method instead.
-	Result(not_null<Main::Session*> session, const Creator &creator);
-
-	static std::unique_ptr<Result> Create(
-		not_null<Main::Session*> session,
-		uint64 queryId,
-		const MTPBotInlineResult &mtpData);
+	explicit Result(const Creator &creator);
+	static std::unique_ptr<Result> create(uint64 queryId, const MTPBotInlineResult &mtpData);
+	Result(const Result &other) = delete;
+	Result &operator=(const Result &other) = delete;
 
 	uint64 getQueryId() const {
 		return _queryId;
@@ -54,32 +46,24 @@ public:
 	// inline bot result. If it returns true you need to send this result.
 	bool onChoose(Layout::ItemBase *layout);
 
+	void forget();
 	void openFile();
 	void cancelFile();
 
 	bool hasThumbDisplay() const;
 
-	void addToHistory(
-		History *history,
-		MTPDmessage::Flags flags,
-		MTPDmessage_ClientFlags clientFlags,
-		MsgId msgId,
-		PeerId fromId,
-		MTPint mtpDate,
-		UserId viaBotId,
-		MsgId replyToId,
-		const QString &postAuthor) const;
+	void addToHistory(History *history, MTPDmessage::Flags flags, MsgId msgId, UserId fromId, MTPint mtpDate, UserId viaBotId, MsgId replyToId, const QString &postAuthor) const;
 	QString getErrorOnSend(History *history) const;
 
 	// interface for Layout:: usage
-	std::optional<Data::LocationPoint> getLocationPoint() const;
+	bool getLocationCoords(LocationCoords *outLocation) const;
 	QString getLayoutTitle() const;
 	QString getLayoutDescription() const;
 
 	~Result();
 
 private:
-	void createGame(not_null<Main::Session*> session);
+	void createGame();
 	QSize thumbBox() const;
 	MTPWebDocument adjustAttributes(const MTPWebDocument &document);
 	MTPVector<MTPDocumentAttribute> adjustAttributes(
@@ -104,11 +88,10 @@ private:
 	friend class internal::SendData;
 	friend class Layout::ItemBase;
 	struct Creator {
-		uint64 queryId = 0;
-		Type type = Type::Unknown;
+		uint64 queryId;
+		Type type;
 	};
 
-	not_null<Main::Session*> _session;
 	uint64 _queryId = 0;
 	QString _id;
 	Type _type = Type::Unknown;
@@ -120,17 +103,10 @@ private:
 
 	std::unique_ptr<MTPReplyMarkup> _mtpKeyboard;
 
-	Data::CloudImage _thumbnail;
-	Data::CloudImage _locationThumbnail;
+	ImagePtr _thumb, _locationThumb;
 
 	std::unique_ptr<internal::SendData> sendData;
 
-};
-
-struct ResultSelected {
-	not_null<Result*> result;
-	not_null<UserData*> bot;
-	Api::SendOptions options;
 };
 
 } // namespace InlineBots

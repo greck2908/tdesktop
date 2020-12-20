@@ -12,45 +12,53 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_media_types.h"
 #include "data/data_web_page.h"
 #include "data/data_groups.h"
-#include "data/data_peer.h"
 #include "lang/lang_keys.h"
-#include "ui/text/text_options.h"
+#include "ui/text_options.h"
 
-TextForMimeData WrapAsReply(
-		TextForMimeData &&text,
+TextWithEntities WrapAsReply(
+		TextWithEntities &&text,
 		not_null<HistoryItem*> to) {
 	const auto name = to->author()->name;
-	auto result = TextForMimeData();
-	result.reserve(
-		tr::lng_in_reply_to(tr::now).size()
+	auto result = TextWithEntities();
+	result.text.reserve(
+		lang(lng_in_reply_to).size()
 		+ name.size()
 		+ 4
-		+ text.expanded.size());
-	return result.append('['
-	).append(tr::lng_in_reply_to(tr::now)
+		+ text.text.size());
+	result.text.append('['
+	).append(lang(lng_in_reply_to)
 	).append(' '
 	).append(name
-	).append(qstr("]\n")
-	).append(std::move(text));
+	).append(qsl("]\n")
+	);
+	TextUtilities::Append(result, std::move(text));
+	return result;
 }
 
-TextForMimeData WrapAsForwarded(
-		TextForMimeData &&text,
+TextWithEntities WrapAsForwarded(
+		TextWithEntities &&text,
 		not_null<HistoryMessageForwarded*> forwarded) {
-	auto info = forwarded->text.toTextForMimeData();
-	auto result = TextForMimeData();
-	result.reserve(
-		info.expanded.size() + 4 + text.expanded.size(),
-		info.rich.entities.size() + text.rich.entities.size());
-	return result.append('['
-	).append(std::move(info)
-	).append(qstr("]\n")
-	).append(std::move(text));
+	auto info = forwarded->text.originalTextWithEntities(
+		AllTextSelection,
+		ExpandLinksAll);
+	auto result = TextWithEntities();
+	result.text.reserve(
+		info.text.size()
+		+ 4
+		+ text.text.size());
+	result.entities.reserve(
+		info.entities.size()
+		+ text.entities.size());
+	result.text.append('[');
+	TextUtilities::Append(result, std::move(info));
+	result.text.append(qsl("]\n"));
+	TextUtilities::Append(result, std::move(text));
+	return result;
 }
 
-TextForMimeData WrapAsItem(
+TextWithEntities WrapAsItem(
 		not_null<HistoryItem*> item,
-		TextForMimeData &&result) {
+		TextWithEntities &&result) {
 	if (const auto reply = item->Get<HistoryMessageReply>()) {
 		if (const auto message = reply->replyToMsg) {
 			result = WrapAsReply(std::move(result), message);
@@ -59,96 +67,70 @@ TextForMimeData WrapAsItem(
 	if (const auto forwarded = item->Get<HistoryMessageForwarded>()) {
 		result = WrapAsForwarded(std::move(result), forwarded);
 	}
-	return std::move(result);
+	return result;
 }
 
-TextForMimeData HistoryItemText(not_null<HistoryItem*> item) {
+TextWithEntities HistoryItemText(not_null<HistoryItem*> item) {
 	const auto media = item->media();
 
-	auto mediaResult = media ? media->clipboardText() : TextForMimeData();
-	auto textResult = mediaResult.empty()
+	auto mediaResult = media ? media->clipboardText() : TextWithEntities();
+	auto textResult = mediaResult.text.isEmpty()
 		? item->clipboardText()
-		: TextForMimeData();
+		: TextWithEntities();
 	auto logEntryOriginalResult = [&] {
 		const auto entry = item->Get<HistoryMessageLogEntryOriginal>();
 		if (!entry) {
-			return TextForMimeData();
+			return TextWithEntities();
 		}
 		const auto title = TextUtilities::SingleLine(entry->page->title.isEmpty()
 			? entry->page->author
 			: entry->page->title);
-		auto titleResult = TextForMimeData::Rich(
-			TextUtilities::ParseEntities(
-				title,
-				Ui::WebpageTextTitleOptions().flags));
-		auto descriptionResult = TextForMimeData::Rich(
-			base::duplicate(entry->page->description));
-		if (titleResult.empty()) {
+		auto titleResult = TextUtilities::ParseEntities(
+			title,
+			Ui::WebpageTextTitleOptions().flags);
+		auto descriptionResult = entry->page->description;
+		if (titleResult.text.isEmpty()) {
 			return descriptionResult;
-		} else if (descriptionResult.empty()) {
+		} else if (descriptionResult.text.isEmpty()) {
 			return titleResult;
 		}
-		titleResult.append('\n').append(std::move(descriptionResult));
+		titleResult.text += '\n';
+		TextUtilities::Append(titleResult, std::move(descriptionResult));
 		return titleResult;
 	}();
 	auto result = textResult;
-	if (result.empty()) {
+	if (result.text.isEmpty()) {
 		result = std::move(mediaResult);
-	} else if (!mediaResult.empty()) {
-		result.append(qstr("\n\n")).append(std::move(mediaResult));
+	} else if (!mediaResult.text.isEmpty()) {
+		result.text += qstr("\n\n");
+		TextUtilities::Append(result, std::move(mediaResult));
 	}
-	if (result.empty()) {
+	if (result.text.isEmpty()) {
 		result = std::move(logEntryOriginalResult);
-	} else if (!logEntryOriginalResult.empty()) {
-		result.append(qstr("\n\n")).append(std::move(logEntryOriginalResult));
+	} else if (!logEntryOriginalResult.text.isEmpty()) {
+		result.text += qstr("\n\n");
+		TextUtilities::Append(result, std::move(logEntryOriginalResult));
 	}
 	return WrapAsItem(item, std::move(result));
 }
 
-TextForMimeData HistoryGroupText(not_null<const Data::Group*> group) {
+TextWithEntities HistoryGroupText(not_null<const Data::Group*> group) {
 	Expects(!group->items.empty());
 
-	const auto columnAlbum = [&] {
-		const auto item = group->items.front();
-		if (const auto media = item->media()) {
-			if (const auto document = media->document()) {
-				return !document->isVideoFile();
-			}
-		}
-		return false;
-	}();
-	const auto hasCaption = [](not_null<HistoryItem*> item) {
-		return !item->clipboardText().empty();
-	};
-	if (columnAlbum) {
-		const auto simple = !ranges::any_of(group->items, hasCaption);
-		if (!simple) {
-			auto result = TextForMimeData();
-			for (const auto &item : group->items) {
-				if (result.empty()) {
-					result = HistoryItemText(item);
-				} else {
-					result.append(qstr("\n\n")).append(HistoryItemText(item));
-				}
-			}
+	auto caption = [&] {
+		const auto first = begin(group->items);
+		const auto result = (*first)->clipboardText();
+		if (result.text.isEmpty()) {
 			return result;
 		}
-	}
-	auto caption = [&] {
-		auto &&nonempty = ranges::view::all(
-			group->items
-		) | ranges::view::filter(
-			hasCaption
-		) | ranges::view::take(2);
-		auto first = nonempty.begin();
-		auto end = nonempty.end();
-		if (first == end) {
-			return TextForMimeData();
+		for (auto i = first + 1; i != end(group->items); ++i) {
+			if (!(*i)->clipboardText().text.isEmpty()) {
+				return TextWithEntities();
+			}
 		}
-		auto result = (*first)->clipboardText();
-		return (++first == end) ? result : TextForMimeData();
+		return result;
 	}();
 	return WrapAsItem(group->items.back(), Data::WithCaptionClipboardText(
-		tr::lng_in_dlg_album(tr::now),
+		lang(lng_in_dlg_album),
 		std::move(caption)));
 }

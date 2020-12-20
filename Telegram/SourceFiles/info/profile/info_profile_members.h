@@ -17,8 +17,11 @@ class IconButton;
 class FlatLabel;
 struct ScrollToRequest;
 class AbstractButton;
-class SettingsButton;
 } // namespace Ui
+
+namespace Profile {
+class ParticipantsBoxController;
+} // namespace Profile
 
 namespace Info {
 
@@ -27,10 +30,11 @@ enum class Wrap;
 
 namespace Profile {
 
+class Button;
 class Memento;
 struct MembersState {
 	std::unique_ptr<PeerListState> list;
-	std::optional<QString> search;
+	base::optional<QString> search;
 };
 
 class Members
@@ -59,16 +63,15 @@ private:
 	using ListWidget = PeerListContent;
 
 	// PeerListContentDelegate interface.
-	void peerListSetTitle(rpl::producer<QString> title) override;
-	void peerListSetAdditionalTitle(rpl::producer<QString> title) override;
-	bool peerListIsRowChecked(not_null<PeerListRow*> row) override;
+	void peerListSetTitle(Fn<QString()> title) override;
+	void peerListSetAdditionalTitle(
+		Fn<QString()> title) override;
+	bool peerListIsRowSelected(not_null<PeerData*> peer) override;
 	int peerListSelectedRowsCount() override;
 	std::vector<not_null<PeerData*>> peerListCollectSelectedRows() override;
 	void peerListScrollToTop() override;
-	void peerListAddSelectedPeerInBunch(
-		not_null<PeerData*> peer) override;
 	void peerListAddSelectedRowInBunch(
-		not_null<PeerListRow*> row) override;
+		not_null<PeerData*> peer) override;
 	void peerListFinishSelectedRowsBunch() override;
 	void peerListSetDescription(
 		object_ptr<Ui::FlatLabel> description) override;
@@ -110,7 +113,7 @@ private:
 	object_ptr<Ui::RpWidget> _header = { nullptr };
 	object_ptr<ListWidget> _list = { nullptr };
 
-	Ui::SettingsButton *_openMembers = nullptr;
+	Button *_openMembers = nullptr;
 	Ui::RpWidget *_titleWrap = nullptr;
 	Ui::FlatLabel *_title = nullptr;
 	Ui::IconButton *_addMember = nullptr;
@@ -118,7 +121,7 @@ private:
 	Ui::IconButton *_search = nullptr;
 	//Ui::CrossButton *_cancelSearch = nullptr;
 
-	//Ui::Animations::Simple _searchShownAnimation;
+	//Animation _searchShownAnimation;
 	//bool _searchShown = false;
 	//base::Timer _searchTimer;
 

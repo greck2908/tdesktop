@@ -11,17 +11,21 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/mac/specific_mac_p.h"
 #include "base/timer.h"
 
-#include <QtWidgets/QMenuBar>
-#include <QtCore/QTimer>
-
 namespace Platform {
 
 class MainWindow : public Window::MainWindow {
-	// The Q_OBJECT meta info is used for qobject_cast!
+	// The Q_OBJECT meta info is used for qobject_cast to MainWindow!
 	Q_OBJECT
 
 public:
-	explicit MainWindow(not_null<Window::Controller*> controller);
+	MainWindow();
+
+	void psFirstShow();
+	void psInitSysMenu();
+	void psUpdateMargins();
+
+	void psRefreshTaskbarIcon() {
+	}
 
 	bool psFilterNativeEvent(void *event);
 
@@ -33,13 +37,11 @@ public:
 
 	~MainWindow();
 
-	void updateWindowIcon() override;
-
-	void psShowTrayMenu();
-
 	class Private;
 
 public slots:
+	void psShowTrayMenu();
+
 	void psMacUndo();
 	void psMacRedo();
 	void psMacCut();
@@ -47,14 +49,6 @@ public slots:
 	void psMacPaste();
 	void psMacDelete();
 	void psMacSelectAll();
-	void psMacEmojiAndSymbols();
-
-	void psMacBold();
-	void psMacItalic();
-	void psMacUnderline();
-	void psMacStrikeOut();
-	void psMacMonospace();
-	void psMacClearFormat();
 
 protected:
 	bool eventFilter(QObject *obj, QEvent *evt) override;
@@ -62,9 +56,11 @@ protected:
 	void handleActiveChangedHook() override;
 	void stateChangedHook(Qt::WindowState state) override;
 	void initHook() override;
+	void updateWindowIcon() override;
 	void titleVisibilityChangedHook() override;
 	void unreadCounterChangedHook() override;
 
+	QImage psTrayIcon(bool selected = false) const;
 	bool hasTrayIcon() const override {
 		return trayIcon;
 	}
@@ -76,32 +72,29 @@ protected:
 	QSystemTrayIcon *trayIcon = nullptr;
 	QMenu *trayIconMenu = nullptr;
 
+	QImage trayImg, trayImgSel;
+
 	void psTrayMenuUpdated();
 	void psSetupTrayIcon();
 	virtual void placeSmallCounter(QImage &img, int size, int count, style::color bg, const QPoint &shift, style::color color) = 0;
 
 	QTimer psUpdatedPositionTimer;
 
-	void initShadows() override;
 	void closeWithoutDestroy() override;
-	void createGlobalMenu() override;
 
 private:
-	friend class Private;
-
 	void hideAndDeactivate();
+	void createGlobalMenu();
 	void updateTitleCounter();
 	void updateIconCounters();
-	[[nodiscard]] QIcon generateIconForTray(int counter, bool muted) const;
 
+	friend class Private;
 	std::unique_ptr<Private> _private;
 
 	mutable bool psIdle;
 	mutable QTimer psIdleTimer;
 
 	base::Timer _hideAfterFullScreenTimer;
-
-	rpl::variable<bool> _canApplyMarkdown;
 
 	QMenuBar psMainMenu;
 	QAction *psLogout = nullptr;
@@ -117,13 +110,6 @@ private:
 	QAction *psNewGroup = nullptr;
 	QAction *psNewChannel = nullptr;
 	QAction *psShowTelegram = nullptr;
-
-	QAction *psBold = nullptr;
-	QAction *psItalic = nullptr;
-	QAction *psUnderline = nullptr;
-	QAction *psStrikeOut = nullptr;
-	QAction *psMonospace = nullptr;
-	QAction *psClearFormat = nullptr;
 
 	int _customTitleHeight = 0;
 

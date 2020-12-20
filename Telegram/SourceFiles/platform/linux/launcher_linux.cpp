@@ -7,12 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "platform/linux/launcher_linux.h"
 
-#include "base/platform/base_platform_info.h"
-#include "platform/linux/specific_linux.h"
 #include "core/crash_reports.h"
-#include "core/update_checker.h"
-
-#include <QtWidgets/QApplication>
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -43,18 +38,25 @@ private:
 
 };
 
+QString DeviceModel() {
+#ifdef Q_OS_LINUX64
+	return "PC 64bit";
+#else // Q_OS_LINUX64
+	return "PC 32bit";
+#endif // Q_OS_LINUX64
+}
+
+QString SystemVersion() {
+	const auto result = getenv("XDG_CURRENT_DESKTOP");
+	const auto value = result ? QString::fromLatin1(result) : QString();
+	const auto list = value.split(':', QString::SkipEmptyParts);
+	return list.isEmpty() ? "Linux" : "Linux " + list[0];
+}
+
 } // namespace
 
 Launcher::Launcher(int argc, char *argv[])
-: Core::Launcher(argc, argv, DeviceModelPretty(), SystemVersionPretty()) {
-}
-
-void Launcher::initHook() {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
-	QApplication::setAttribute(Qt::AA_DisableSessionManager, true);
-#endif // Qt >= 5.14
-
-	QApplication::setDesktopFileName(GetLauncherFilename());
+: Core::Launcher(argc, argv, DeviceModel(), SystemVersion()) {
 }
 
 bool Launcher::launchUpdater(UpdaterLaunch action) {
@@ -78,11 +80,9 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 	if (cStartInTray()) {
 		argumentsList.push("-startintray");
 	}
-#ifndef TDESKTOP_DISABLE_AUTOUPDATE
-	if (Core::UpdaterDisabled()) {
-		argumentsList.push("-externalupdater");
+	if (cTestMode()) {
+		argumentsList.push("-testmode");
 	}
-#endif // !TDESKTOP_DISABLE_AUTOUPDATE
 	if (cDataFile() != qsl("data")) {
 		argumentsList.push("-key");
 		argumentsList.push(QFile::encodeName(cDataFile()));

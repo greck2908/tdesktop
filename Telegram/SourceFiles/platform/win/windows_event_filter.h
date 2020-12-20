@@ -7,13 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "base/platform/win/base_windows_h.h"
-
-#include <QtCore/QAbstractNativeEventFilter>
+#include <windows.h>
 
 namespace Platform {
-
-class MainWindow;
 
 class EventFilter : public QAbstractNativeEventFilter {
 public:
@@ -27,21 +23,14 @@ public:
 		_sessionLoggedOff = loggedOff;
 	}
 
-	static EventFilter *CreateInstance(not_null<MainWindow*> window);
-	static EventFilter *GetInstance();
-	static void Destroy();
+	static EventFilter *createInstance();
+	static EventFilter *getInstance();
+	static void destroy();
 
 private:
-	explicit EventFilter(not_null<MainWindow*> window);
+	EventFilter() {
+	}
 
-	bool customWindowFrameEvent(
-		HWND hWnd,
-		UINT msg,
-		WPARAM wParam,
-		LPARAM lParam,
-		LRESULT *result);
-
-	not_null<MainWindow*> _window;
 	bool _sessionLoggedOff = false;
 
 };

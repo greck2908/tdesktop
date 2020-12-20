@@ -7,11 +7,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+namespace Data {
+class Feed;
+} // namespace Data
+
 namespace Dialogs {
 
 class Row;
 class FakeRow;
-class BasicRow;
 
 namespace Layout {
 
@@ -19,29 +22,29 @@ const style::icon *ChatTypeIcon(
 	not_null<PeerData*> peer,
 	bool active,
 	bool selected);
-//const style::icon *FeedTypeIcon( // #feed
-//	not_null<Data::Feed*> feed,
-//	bool active,
-//	bool selected);
+const style::icon *FeedTypeIcon(
+	not_null<Data::Feed*> feed,
+	bool active,
+	bool selected);
 
 class RowPainter {
 public:
 	static void paint(
 		Painter &p,
 		not_null<const Row*> row,
-		FilterId filterId,
 		int fullWidth,
 		bool active,
 		bool selected,
-		crl::time ms);
+		bool onlyBackground,
+		TimeMs ms);
 	static void paint(
 		Painter &p,
 		not_null<const FakeRow*> row,
 		int fullWidth,
 		bool active,
 		bool selected,
-		crl::time ms,
-		bool displayUnreadInfo);
+		bool onlyBackground,
+		TimeMs ms);
 	static QRect sendActionAnimationRect(
 		int animationWidth,
 		int animationHeight,
@@ -50,45 +53,41 @@ public:
 
 };
 
-void PaintCollapsedRow(
+void paintImportantSwitch(
 	Painter &p,
-	const BasicRow &row,
-	Data::Folder *folder,
-	const QString &text,
-	int unread,
+	Mode current,
 	int fullWidth,
-	bool selected);
+	bool selected,
+	bool onlyBackground);
 
 enum UnreadBadgeSize {
 	UnreadBadgeInDialogs = 0,
 	UnreadBadgeInHistoryToDown,
 	UnreadBadgeInStickersPanel,
 	UnreadBadgeInStickersBox,
-	UnreadBadgeInTouchBar,
 
 	UnreadBadgeSizesCount
 };
 struct UnreadBadgeStyle {
 	UnreadBadgeStyle();
 
-	style::align align = style::al_right;
-	bool active = false;
-	bool selected = false;
-	bool muted = false;
+	style::align align;
+	bool active;
+	bool selected;
+	bool muted;
 	int textTop = 0;
-	int size = 0;
-	int padding = 0;
-	UnreadBadgeSize sizeId = UnreadBadgeInDialogs;
+	int size;
+	int padding;
+	UnreadBadgeSize sizeId;
 	style::font font;
 };
 void paintUnreadCount(
 	Painter &p,
-	const QString &t,
+	const QString &text,
 	int x,
 	int y,
 	const UnreadBadgeStyle &st,
-	int *outUnreadWidth = nullptr,
-	int allowDigits = 0);
+	int *outUnreadWidth = nullptr);
 
 void clearUnreadBadgesCache();
 

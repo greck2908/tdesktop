@@ -9,32 +9,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "abstract_box.h"
 
-namespace style {
-struct CalendarSizes;
-} // namespace style
-
 namespace Ui {
 class IconButton;
 } // namespace Ui
 
-class CalendarBox : public Ui::BoxContent, private base::Subscriber {
+class CalendarBox : public BoxContent {
 public:
-	CalendarBox(
-		QWidget*,
-		QDate month,
-		QDate highlighted,
-		Fn<void(QDate date)> callback,
-		FnMut<void(not_null<CalendarBox*>)> finalize = nullptr);
-	CalendarBox(
-		QWidget*,
-		QDate month,
-		QDate highlighted,
-		Fn<void(QDate date)> callback,
-		FnMut<void(not_null<CalendarBox*>)> finalize,
-		const style::CalendarSizes &st);
-
-	void setBeginningButton(bool enabled);
-	bool hasBeginningButton() const;
+	CalendarBox(QWidget*, QDate month, QDate highlighted, Fn<void(QDate date)> callback);
 
 	void setMinDate(QDate date);
 	void setMaxDate(QDate date);
@@ -44,20 +25,13 @@ public:
 protected:
 	void prepare() override;
 
-	void keyPressEvent(QKeyEvent *e) override;
 	void resizeEvent(QResizeEvent *e) override;
-	void wheelEvent(QWheelEvent *e) override;
 
 private:
 	void monthChanged(QDate month);
 
 	bool isPreviousEnabled() const;
 	bool isNextEnabled() const;
-
-	void goPreviousMonth();
-	void goNextMonth();
-
-	const style::CalendarSizes &_st;
 
 	class Context;
 	std::unique_ptr<Context> _context;
@@ -71,6 +45,5 @@ private:
 	object_ptr<Ui::IconButton> _next;
 
 	Fn<void(QDate date)> _callback;
-	FnMut<void(not_null<CalendarBox*>)> _finalize;
 
 };

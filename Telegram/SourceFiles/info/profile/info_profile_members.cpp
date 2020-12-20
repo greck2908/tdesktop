@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/profile/info_profile_values.h"
 #include "info/profile/info_profile_icon.h"
 #include "info/profile/info_profile_values.h"
+#include "info/profile/info_profile_button.h"
 #include "info/profile/info_profile_members_controllers.h"
 #include "info/members/info_members_widget.h"
 #include "info/info_content_widget.h"
@@ -22,17 +23,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/input_fields.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/wrap/padding_wrap.h"
-#include "ui/text/text_utilities.h" // Ui::Text::ToUpper
 #include "ui/search_field_controller.h"
-#include "lang/lang_keys.h"
-#include "boxes/confirm_box.h"
-#include "boxes/peers/add_participants_box.h"
-#include "window/window_session_controller.h"
-#include "data/data_channel.h"
-#include "data/data_chat.h"
-#include "data/data_user.h"
 #include "styles/style_boxes.h"
 #include "styles/style_info.h"
+#include "lang/lang_keys.h"
+#include "boxes/confirm_box.h"
+#include "boxes/peer_list_controllers.h"
+#include "window/window_controller.h"
 
 namespace Info {
 namespace Profile {
@@ -123,7 +120,7 @@ void Members::setupHeader() {
 		st::infoMembersHeader);
 	auto parent = _header.data();
 
-	_openMembers = Ui::CreateChild<Ui::SettingsButton>(
+	_openMembers = Ui::CreateChild<Button>(
 		parent,
 		rpl::single(QString()));
 
@@ -163,11 +160,11 @@ void Members::setupHeader() {
 object_ptr<Ui::FlatLabel> Members::setupTitle() {
 	auto result = object_ptr<Ui::FlatLabel>(
 		_titleWrap,
-		tr::lng_chat_status_members(
-			lt_count_decimal,
-			MembersCountValue(_peer) | tr::to_count(),
-			Ui::Text::Upper
-		),
+		MembersCountValue(
+			_peer
+		) | rpl::map([](int count) {
+			return lng_chat_status_members(lt_count, count);
+		}) | ToUpperValue(),
 		st::infoBlockHeaderLabel);
 	result->setAttribute(Qt::WA_TransparentForMouseEvents);
 	return result;
@@ -212,10 +209,10 @@ void Members::setupButtons() {
 
 void Members::setupList() {
 	auto topSkip = _header ? _header->height() : 0;
-	_listController->setStyleOverrides(&st::infoMembersList);
 	_list = object_ptr<ListWidget>(
 		this,
-		_listController.get());
+		_listController.get(),
+		st::infoMembersList);
 	_list->scrollToRequests(
 	) | rpl::start_with_next([this](Ui::ScrollToRequest request) {
 		auto addmin = (request.ymin < 0 || !_header)
@@ -270,7 +267,7 @@ void Members::updateHeaderControlsGeometry(int newWidth) {
 	//auto searchShownLeft = st::infoIconPosition.x()
 	//	- st::infoMembersSearch.iconPosition.x();
 	//auto searchHiddenLeft = availableWidth - _search->width();
-	//auto searchShown = _searchShownAnimation.value(_searchShown ? 1. : 0.);
+	//auto searchShown = _searchShownAnimation.current(_searchShown ? 1. : 0.);
 	//auto searchCurrentLeft = anim::interpolate(
 	//	searchHiddenLeft,
 	//	searchShownLeft,
@@ -323,7 +320,11 @@ void Members::updateHeaderControlsGeometry(int newWidth) {
 
 void Members::addMember() {
 	if (const auto chat = _peer->asChat()) {
-		AddParticipantsBoxController::Start(_controller, chat);
+		if (chat->count >= Global::ChatSizeMax() && chat->amCreator()) {
+			Ui::show(Box<ConvertToSupergroupBox>(chat));
+		} else {
+			AddParticipantsBoxController::Start(chat);
+		}
 	} else if (const auto channel = _peer->asChannel()) {
 		const auto state = _listController->saveState();
 		const auto users = ranges::view::all(
@@ -332,7 +333,6 @@ void Members::addMember() {
 			return peer->asUser();
 		}) | ranges::to_vector;
 		AddParticipantsBoxController::Start(
-			_controller,
 			channel,
 			{ users.begin(), users.end() });
 	}
@@ -342,14 +342,14 @@ void Members::showMembersWithSearch(bool withSearch) {
 	//if (!_searchShown) {
 	//	toggleSearch();
 	//}
-	auto contentMemento = std::make_shared<Info::Members::Memento>(
+	auto contentMemento = std::make_unique<Info::Members::Memento>(
 		_controller);
 	contentMemento->setState(saveState());
 	contentMemento->setSearchStartsFocused(withSearch);
-	auto mementoStack = std::vector<std::shared_ptr<ContentMemento>>();
+	auto mementoStack = std::vector<std::unique_ptr<ContentMemento>>();
 	mementoStack.push_back(std::move(contentMemento));
 	_controller->showSection(
-		std::make_shared<Info::Memento>(std::move(mementoStack)));
+		Info::Memento(std::move(mementoStack)));
 }
 
 //void Members::toggleSearch(anim::type animated) {
@@ -409,13 +409,14 @@ void Members::visibleTopBottomUpdated(
 	setChildVisibleTopBottom(_list, visibleTop, visibleBottom);
 }
 
-void Members::peerListSetTitle(rpl::producer<QString> title) {
+void Members::peerListSetTitle(Fn<QString()> title) {
 }
 
-void Members::peerListSetAdditionalTitle(rpl::producer<QString> title) {
+void Members::peerListSetAdditionalTitle(
+		Fn<QString()> title) {
 }
 
-bool Members::peerListIsRowChecked(not_null<PeerListRow*> row) {
+bool Members::peerListIsRowSelected(not_null<PeerData*> peer) {
 	return false;
 }
 
@@ -431,11 +432,7 @@ void Members::peerListScrollToTop() {
 	_scrollToRequests.fire({ -1, -1 });
 }
 
-void Members::peerListAddSelectedPeerInBunch(not_null<PeerData*> peer) {
-	Unexpected("Item selection in Info::Profile::Members.");
-}
-
-void Members::peerListAddSelectedRowInBunch(not_null<PeerListRow*> row) {
+void Members::peerListAddSelectedRowInBunch(not_null<PeerData*> peer) {
 	Unexpected("Item selection in Info::Profile::Members.");
 }
 

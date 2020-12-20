@@ -7,12 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include <string>
-
 #include <windows.h>
-#ifdef small
-#undef small
-#endif // small
+#include <string>
 
 #pragma warning(push)
 #pragma warning(disable:4091)

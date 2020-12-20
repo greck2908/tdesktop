@@ -19,12 +19,12 @@ public:
 
 	bool change(const MTPPeerNotifySettings &settings);
 	bool change(
-		std::optional<int> muteForSeconds,
-		std::optional<bool> silentPosts);
+		base::optional<int> muteForSeconds,
+		base::optional<bool> silentPosts);
 
 	bool settingsUnknown() const;
-	std::optional<TimeId> muteUntil() const;
-	std::optional<bool> silentPosts() const;
+	base::optional<TimeId> muteUntil() const;
+	base::optional<bool> silentPosts() const;
 	MTPinputPeerNotifySettings serialize() const;
 
 	~NotifySettings();

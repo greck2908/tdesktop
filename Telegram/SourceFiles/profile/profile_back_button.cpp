@@ -8,26 +8,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "profile/profile_back_button.h"
 
 //#include "history/view/history_view_top_bar_widget.h"
-#include "main/main_session.h"
-#include "data/data_session.h"
 #include "styles/style_widgets.h"
 #include "styles/style_window.h"
 #include "styles/style_profile.h"
 #include "styles/style_info.h"
-#include "facades.h"
 
 namespace Profile {
 
-BackButton::BackButton(
-	QWidget *parent,
-	not_null<Main::Session*> session,
-	const QString &text)
-: Ui::AbstractButton(parent)
-, _session(session)
+BackButton::BackButton(QWidget *parent, const QString &text) : Ui::AbstractButton(parent)
 , _text(text.toUpper()) {
 	setCursor(style::cur_pointer);
 
-	subscribe(Adaptive::Changed(), [=] { updateAdaptiveLayout(); });
+	subscribe(Adaptive::Changed(), [this] { updateAdaptiveLayout(); });
 	updateAdaptiveLayout();
 }
 
@@ -53,18 +45,17 @@ void BackButton::paintEvent(QPaintEvent *e) {
 
 void BackButton::onStateChanged(State was, StateChangeSource source) {
 	if (isDown() && !(was & StateFlag::Down)) {
-		clicked(Qt::KeyboardModifiers(), Qt::LeftButton);
+		emit clicked();
 	}
 }
 
 void BackButton::updateAdaptiveLayout() {
 	if (!Adaptive::OneColumn()) {
-		_unreadBadgeLifetime.destroy();
-	} else if (!_unreadBadgeLifetime) {
-		_session->data().unreadBadgeChanges(
-		) | rpl::start_with_next([=] {
+		unsubscribe(base::take(_unreadCounterSubscription));
+	} else if (!_unreadCounterSubscription) {
+		_unreadCounterSubscription = subscribe(Global::RefUnreadCounterUpdate(), [this] {
 			rtlupdate(0, 0, st::titleUnreadCounterRight, st::titleUnreadCounterTop);
-		}, _unreadBadgeLifetime);
+		});
 	}
 }
 

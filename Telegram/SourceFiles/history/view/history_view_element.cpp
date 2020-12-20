@@ -8,26 +8,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_element.h"
 
 #include "history/view/history_view_service_message.h"
-#include "history/view/history_view_message.h"
 #include "history/history_item_components.h"
 #include "history/history_item.h"
-#include "history/view/media/history_view_media.h"
-#include "history/view/media/history_view_media_grouped.h"
-#include "history/view/media/history_view_sticker.h"
-#include "history/view/media/history_view_large_emoji.h"
+#include "history/history_media.h"
+#include "history/history_media_grouped.h"
 #include "history/history.h"
-#include "core/application.h"
-#include "core/core_settings.h"
-#include "main/main_session.h"
-#include "chat_helpers/stickers_emoji_pack.h"
-#include "window/window_session_controller.h"
 #include "data/data_session.h"
 #include "data/data_groups.h"
 #include "data/data_media_types.h"
 #include "lang/lang_keys.h"
+#include "auth_session.h"
 #include "layout.h"
-#include "app.h"
-#include "styles/style_chat.h"
+#include "styles/style_history.h"
 
 namespace HistoryView {
 namespace {
@@ -35,99 +27,7 @@ namespace {
 // A new message from the same sender is attached to previous within 15 minutes.
 constexpr int kAttachMessageToPreviousSecondsDelta = 900;
 
-bool IsAttachedToPreviousInSavedMessages(
-		not_null<HistoryItem*> previous,
-		not_null<HistoryItem*> item) {
-	const auto forwarded = previous->Has<HistoryMessageForwarded>();
-	const auto sender = previous->senderOriginal();
-	if (forwarded != item->Has<HistoryMessageForwarded>()) {
-		return false;
-	} else if (sender != item->senderOriginal()) {
-		return false;
-	} else if (!forwarded || sender) {
-		return true;
-	}
-	const auto previousInfo = previous->hiddenForwardedInfo();
-	const auto itemInfo = item->hiddenForwardedInfo();
-	Assert(previousInfo != nullptr);
-	Assert(itemInfo != nullptr);
-	return (*previousInfo == *itemInfo);
-}
-
 } // namespace
-
-SimpleElementDelegate::SimpleElementDelegate(
-	not_null<Window::SessionController*> controller)
-: _controller(controller) {
-}
-
-std::unique_ptr<HistoryView::Element> SimpleElementDelegate::elementCreate(
-		not_null<HistoryMessage*> message,
-		Element *replacing) {
-	return std::make_unique<HistoryView::Message>(this, message, replacing);
-}
-
-std::unique_ptr<HistoryView::Element> SimpleElementDelegate::elementCreate(
-		not_null<HistoryService*> message,
-		Element *replacing) {
-	return std::make_unique<HistoryView::Service>(this, message, replacing);
-}
-
-bool SimpleElementDelegate::elementUnderCursor(
-		not_null<const Element*> view) {
-	return false;
-}
-
-crl::time SimpleElementDelegate::elementHighlightTime(
-	not_null<const Element*> element) {
-	return crl::time(0);
-}
-
-bool SimpleElementDelegate::elementInSelectionMode() {
-	return false;
-}
-
-bool SimpleElementDelegate::elementIntersectsRange(
-		not_null<const Element*> view,
-		int from,
-		int till) {
-	return true;
-}
-
-void SimpleElementDelegate::elementStartStickerLoop(
-	not_null<const Element*> view) {
-}
-
-void SimpleElementDelegate::elementShowPollResults(
-	not_null<PollData*> poll,
-	FullMsgId context) {
-}
-
-void SimpleElementDelegate::elementShowTooltip(
-	const TextWithEntities &text,
-	Fn<void()> hiddenCallback) {
-}
-
-bool SimpleElementDelegate::elementIsGifPaused() {
-	return _controller->isGifPausedAtLeastFor(Window::GifPauseReason::Any);
-}
-
-bool SimpleElementDelegate::elementHideReply(not_null<const Element*> view) {
-	return false;
-}
-
-bool SimpleElementDelegate::elementShownUnread(
-		not_null<const Element*> view) {
-	return view->data()->unread();
-}
-
-void SimpleElementDelegate::elementSendBotCommand(
-	const QString &command,
-	const FullMsgId &context) {
-}
-
-void SimpleElementDelegate::elementHandleViaClick(not_null<UserData*> bot) {
-}
 
 TextSelection UnshiftItemSelection(
 		TextSelection selection,
@@ -147,18 +47,24 @@ TextSelection ShiftItemSelection(
 
 TextSelection UnshiftItemSelection(
 		TextSelection selection,
-		const Ui::Text::String &byText) {
+		const Text &byText) {
 	return UnshiftItemSelection(selection, byText.length());
 }
 
 TextSelection ShiftItemSelection(
 		TextSelection selection,
-		const Ui::Text::String &byText) {
+		const Text &byText) {
 	return ShiftItemSelection(selection, byText.length());
 }
 
-void UnreadBar::init(const QString &string) {
-	text = string;
+void UnreadBar::init(int newCount) {
+	if (freezed) {
+		return;
+	}
+	count = newCount;
+	text = (count == kCountUnknown)
+		? lang(lng_unread_bar_some)
+		: lng_unread_bar(lt_count, count);
 	width = st::semiboldFont->width(text);
 }
 
@@ -190,7 +96,7 @@ void UnreadBar::paint(Painter &p, int y, int w) const {
 
 	int left = st::msgServiceMargin.left();
 	int maxwidth = w;
-	if (Core::App().settings().chatWide()) {
+	if (Adaptive::ChatWide()) {
 		maxwidth = qMin(
 			maxwidth,
 			st::msgMaxWidth
@@ -209,8 +115,8 @@ void UnreadBar::paint(Painter &p, int y, int w) const {
 }
 
 
-void DateBadge::init(const QString &date) {
-	text = date;
+void DateBadge::init(const QDateTime &date) {
+	text = langDayOfMonthFull(date.date());
 	width = st::msgServiceFont->width(text);
 }
 
@@ -228,17 +134,15 @@ void DateBadge::paint(Painter &p, int y, int w) const {
 
 Element::Element(
 	not_null<ElementDelegate*> delegate,
-	not_null<HistoryItem*> data,
-	Element *replacing)
+	not_null<HistoryItem*> data)
 : _delegate(delegate)
 , _data(data)
-, _isScheduledUntilOnline(IsItemScheduledUntilOnline(data))
-, _dateTime(_isScheduledUntilOnline ? QDateTime() : ItemDateTime(data))
+, _dateTime(ItemDateTime(data))
 , _context(delegate->elementContext()) {
-	history()->owner().registerItemView(this);
-	refreshMedia(replacing);
+	Auth().data().registerItemView(this);
+	refreshMedia();
 	if (_context == Context::History) {
-		history()->setHasPendingResizedItems();
+		_data->_history->setHasPendingResizedItems();
 	}
 }
 
@@ -250,15 +154,11 @@ not_null<HistoryItem*> Element::data() const {
 	return _data;
 }
 
-not_null<History*> Element::history() const {
-	return _data->history();
-}
-
 QDateTime Element::dateTime() const {
 	return _dateTime;
 }
 
-Media *Element::media() const {
+HistoryMedia *Element::media() const {
 	return _media.get();
 }
 
@@ -272,9 +172,6 @@ int Element::y() const {
 
 void Element::setY(int y) {
 	_y = y;
-}
-
-void Element::refreshDataIdHook() {
 }
 
 void Element::paintHighlight(
@@ -309,16 +206,6 @@ void Element::paintHighlight(
 
 bool Element::isUnderCursor() const {
 	return _delegate->elementUnderCursor(this);
-}
-
-bool Element::isLastAndSelfMessage() const {
-	if (!hasOutLayout() || data()->_history->peer->isSelf()) {
-		return false;
-	}
-	if (const auto last = data()->_history->lastMessage()) {
-		return last == data();
-	}
-	return false;
 }
 
 void Element::setPendingResize() {
@@ -364,47 +251,29 @@ bool Element::isHidden() const {
 	return isHiddenByGroup();
 }
 
-void Element::refreshMedia(Element *replacing) {
+void Element::refreshMedia() {
 	_flags &= ~Flag::HiddenByGroup;
 
 	const auto item = data();
 	const auto media = item->media();
 	if (media && media->canBeGrouped()) {
-		if (const auto group = history()->owner().groups().find(item)) {
-			if (group->items.front() != item) {
+		if (const auto group = Auth().data().groups().find(item)) {
+			if (group->items.back() != item) {
 				_media = nullptr;
 				_flags |= Flag::HiddenByGroup;
 			} else {
-				_media = std::make_unique<GroupedMedia>(
+				_media = std::make_unique<HistoryGroupedMedia>(
 					this,
 					group->items);
 				if (!pendingResize()) {
-					history()->owner().requestViewResize(this);
+					Auth().data().requestViewResize(this);
 				}
 			}
 			return;
 		}
 	}
-	const auto session = &history()->session();
-	if (const auto media = _data->media()) {
-		_media = media->createView(this, replacing);
-	} else if (_data->isIsolatedEmoji()
-		&& Core::App().settings().largeEmoji()) {
-		const auto emoji = _data->isolatedEmoji();
-		const auto emojiStickers = &session->emojiStickersPack();
-		if (const auto sticker = emojiStickers->stickerForEmoji(emoji)) {
-			_media = std::make_unique<UnwrappedMedia>(
-				this,
-				std::make_unique<Sticker>(
-					this,
-					sticker.document,
-					replacing,
-					sticker.replacements));
-		} else {
-			_media = std::make_unique<UnwrappedMedia>(
-				this,
-				std::make_unique<LargeEmoji>(this, emoji));
-		}
+	if (_data->media()) {
+		_media = _data->media()->createView(this);
 	} else {
 		_media = nullptr;
 	}
@@ -423,28 +292,21 @@ void Element::refreshDataId() {
 	if (const auto media = this->media()) {
 		media->refreshParentId(data());
 	}
-	refreshDataIdHook();
 }
 
 bool Element::computeIsAttachToPrevious(not_null<Element*> previous) {
-	const auto mayBeAttached = [](not_null<HistoryItem*> item) {
-		return !item->serviceMsg()
-			&& !item->isEmpty()
-			&& !item->isPost()
-			&& (item->from() != item->history()->peer
-				|| !item->from()->isChannel());
-	};
 	const auto item = data();
 	if (!Has<DateBadge>() && !Has<UnreadBar>()) {
 		const auto prev = previous->data();
-		const auto possible = (std::abs(prev->date() - item->date())
-				< kAttachMessageToPreviousSecondsDelta)
-			&& mayBeAttached(item)
-			&& mayBeAttached(prev);
+		const auto possible = !item->serviceMsg() && !prev->serviceMsg()
+			&& !item->isEmpty() && !prev->isEmpty()
+			&& (std::abs(prev->date() - item->date()) < kAttachMessageToPreviousSecondsDelta)
+			&& (_context == Context::Feed
+				|| (!item->isPost() && !prev->isPost()));
 		if (possible) {
-			if (item->history()->peer->isSelf()
-				|| item->history()->peer->isRepliesChat()) {
-				return IsAttachedToPreviousInSavedMessages(prev, item);
+			if (item->history()->peer->isSelf()) {
+				return prev->senderOriginal() == item->senderOriginal()
+					&& (prev->Has<HistoryMessageForwarded>() == item->Has<HistoryMessageForwarded>());
 			} else {
 				return prev->from() == item->from();
 			}
@@ -453,32 +315,37 @@ bool Element::computeIsAttachToPrevious(not_null<Element*> previous) {
 	return false;
 }
 
-void Element::createUnreadBar(rpl::producer<QString> text) {
-	if (!AddComponents(UnreadBar::Bit())) {
-		return;
-	}
-	const auto bar = Get<UnreadBar>();
-	std::move(
-		text
-	) | rpl::start_with_next([=](const QString &text) {
-		if (const auto bar = Get<UnreadBar>()) {
-			bar->init(text);
-		}
-	}, bar->lifetime);
-	if (data()->mainView() == this) {
-		recountAttachToPreviousInBlocks();
-	}
-	history()->owner().requestViewResize(this);
-}
-
 void Element::destroyUnreadBar() {
 	if (!Has<UnreadBar>()) {
 		return;
 	}
 	RemoveComponents(UnreadBar::Bit());
-	history()->owner().requestViewResize(this);
+	Auth().data().requestViewResize(this);
 	if (data()->mainView() == this) {
 		recountAttachToPreviousInBlocks();
+	}
+}
+
+void Element::setUnreadBarCount(int count) {
+	const auto changed = AddComponents(UnreadBar::Bit());
+	const auto bar = Get<UnreadBar>();
+	if (bar->freezed) {
+		return;
+	}
+	bar->init(count);
+	if (changed) {
+		if (data()->mainView() == this) {
+			recountAttachToPreviousInBlocks();
+		}
+		Auth().data().requestViewResize(this);
+	} else {
+		Auth().data().requestViewRepaint(this);
+	}
+}
+
+void Element::setUnreadBarFreezed() {
+	if (const auto bar = Get<UnreadBar>()) {
+		bar->freezed = true;
 	}
 }
 
@@ -498,16 +365,8 @@ bool Element::isInOneDayWithPrevious() const {
 }
 
 void Element::recountAttachToPreviousInBlocks() {
-	if (isHidden() || data()->isEmpty()) {
-		if (const auto next = nextDisplayedInBlocks()) {
-			next->recountAttachToPreviousInBlocks();
-		} else if (const auto previous = previousDisplayedInBlocks()) {
-			previous->setAttachToNext(false);
-		}
-		return;
-	}
 	auto attachToPrevious = false;
-	if (const auto previous = previousDisplayedInBlocks()) {
+	if (const auto previous = previousInBlocks()) {
 		attachToPrevious = computeIsAttachToPrevious(previous);
 		previous->setAttachToNext(attachToPrevious);
 	}
@@ -517,11 +376,11 @@ void Element::recountAttachToPreviousInBlocks() {
 void Element::recountDisplayDateInBlocks() {
 	setDisplayDate([&] {
 		const auto item = data();
-		if (isHidden() || item->isEmpty()) {
+		if (item->isEmpty()) {
 			return false;
 		}
 
-		if (const auto previous = previousDisplayedInBlocks()) {
+		if (const auto previous = previousInBlocks()) {
 			const auto prev = previous->data();
 			return prev->isEmpty()
 				|| (previous->dateTime().date() != dateTime().date());
@@ -546,7 +405,7 @@ void Element::setDisplayDate(bool displayDate) {
 	const auto item = data();
 	if (displayDate && !Has<DateBadge>()) {
 		AddComponents(DateBadge::Bit());
-		Get<DateBadge>()->init(ItemDateText(item, _isScheduledUntilOnline));
+		Get<DateBadge>()->init(dateTime());
 		setPendingResize();
 	} else if (!displayDate && Has<DateBadge>()) {
 		RemoveComponents(DateBadge::Bit());
@@ -614,8 +473,8 @@ bool Element::displayFastReply() const {
 	return false;
 }
 
-std::optional<QSize> Element::rightActionSize() const {
-	return std::nullopt;
+bool Element::displayRightAction() const {
+	return false;
 }
 
 void Element::drawRightAction(
@@ -637,36 +496,8 @@ TimeId Element::displayedEditDate() const {
 	return TimeId(0);
 }
 
-HistoryMessageReply *Element::displayedReply() const {
-	return nullptr;
-}
-
 bool Element::hasVisibleText() const {
 	return false;
-}
-
-auto Element::verticalRepaintRange() const -> VerticalRepaintRange {
-	return {
-		.top = 0,
-		.height = height()
-	};
-}
-
-bool Element::hasHeavyPart() const {
-	return false;
-}
-
-void Element::checkHeavyPart() {
-	if (!hasHeavyPart() && (!_media || !_media->hasHeavyPart())) {
-		history()->owner().unregisterHeavyViewPart(this);
-	}
-}
-
-void Element::unloadHeavyPart() {
-	history()->owner().unregisterHeavyViewPart(this);
-	if (_media) {
-		_media->unloadHeavyPart();
-	}
 }
 
 HistoryBlock *Element::block() {
@@ -678,7 +509,7 @@ const HistoryBlock *Element::block() const {
 }
 
 void Element::attachToBlock(not_null<HistoryBlock*> block, int index) {
-	Expects(_data->isHistoryEntry());
+	Expects(!_data->isLogEntry());
 	Expects(_block == nullptr);
 	Expects(_indexInBlock < 0);
 	Expects(index >= 0);
@@ -728,14 +559,6 @@ Element *Element::previousInBlocks() const {
 	return nullptr;
 }
 
-Element *Element::previousDisplayedInBlocks() const {
-	auto result = previousInBlocks();
-	while (result && (result->data()->isEmpty() || result->isHidden())) {
-		result = result->previousInBlocks();
-	}
-	return result;
-}
-
 Element *Element::nextInBlocks() const {
 	if (_block && _indexInBlock >= 0) {
 		if (_indexInBlock + 1 < _block->messages.size()) {
@@ -747,14 +570,6 @@ Element *Element::nextInBlocks() const {
 		}
 	}
 	return nullptr;
-}
-
-Element *Element::nextDisplayedInBlocks() const {
-	auto result = nextInBlocks();
-	while (result && (result->data()->isEmpty() || result->isHidden())) {
-		result = result->nextInBlocks();
-	}
-	return result;
 }
 
 void Element::drawInfo(
@@ -789,7 +604,7 @@ void Element::clickHandlerActiveChanged(
 		}
 	}
 	App::hoveredLinkItem(active ? this : nullptr);
-	history()->owner().requestViewRepaint(this);
+	Auth().data().requestViewRepaint(this);
 	if (const auto media = this->media()) {
 		media->clickHandlerActiveChanged(handler, active);
 	}
@@ -804,22 +619,20 @@ void Element::clickHandlerPressedChanged(
 		}
 	}
 	App::pressedLinkItem(pressed ? this : nullptr);
-	history()->owner().requestViewRepaint(this);
+	Auth().data().requestViewRepaint(this);
 	if (const auto media = this->media()) {
 		media->clickHandlerPressedChanged(handler, pressed);
 	}
 }
 
 Element::~Element() {
-	// Delete media while owner still exists.
-	base::take(_media);
 	if (_data->mainView() == this) {
 		_data->clearMainView();
 	}
 	if (_context == Context::History) {
-		history()->owner().notifyViewRemoved(this);
+		Auth().data().notifyViewRemoved(this);
 	}
-	history()->owner().unregisterItemView(this);
+	Auth().data().unregisterItemView(this);
 }
 
 } // namespace HistoryView

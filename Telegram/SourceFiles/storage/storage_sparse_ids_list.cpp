@@ -31,18 +31,18 @@ void SparseIdsList::Slice::merge(
 }
 
 template <typename Range>
-SparseIdsList::AddResult SparseIdsList::uniteAndAdd(
+int SparseIdsList::uniteAndAdd(
 		SparseIdsSliceUpdate &update,
 		base::flat_set<Slice>::iterator uniteFrom,
 		base::flat_set<Slice>::iterator uniteTill,
 		const Range &messages,
 		MsgRange noSkipRange) {
-	const auto uniteFromIndex = uniteFrom - _slices.begin();
-	const auto was = int(uniteFrom->messages.size());
+	auto uniteFromIndex = uniteFrom - _slices.begin();
+	auto was = uniteFrom->messages.size();
 	_slices.modify(uniteFrom, [&](Slice &slice) {
 		slice.merge(messages, noSkipRange);
 	});
-	const auto firstToErase = uniteFrom + 1;
+	auto firstToErase = uniteFrom + 1;
 	if (firstToErase != uniteTill) {
 		for (auto it = firstToErase; it != uniteTill; ++it) {
 			_slices.modify(uniteFrom, [&](Slice &slice) {
@@ -54,20 +54,16 @@ SparseIdsList::AddResult SparseIdsList::uniteAndAdd(
 	}
 	update.messages = &uniteFrom->messages;
 	update.range = uniteFrom->range;
-	return { int(uniteFrom->messages.size()) - was };
+	return uniteFrom->messages.size() - was;
 }
 
 template <typename Range>
-SparseIdsList::AddResult SparseIdsList::addRangeItemsAndCountNew(
+int SparseIdsList::addRangeItemsAndCountNew(
 		SparseIdsSliceUpdate &update,
 		const Range &messages,
 		MsgRange noSkipRange) {
 	Expects(noSkipRange.from <= noSkipRange.till);
 
-	if (noSkipRange.from == noSkipRange.till
-		&& std::begin(messages) == std::end(messages)) {
-		return { 0 };
-	}
 	auto uniteFrom = ranges::lower_bound(
 		_slices,
 		noSkipRange.from,
@@ -87,43 +83,35 @@ SparseIdsList::AddResult SparseIdsList::addRangeItemsAndCountNew(
 		std::end(messages) };
 	auto slice = _slices.emplace(
 		std::move(sliceMessages),
-		noSkipRange
-	).first;
+		noSkipRange);
 	update.messages = &slice->messages;
 	update.range = slice->range;
-	return { int(slice->messages.size()) };
+	return slice->messages.size();
 }
 
 template <typename Range>
 void SparseIdsList::addRange(
 		const Range &messages,
 		MsgRange noSkipRange,
-		std::optional<int> count,
+		base::optional<int> count,
 		bool incrementCount) {
 	Expects(!count || !incrementCount);
 
+	auto wasCount = _count;
 	auto update = SparseIdsSliceUpdate();
-	const auto result = addRangeItemsAndCountNew(
+	auto result = addRangeItemsAndCountNew(
 		update,
 		messages,
 		noSkipRange);
 	if (count) {
 		_count = count;
-	} else if (incrementCount && _count && result.added > 0) {
-		*_count += result.added;
+	} else if (incrementCount && _count && result > 0) {
+		*_count += result;
 	}
 	if (_slices.size() == 1) {
-		if (_count && _slices.front().messages.size() >= *_count) {
-			_slices.modify(_slices.begin(), [&](Slice &slice) {
-				slice.range = { 0, ServerMaxMsgId };
-			});
-		}
-		if (_slices.front().range == MsgRange{ 0, ServerMaxMsgId }) {
+		if (_slices.front().range == MsgRange { 0, ServerMaxMsgId }) {
 			_count = _slices.front().messages.size();
 		}
-	}
-	if (_count && update.messages) {
-		accumulate_max(*_count, int(update.messages->size()));
 	}
 	update.count = _count;
 	_sliceUpdated.fire(std::move(update));
@@ -131,20 +119,20 @@ void SparseIdsList::addRange(
 
 void SparseIdsList::addNew(MsgId messageId) {
 	auto range = { messageId };
-	addRange(range, { messageId, ServerMaxMsgId }, std::nullopt, true);
+	addRange(range, { messageId, ServerMaxMsgId }, base::none, true);
 }
 
 void SparseIdsList::addExisting(
 		MsgId messageId,
 		MsgRange noSkipRange) {
 	auto range = { messageId };
-	addRange(range, noSkipRange, std::nullopt);
+	addRange(range, noSkipRange, base::none);
 }
 
 void SparseIdsList::addSlice(
 		std::vector<MsgId> &&messageIds,
 		MsgRange noSkipRange,
-		std::optional<int> count) {
+		base::optional<int> count) {
 	addRange(messageIds, noSkipRange, count);
 }
 
@@ -181,7 +169,7 @@ void SparseIdsList::invalidateBottom() {
 			});
 		}
 	}
-	_count = std::nullopt;
+	_count = base::none;
 }
 
 rpl::producer<SparseIdsListResult> SparseIdsList::query(
@@ -205,35 +193,6 @@ rpl::producer<SparseIdsListResult> SparseIdsList::query(
 		consumer.put_done();
 		return rpl::lifetime();
 	};
-}
-
-SparseIdsListResult SparseIdsList::snapshot(
-		const SparseIdsListQuery &query) const {
-	auto slice = query.aroundId
-		? ranges::lower_bound(
-			_slices,
-			query.aroundId,
-			std::less<>(),
-			[](const Slice &slice) { return slice.range.till; })
-		: _slices.end();
-	if (slice != _slices.end()
-		&& slice->range.from <= query.aroundId) {
-		return queryFromSlice(query, *slice);
-	} else if (_count) {
-		auto result = SparseIdsListResult{};
-		result.count = _count;
-		return result;
-	}
-	return {};
-}
-
-bool SparseIdsList::empty() const {
-	for (const auto &slice : _slices) {
-		if (!slice.messages.empty()) {
-			return false;
-		}
-	}
-	return true;
 }
 
 rpl::producer<SparseIdsSliceUpdate> SparseIdsList::sliceUpdated() const {

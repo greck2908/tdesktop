@@ -8,7 +8,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "ui/rp_widget.h"
-#include "ui/effects/animations.h"
 #include "boxes/abstract_box.h"
 #include "base/bytes.h"
 
@@ -19,24 +18,15 @@ class RoundButton;
 class CheckView;
 } // namespace Ui
 
-namespace Main {
-class Session;
-} // namespace Main
-
 namespace Window {
-
-class Controller;
 
 class LockWidget : public Ui::RpWidget {
 public:
-	LockWidget(QWidget *parent, not_null<Controller*> window);
-
-	not_null<Controller*> window() const;
+	LockWidget(QWidget *parent);
 
 	virtual void setInnerFocus();
 
 	void showAnimated(const QPixmap &bgAnimCache, bool back = false);
-	void showFinished();
 
 protected:
 	void paintEvent(QPaintEvent *e) override;
@@ -45,8 +35,7 @@ protected:
 private:
 	void animationCallback();
 
-	const not_null<Controller*> _window;
-	Ui::Animations::Simple _a_show;
+	Animation _a_show;
 	bool _showBack = false;
 	QPixmap _cacheUnder, _cacheOver;
 
@@ -54,7 +43,7 @@ private:
 
 class PasscodeLockWidget : public LockWidget {
 public:
-	PasscodeLockWidget(QWidget *parent, not_null<Controller*> window);
+	PasscodeLockWidget(QWidget *parent);
 
 	void setInnerFocus() override;
 
@@ -77,7 +66,7 @@ private:
 struct TermsLock {
 	bytes::vector id;
 	TextWithEntities text;
-	std::optional<int> minAge;
+	base::optional<int> minAge;
 	bool popup = false;
 
 	inline bool operator==(const TermsLock &other) const {
@@ -87,24 +76,22 @@ struct TermsLock {
 		return !(*this == other);
 	}
 
-	static TermsLock FromMTP(
-		Main::Session *session,
-		const MTPDhelp_termsOfService &data);
+	static TermsLock FromMTP(const MTPDhelp_termsOfService &data);
 
 };
 
-class TermsBox : public Ui::BoxContent {
+class TermsBox : public BoxContent {
 public:
 	TermsBox(
 		QWidget*,
 		const TermsLock &data,
-		rpl::producer<QString> agree,
-		rpl::producer<QString> cancel);
+		Fn<QString()> agree,
+		Fn<QString()> cancel);
 	TermsBox(
 		QWidget*,
 		const TextWithEntities &text,
-		rpl::producer<QString> agree,
-		rpl::producer<QString> cancel,
+		Fn<QString()> agree,
+		Fn<QString()> cancel,
 		bool attentionAgree = false);
 
 	rpl::producer<> agreeClicks() const;
@@ -118,15 +105,15 @@ protected:
 
 private:
 	TermsLock _data;
-	rpl::producer<QString> _agree;
-	rpl::producer<QString> _cancel;
+	Fn<QString()> _agree;
+	Fn<QString()> _cancel;
 	rpl::event_stream<> _agreeClicks;
 	rpl::event_stream<> _cancelClicks;
 	QString _lastClickedMention;
 	bool _attentionAgree = false;
 
 	bool _ageErrorShown = false;
-	Ui::Animations::Simple _ageErrorAnimation;
+	Animation _ageErrorAnimation;
 
 };
 

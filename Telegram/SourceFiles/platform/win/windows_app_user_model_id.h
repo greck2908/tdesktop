@@ -7,7 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "base/platform/win/base_windows_h.h"
+#include <windows.h>
 
 namespace Platform {
 namespace AppUserModelId {

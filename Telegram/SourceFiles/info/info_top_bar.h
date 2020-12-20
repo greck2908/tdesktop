@@ -9,17 +9,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/rp_widget.h"
 #include "ui/wrap/fade_wrap.h"
-#include "ui/effects/animations.h"
 #include "ui/effects/numbers_animation.h"
 #include "info/info_wrap_widget.h"
 
 namespace style {
 struct InfoTopBar;
 } // namespace style
-
-namespace Window {
-class SessionNavigation;
-} // namespace Window
 
 namespace Ui {
 class IconButton;
@@ -43,7 +38,6 @@ class TopBar : public Ui::RpWidget {
 public:
 	TopBar(
 		QWidget *parent,
-		not_null<Window::SessionNavigation*> navigation,
 		const style::InfoTopBar &st,
 		SelectedItems &&items);
 
@@ -62,17 +56,6 @@ public:
 		return result;
 	}
 
-	template <typename ButtonWidget>
-	ButtonWidget *addButtonWithVisibility(
-			base::unique_qptr<ButtonWidget> button,
-			rpl::producer<bool> shown) {
-		auto result = button.get();
-		forceButtonVisibility(
-			pushButton(std::move(button)),
-			std::move(shown));
-		return result;
-	}
-
 	void createSearchView(
 		not_null<Ui::SearchFieldController*> controller,
 		rpl::producer<bool> &&shown,
@@ -88,8 +71,6 @@ public:
 		updateControlsVisibility(anim::type::instant);
 	}
 
-	void showSearch();
-
 protected:
 	int resizeGetHeight(int newWidth) override;
 	void paintEvent(QPaintEvent *e) override;
@@ -98,11 +79,7 @@ private:
 	void updateControlsGeometry(int newWidth);
 	void updateDefaultControlsGeometry(int newWidth);
 	void updateSelectionControlsGeometry(int newWidth);
-	Ui::FadeWrap<Ui::RpWidget> *pushButton(
-		base::unique_qptr<Ui::RpWidget> button);
-	void forceButtonVisibility(
-		Ui::FadeWrap<Ui::RpWidget> *button,
-		rpl::producer<bool> shown);
+	Ui::FadeWrap<Ui::RpWidget> *pushButton(base::unique_qptr<Ui::RpWidget> button);
 	void removeButton(not_null<Ui::RpWidget*> button);
 	void startHighlightAnimation();
 	void updateControlsVisibility(anim::type animated);
@@ -135,10 +112,8 @@ private:
 	template <typename Widget, typename IsVisible>
 	void registerToggleControlCallback(Widget *widget, IsVisible &&callback);
 
-	const not_null<Window::SessionNavigation*> _navigation;
-
 	const style::InfoTopBar &_st;
-	Ui::Animations::Simple _a_highlight;
+	Animation _a_highlight;
 	bool _highlight = false;
 	QPointer<Ui::FadeWrap<Ui::IconButton>> _back;
 	std::vector<base::unique_qptr<Ui::RpWidget>> _buttons;

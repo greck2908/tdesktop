@@ -8,22 +8,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/change_phone_box.h"
 
 #include "lang/lang_keys.h"
+#include "styles/style_boxes.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/input_fields.h"
 #include "ui/wrap/fade_wrap.h"
-#include "ui/toast/toast.h"
-#include "ui/text/text_utilities.h"
-#include "ui/special_fields.h"
 #include "boxes/confirm_phone_box.h"
+#include "ui/toast/toast.h"
 #include "boxes/confirm_box.h"
-#include "main/main_session.h"
-#include "data/data_session.h"
-#include "data/data_user.h"
-#include "mtproto/sender.h"
-#include "apiwrap.h"
-#include "app.h"
-#include "styles/style_layers.h"
-#include "styles/style_boxes.h"
 
 namespace {
 
@@ -55,6 +46,7 @@ void createErrorLabel(
 			object_ptr<Ui::FlatLabel>(
 				parent,
 				text,
+				Ui::FlatLabel::InitType::Simple,
 				st::changePhoneError));
 		label->hide(anim::type::instant);
 		label->moveToLeft(x, y);
@@ -64,9 +56,10 @@ void createErrorLabel(
 
 } // namespace
 
-class ChangePhoneBox::EnterPhone : public Ui::BoxContent {
+class ChangePhoneBox::EnterPhone : public BoxContent {
 public:
-	EnterPhone(QWidget*, not_null<Main::Session*> session);
+	EnterPhone(QWidget*) {
+	}
 
 	void setInnerFocus() override {
 		_phone->setFocusFast();
@@ -77,15 +70,12 @@ protected:
 
 private:
 	void submit();
-	void sendPhoneDone(const MTPauth_SentCode &result, const QString &phoneNumber);
-	void sendPhoneFail(const RPCError &error, const QString &phoneNumber);
+	void sendPhoneDone(const QString &phoneNumber, const MTPauth_SentCode &result);
+	bool sendPhoneFail(const QString &phoneNumber, const RPCError &error);
 	void showError(const QString &text);
 	void hideError() {
 		showError(QString());
 	}
-
-	const not_null<Main::Session*> _session;
-	MTP::Sender _api;
 
 	object_ptr<Ui::PhoneInput> _phone = { nullptr };
 	object_ptr<Ui::FadeWrap<Ui::FlatLabel>> _error = { nullptr };
@@ -93,15 +83,9 @@ private:
 
 };
 
-class ChangePhoneBox::EnterCode : public Ui::BoxContent {
+class ChangePhoneBox::EnterCode : public BoxContent {
 public:
-	EnterCode(
-		QWidget*,
-		not_null<Main::Session*> session,
-		const QString &phone,
-		const QString &hash,
-		int codeLength,
-		int callTimeout);
+	EnterCode(QWidget*, const QString &phone, const QString &hash, int codeLength, int callTimeout);
 
 	void setInnerFocus() override {
 		_code->setFocusFast();
@@ -114,15 +98,12 @@ private:
 	void submit();
 	void sendCall();
 	void updateCall();
-	void sendCodeFail(const RPCError &error);
+	bool sendCodeFail(const RPCError &error);
 	void showError(const QString &text);
 	void hideError() {
 		showError(QString());
 	}
 	int countHeight();
-
-	const not_null<Main::Session*> _session;
-	MTP::Sender _api;
 
 	QString _phone;
 	QString _hash;
@@ -136,36 +117,24 @@ private:
 
 };
 
-ChangePhoneBox::EnterPhone::EnterPhone(
-	QWidget*,
-	not_null<Main::Session*> session)
-: _session(session)
-, _api(&session->mtp()) {
-}
-
 void ChangePhoneBox::EnterPhone::prepare() {
-	setTitle(tr::lng_change_phone_title());
+	setTitle(langFactory(lng_change_phone_title));
 
 	auto phoneValue = QString();
-	_phone.create(
-		this,
-		st::defaultInputField,
-		tr::lng_change_phone_new_title(),
-		ExtractPhonePrefix(_session->user()->phone()),
-		phoneValue);
+	_phone.create(this, st::defaultInputField, langFactory(lng_change_phone_new_title), phoneValue);
 
 	_phone->resize(st::boxWidth - 2 * st::boxPadding.left(), _phone->height());
 	_phone->moveToLeft(st::boxPadding.left(), st::boxLittleSkip);
 	connect(_phone, &Ui::PhoneInput::submitted, [=] { submit(); });
 
-	auto description = object_ptr<Ui::FlatLabel>(this, tr::lng_change_phone_new_description(tr::now), st::changePhoneLabel);
+	auto description = object_ptr<Ui::FlatLabel>(this, lang(lng_change_phone_new_description), Ui::FlatLabel::InitType::Simple, st::changePhoneLabel);
 	auto errorSkip = st::boxLittleSkip + st::changePhoneError.style.font->height;
 	description->moveToLeft(st::boxPadding.left(), _phone->y() + _phone->height() + errorSkip + st::boxLittleSkip);
 
 	setDimensions(st::boxWidth, description->bottomNoMargins() + st::boxLittleSkip);
 
-	addButton(tr::lng_change_phone_new_submit(), [this] { submit(); });
-	addButton(tr::lng_cancel(), [this] { closeBox(); });
+	addButton(langFactory(lng_change_phone_new_submit), [this] { submit(); });
+	addButton(langFactory(lng_cancel), [this] { closeBox(); });
 }
 
 void ChangePhoneBox::EnterPhone::submit() {
@@ -175,71 +144,61 @@ void ChangePhoneBox::EnterPhone::submit() {
 	hideError();
 
 	auto phoneNumber = _phone->getLastText().trimmed();
-	_requestId = _api.request(MTPaccount_SendChangePhoneCode(
-		MTP_string(phoneNumber),
-		MTP_codeSettings(MTP_flags(0))
-	)).done([=](const MTPauth_SentCode &result) {
-		sendPhoneDone(result, phoneNumber);
-	}).fail([=](const RPCError &error) {
-		sendPhoneFail(error, phoneNumber);
-	}).handleFloodErrors().send();
+	_requestId = MTP::send(MTPaccount_SendChangePhoneCode(MTP_flags(0), MTP_string(phoneNumber), MTP_bool(false)), rpcDone(crl::guard(this, [this, phoneNumber](const MTPauth_SentCode &result) {
+		return sendPhoneDone(phoneNumber, result);
+	})), rpcFail(crl::guard(this, [this, phoneNumber](const RPCError &error) {
+		return sendPhoneFail(phoneNumber, error);
+	})));
 }
 
-void ChangePhoneBox::EnterPhone::sendPhoneDone(
-		const MTPauth_SentCode &result,
-		const QString &phoneNumber) {
+void ChangePhoneBox::EnterPhone::sendPhoneDone(const QString &phoneNumber, const MTPauth_SentCode &result) {
 	Expects(result.type() == mtpc_auth_sentCode);
 	_requestId = 0;
 
 	auto codeLength = 0;
 	auto &data = result.c_auth_sentCode();
-	switch (data.vtype().type()) {
+	switch (data.vtype.type()) {
 	case mtpc_auth_sentCodeTypeApp:
 		LOG(("Error: should not be in-app code!"));
 		showError(Lang::Hard::ServerError());
 		return;
-	case mtpc_auth_sentCodeTypeSms: codeLength = data.vtype().c_auth_sentCodeTypeSms().vlength().v; break;
-	case mtpc_auth_sentCodeTypeCall: codeLength = data.vtype().c_auth_sentCodeTypeCall().vlength().v; break;
+	case mtpc_auth_sentCodeTypeSms: codeLength = data.vtype.c_auth_sentCodeTypeSms().vlength.v; break;
+	case mtpc_auth_sentCodeTypeCall: codeLength = data.vtype.c_auth_sentCodeTypeCall().vlength.v; break;
 	case mtpc_auth_sentCodeTypeFlashCall:
 		LOG(("Error: should not be flashcall!"));
 		showError(Lang::Hard::ServerError());
 		return;
 	}
-	auto phoneCodeHash = qs(data.vphone_code_hash());
+	auto phoneCodeHash = qs(data.vphone_code_hash);
 	auto callTimeout = 0;
-	if (const auto nextType = data.vnext_type()) {
-		if (nextType->type() == mtpc_auth_codeTypeCall) {
-			callTimeout = data.vtimeout().value_or(60);
-		}
+	if (data.has_next_type() && data.vnext_type.type() == mtpc_auth_codeTypeCall) {
+		callTimeout = data.has_timeout() ? data.vtimeout.v : 60;
 	}
 	Ui::show(
 		Box<EnterCode>(
-			_session,
 			phoneNumber,
 			phoneCodeHash,
 			codeLength,
 			callTimeout),
-		Ui::LayerOption::KeepOther);
+		LayerOption::KeepOther);
 }
 
-void ChangePhoneBox::EnterPhone::sendPhoneFail(const RPCError &error, const QString &phoneNumber) {
-	_requestId = 0;
+bool ChangePhoneBox::EnterPhone::sendPhoneFail(const QString &phoneNumber, const RPCError &error) {
+	auto errorText = Lang::Hard::ServerError();
 	if (MTP::isFloodError(error)) {
-		showError(tr::lng_flood_error(tr::now));
+		errorText = lang(lng_flood_error);
+	} else if (MTP::isDefaultHandledError(error)) {
+		return false;
 	} else if (error.type() == qstr("PHONE_NUMBER_INVALID")) {
-		showError(tr::lng_bad_phone(tr::now));
-	} else if (error.type() == qstr("PHONE_NUMBER_BANNED")) {
-		ShowPhoneBannedError(phoneNumber);
+		errorText = lang(lng_bad_phone);
 	} else if (error.type() == qstr("PHONE_NUMBER_OCCUPIED")) {
-		Ui::show(Box<InformBox>(
-			tr::lng_change_phone_occupied(
-				tr::now,
-				lt_phone,
-				App::formatPhone(phoneNumber)),
-			tr::lng_box_ok(tr::now)));
-	} else {
-		showError(Lang::Hard::ServerError());
+		Ui::show(Box<InformBox>(lng_change_phone_occupied(lt_phone, App::formatPhone(phoneNumber)), lang(lng_box_ok)));
+		_requestId = 0;
+		return true;
 	}
+	showError(errorText);
+	_requestId = 0;
+	return true;
 }
 
 void ChangePhoneBox::EnterPhone::showError(const QString &text) {
@@ -249,16 +208,8 @@ void ChangePhoneBox::EnterPhone::showError(const QString &text) {
 	}
 }
 
-ChangePhoneBox::EnterCode::EnterCode(
-	QWidget*,
-	not_null<Main::Session*> session,
-	const QString &phone,
-	const QString &hash,
-	int codeLength,
-	int callTimeout)
-: _session(session)
-, _api(&session->mtp())
-, _phone(phone)
+ChangePhoneBox::EnterCode::EnterCode(QWidget*, const QString &phone, const QString &hash, int codeLength, int callTimeout)
+: _phone(phone)
 , _hash(hash)
 , _codeLength(codeLength)
 , _callTimeout(callTimeout)
@@ -266,18 +217,14 @@ ChangePhoneBox::EnterCode::EnterCode(
 }
 
 void ChangePhoneBox::EnterCode::prepare() {
-	setTitle(tr::lng_change_phone_title());
+	setTitle(langFactory(lng_change_phone_title));
 
-	auto descriptionText = tr::lng_change_phone_code_description(
-		tr::now,
-		lt_phone,
-		Ui::Text::Bold(App::formatPhone(_phone)),
-		Ui::Text::WithEntities);
-	auto description = object_ptr<Ui::FlatLabel>(this, rpl::single(descriptionText), st::changePhoneLabel);
+	auto descriptionText = lng_change_phone_code_description(lt_phone, textcmdStartSemibold() + App::formatPhone(_phone) + textcmdStopSemibold());
+	auto description = object_ptr<Ui::FlatLabel>(this, descriptionText, Ui::FlatLabel::InitType::Rich, st::changePhoneLabel);
 	description->moveToLeft(st::boxPadding.left(), 0);
 
 	auto phoneValue = QString();
-	_code.create(this, st::defaultInputField, tr::lng_change_phone_code_title(), phoneValue);
+	_code.create(this, st::defaultInputField, langFactory(lng_change_phone_code_title), phoneValue);
 	_code->setAutoSubmit(_codeLength, [=] { submit(); });
 	_code->setChangedCallback([=] { hideError(); });
 
@@ -292,8 +239,8 @@ void ChangePhoneBox::EnterCode::prepare() {
 		updateCall();
 	}
 
-	addButton(tr::lng_change_phone_new_submit(), [=] { submit(); });
-	addButton(tr::lng_cancel(), [=] { closeBox(); });
+	addButton(langFactory(lng_change_phone_new_submit), [=] { submit(); });
+	addButton(langFactory(lng_cancel), [=] { closeBox(); });
 }
 
 int ChangePhoneBox::EnterCode::countHeight() {
@@ -307,31 +254,26 @@ void ChangePhoneBox::EnterCode::submit() {
 	}
 	hideError();
 
-	const auto session = _session;
-	const auto code = _code->getDigitsOnly();
-	const auto weak = Ui::MakeWeak(this);
-	_requestId = session->api().request(MTPaccount_ChangePhone(
+	auto code = _code->getLastText().trimmed();
+	_requestId = MTP::send(MTPaccount_ChangePhone(
 		MTP_string(_phone),
 		MTP_string(_hash),
 		MTP_string(code)
-	)).done([=](const MTPUser &result) {
-		session->data().processUser(result);
+	), rpcDone([weak = make_weak(this)](const MTPUser &result) {
+		App::feedUser(result);
 		if (weak) {
 			Ui::hideLayer();
 		}
-		Ui::Toast::Show(tr::lng_change_phone_success(tr::now));
-	}).fail(crl::guard(this, [=](const RPCError &error) {
-		sendCodeFail(error);
-	})).handleFloodErrors().send();
+		Ui::Toast::Show(lang(lng_change_phone_success));
+	}), rpcFail(crl::guard(this, [this](const RPCError &error) {
+		return sendCodeFail(error);
+	})));
 }
 
 void ChangePhoneBox::EnterCode::sendCall() {
-	_api.request(MTPauth_ResendCode(
-		MTP_string(_phone),
-		MTP_string(_hash)
-	)).done([=](const MTPauth_SentCode &result) {
+	MTP::send(MTPauth_ResendCode(MTP_string(_phone), MTP_string(_hash)), rpcDone(crl::guard(this, [this] {
 		_call.callDone();
-	}).send();
+	})));
 }
 
 void ChangePhoneBox::EnterCode::updateCall() {
@@ -339,7 +281,7 @@ void ChangePhoneBox::EnterCode::updateCall() {
 	if (text.isEmpty()) {
 		_callLabel.destroy();
 	} else if (!_callLabel) {
-		_callLabel.create(this, text, st::changePhoneLabel);
+		_callLabel.create(this, text, Ui::FlatLabel::InitType::Simple, st::changePhoneLabel);
 		_callLabel->moveToLeft(st::boxPadding.left(), countHeight() - _callLabel->height());
 		_callLabel->show();
 	} else {
@@ -354,43 +296,38 @@ void ChangePhoneBox::EnterCode::showError(const QString &text) {
 	}
 }
 
-void ChangePhoneBox::EnterCode::sendCodeFail(const RPCError &error) {
-	_requestId = 0;
+bool ChangePhoneBox::EnterCode::sendCodeFail(const RPCError &error) {
+	auto errorText = Lang::Hard::ServerError();
 	if (MTP::isFloodError(error)) {
-		showError(tr::lng_flood_error(tr::now));
+		errorText = lang(lng_flood_error);
+	} else if (MTP::isDefaultHandledError(error)) {
+		return false;
 	} else if (error.type() == qstr("PHONE_CODE_EMPTY") || error.type() == qstr("PHONE_CODE_INVALID")) {
-		showError(tr::lng_bad_code(tr::now));
-	} else if (error.type() == qstr("PHONE_CODE_EXPIRED")
-		|| error.type() == qstr("PHONE_NUMBER_BANNED")) {
+		errorText = lang(lng_bad_code);
+	} else if (error.type() == qstr("PHONE_CODE_EXPIRED")) {
 		closeBox(); // Go back to phone input.
+		_requestId = 0;
+		return true;
 	} else if (error.type() == qstr("PHONE_NUMBER_INVALID")) {
-		showError(tr::lng_bad_phone(tr::now));
-	} else {
-		showError(Lang::Hard::ServerError());
+		errorText = lang(lng_bad_phone);
 	}
-}
-
-ChangePhoneBox::ChangePhoneBox(QWidget*, not_null<Main::Session*> session)
-: _session(session) {
+	_requestId = 0;
+	showError(errorText);
+	return true;
 }
 
 void ChangePhoneBox::prepare() {
-	const auto session = _session;
-
-	setTitle(tr::lng_change_phone_title());
-	addButton(tr::lng_change_phone_button(), [=] {
-		Ui::show(Box<ConfirmBox>(tr::lng_change_phone_warning(tr::now), [=] {
-			Ui::show(Box<EnterPhone>(session));
+	setTitle(langFactory(lng_change_phone_title));
+	addButton(langFactory(lng_change_phone_button), [] {
+		Ui::show(Box<ConfirmBox>(lang(lng_change_phone_warning), [] {
+			Ui::show(Box<EnterPhone>());
 		}));
 	});
-	addButton(tr::lng_cancel(), [this] {
+	addButton(langFactory(lng_cancel), [this] {
 		closeBox();
 	});
 
-	const auto label = Ui::CreateChild<Ui::FlatLabel>(
-		this,
-		tr::lng_change_phone_about(Ui::Text::RichLangValue),
-		st::changePhoneDescription);
+	auto label = object_ptr<Ui::FlatLabel>(this, lang(lng_change_phone_description), Ui::FlatLabel::InitType::Rich, st::changePhoneDescription);
 	label->moveToLeft((st::boxWideWidth - label->width()) / 2, st::changePhoneDescriptionTop);
 
 	setDimensions(st::boxWideWidth, label->bottomNoMargins() + st::boxLittleSkip);

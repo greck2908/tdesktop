@@ -8,15 +8,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/facade.h"
 
 #include "storage/localstorage.h"
-#include "core/application.h"
-#include "main/main_account.h"
+#include "messenger.h"
 
 namespace MTP {
-namespace details {
+namespace internal {
 namespace {
 
 int PauseLevel = 0;
-rpl::event_stream<> Unpaused;
 
 } // namespace
 
@@ -31,13 +29,16 @@ void pause() {
 void unpause() {
 	--PauseLevel;
 	if (!PauseLevel) {
-		Unpaused.fire({});
+		if (auto instance = MainInstance()) {
+			instance->unpaused();
+		}
 	}
 }
 
-rpl::producer<> unpaused() {
-	return Unpaused.events();
+} // namespace internal
+
+Instance *MainInstance() {
+	return Messenger::Instance().mtp();
 }
 
-} // namespace details
 } // namespace MTP

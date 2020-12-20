@@ -16,7 +16,6 @@ public:
 	using RpWidget::RpWidget;
 
 	void setText(const QString &text, bool active);
-	int textBaseline() const;
 
 protected:
 	void paintEvent(QPaintEvent *e) override;
@@ -26,23 +25,5 @@ private:
 	bool _active = false;
 
 };
-
-struct PeerBadgeStyle {
-	const style::icon *verified = nullptr;
-	const style::color *scam = nullptr;
-};
-int DrawPeerBadgeGetWidth(
-	not_null<PeerData*> peer,
-	Painter &p,
-	QRect rectForName,
-	int nameWidth,
-	int outerWidth,
-	const PeerBadgeStyle &st);
-QSize ScamBadgeSize();
-void DrawScamBadge(
-	Painter &p,
-	QRect rect,
-	int outerWidth,
-	const style::color &color);
 
 } // namespace Ui

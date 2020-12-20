@@ -14,10 +14,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/value_ordering.h"
 #include "base/timer.h"
 
-namespace Main {
-class Session;
-} // namespace Main
-
 namespace Data {
 enum class LoadDirection : char;
 } // namespace Data
@@ -30,7 +26,7 @@ struct SearchResult {
 	int fullCount = 0;
 };
 
-std::optional<MTPmessages_Search> PrepareSearchRequest(
+MTPmessages_Search PrepareSearchRequest(
 	not_null<PeerData*> peer,
 	Storage::SharedMediaType type,
 	const QString &query,
@@ -44,7 +40,7 @@ SearchResult ParseSearchResult(
 	Data::LoadDirection direction,
 	const MTPmessages_Messages &data);
 
-class SearchController final {
+class SearchController : private MTP::Sender {
 public:
 	using IdsList = Storage::SparseIdsList;
 	struct Query {
@@ -68,10 +64,9 @@ public:
 	struct SavedState {
 		Query query;
 		IdsList peerList;
-		std::optional<IdsList> migratedList;
+		base::optional<IdsList> migratedList;
 	};
 
-	explicit SearchController(not_null<Main::Session*> session);
 	void setQuery(const Query &query);
 	bool hasInCache(const Query &query) const;
 
@@ -102,10 +97,10 @@ private:
 	using SliceUpdate = Storage::SparseIdsSliceUpdate;
 
 	struct CacheEntry {
-		CacheEntry(not_null<Main::Session*> session, const Query &query);
+		CacheEntry(const Query &query);
 
 		Data peerData;
-		std::optional<Data> migratedData;
+		base::optional<Data> migratedData;
 	};
 
 	struct CacheLess {
@@ -129,7 +124,6 @@ private:
 		const Query &query,
 		Data *listData);
 
-	const not_null<Main::Session*> _session;
 	Cache _cache;
 	Cache::iterator _current = _cache.end();
 
@@ -137,13 +131,13 @@ private:
 
 class DelayedSearchController {
 public:
-	explicit DelayedSearchController(not_null<Main::Session*> session);
+	DelayedSearchController();
 
 	using Query = SearchController::Query;
 	using SavedState = SearchController::SavedState;
 
 	void setQuery(const Query &query);
-	void setQuery(const Query &query, crl::time delay);
+	void setQuery(const Query &query, TimeMs delay);
 	void setQueryFast(const Query &query);
 
 	Query currentQuery() const {

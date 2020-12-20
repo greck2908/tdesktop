@@ -26,7 +26,6 @@ enum class SharedMediaType : signed char {
 	RoundVoiceFile,
 	GIF,
 	RoundFile,
-	Pinned,
 
 	kCount,
 };
@@ -74,7 +73,7 @@ struct SharedMediaAddSlice {
 		SharedMediaType type,
 		std::vector<MsgId> &&messageIds,
 		MsgRange noSkipRange,
-		std::optional<int> count = std::nullopt)
+		base::optional<int> count = base::none)
 		: peerId(peerId)
 		, messageIds(std::move(messageIds))
 		, noSkipRange(noSkipRange)
@@ -86,7 +85,7 @@ struct SharedMediaAddSlice {
 	std::vector<MsgId> messageIds;
 	MsgRange noSkipRange;
 	SharedMediaType type = SharedMediaType::kCount;
-	std::optional<int> count;
+	base::optional<int> count;
 
 };
 
@@ -107,15 +106,10 @@ struct SharedMediaRemoveOne {
 };
 
 struct SharedMediaRemoveAll {
-	SharedMediaRemoveAll(
-		PeerId peerId,
-		SharedMediaTypesMask types = SharedMediaTypesMask::All())
-	: peerId(peerId)
-	, types(types) {
+	SharedMediaRemoveAll(PeerId peerId) : peerId(peerId) {
 	}
 
 	PeerId peerId = 0;
-	SharedMediaTypesMask types;
 
 };
 
@@ -197,8 +191,6 @@ public:
 	void invalidate(SharedMediaInvalidateBottom &&query);
 
 	rpl::producer<SharedMediaResult> query(SharedMediaQuery &&query) const;
-	SharedMediaResult snapshot(const SharedMediaQuery &query) const;
-	bool empty(const SharedMediaKey &key) const;
 	rpl::producer<SharedMediaSliceUpdate> sliceUpdated() const;
 	rpl::producer<SharedMediaRemoveOne> oneRemoved() const;
 	rpl::producer<SharedMediaRemoveAll> allRemoved() const;

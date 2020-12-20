@@ -7,8 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include <QtCore/QTranslator>
-
 namespace Lang {
 
 class Translator : public QTranslator {

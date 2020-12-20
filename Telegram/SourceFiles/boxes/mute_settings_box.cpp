@@ -8,15 +8,12 @@ Copyright (C) 2017, Nicholas Guriev <guriev-ns@ya.ru>
 #include "boxes/mute_settings_box.h"
 
 #include "lang/lang_keys.h"
-#include "main/main_session.h"
+#include "auth_session.h"
 #include "data/data_session.h"
-#include "data/data_peer.h"
+#include "styles/style_boxes.h"
 #include "ui/special_buttons.h"
 #include "ui/widgets/checkbox.h"
 #include "ui/widgets/labels.h"
-#include "app.h"
-#include "styles/style_layers.h"
-#include "styles/style_boxes.h"
 
 namespace {
 
@@ -29,11 +26,11 @@ MuteSettingsBox::MuteSettingsBox(QWidget *parent, not_null<PeerData*> peer)
 }
 
 void MuteSettingsBox::prepare() {
-	setTitle(tr::lng_disable_notifications_from_tray());
+	setTitle(langFactory(lng_disable_notifications_from_tray));
 	auto y = 0;
 
 	object_ptr<Ui::FlatLabel> info(this, st::boxLabel);
-	info->setText(tr::lng_mute_box_tip(tr::now));
+	info->setText(lang(lng_mute_box_tip));
 	info->moveToLeft(st::boxPadding.left(), y);
 	y += info->height() + st::boxLittleSkip;
 
@@ -46,7 +43,7 @@ void MuteSettingsBox::prepare() {
 	icon->moveToLeft(st::boxPadding.left(), y);
 
 	object_ptr<Ui::FlatLabel> title(this, st::muteChatTitle);
-	title->setText(_peer->name);
+	title->setText(App::peerName(_peer, true));
 	title->moveToLeft(
 		st::boxPadding.left() + st::muteChatTitleLeft,
 		y + (icon->height() / 2) - (title->height() / 2));
@@ -59,11 +56,11 @@ void MuteSettingsBox::prepare() {
 	for (const auto hours : { 1, 4, 18, 72, kForeverHours }) {
 		const auto text = [&] {
 			if (hours < 24) {
-				return tr::lng_mute_duration_hours(tr::now, lt_count, hours);
+				return lng_mute_duration_hours(lt_count, hours);
 			} else if (hours < kForeverHours) {
-				return tr::lng_mute_duration_days(tr::now, lt_count, hours / 24);
+				return lng_rights_chat_banned_day(lt_count, hours / 24);
 			} else {
-				return tr::lng_mute_duration_forever(tr::now);
+				return lang(lng_rights_chat_banned_forever);
 			}
 		}();
 		object_ptr<Ui::Radiobutton> option(this, group, hours, text);
@@ -76,13 +73,13 @@ void MuteSettingsBox::prepare() {
 
 	_save = [=] {
 		const auto muteForSeconds = group->value() * 3600;
-		_peer->owner().updateNotifySettings(
+		Auth().data().updateNotifySettings(
 			_peer,
 			muteForSeconds);
 		closeBox();
 	};
-	addButton(tr::lng_box_ok(), _save);
-	addButton(tr::lng_cancel(), [this] { closeBox(); });
+	addButton(langFactory(lng_box_ok), _save);
+	addButton(langFactory(lng_cancel), [this] { closeBox(); });
 
 	setDimensions(st::boxWidth, y);
 }

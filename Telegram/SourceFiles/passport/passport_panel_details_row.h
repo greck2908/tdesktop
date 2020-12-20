@@ -8,7 +8,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "ui/rp_widget.h"
-#include "ui/effects/animations.h"
 #include "ui/wrap/padding_wrap.h"
 #include "ui/widgets/labels.h"
 #include "boxes/abstract_box.h"
@@ -55,7 +54,7 @@ public:
 	virtual bool setFocusFast();
 	virtual rpl::producer<QString> value() const = 0;
 	virtual QString valueCurrent() const = 0;
-	void showError(std::optional<QString> error = std::nullopt);
+	void showError(base::optional<QString> error = base::none);
 	bool errorShown() const;
 	void hideError();
 	void finishAnimating();
@@ -77,7 +76,7 @@ private:
 	object_ptr<Ui::SlideWrap<Ui::FlatLabel>> _error = { nullptr };
 	bool _errorShown = false;
 	bool _errorHideSubscription = false;
-	Ui::Animations::Simple _errorAnimation;
+	Animation _errorAnimation;
 
 };
 

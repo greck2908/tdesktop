@@ -7,326 +7,531 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/window_controller.h"
 
-#include "api/api_updates.h"
-#include "core/application.h"
-#include "core/click_handler_types.h"
-#include "platform/platform_window_title.h"
-#include "main/main_account.h"
-#include "main/main_domain.h"
-#include "main/main_session.h"
-#include "main/main_session_settings.h"
-#include "main/main_app_config.h"
-#include "intro/intro_widget.h"
-#include "mtproto/mtproto_config.h"
-#include "ui/layers/box_content.h"
-#include "ui/layers/layer_widget.h"
-#include "ui/toast/toast.h"
-#include "ui/emoji_config.h"
-#include "chat_helpers/emoji_sets_manager.h"
-#include "window/window_session_controller.h"
-#include "window/themes/window_theme.h"
-#include "window/themes/window_theme_editor.h"
-#include "boxes/confirm_box.h"
+#include "window/main_window.h"
+#include "info/info_memento.h"
+#include "history/history.h"
+#include "history/history_item.h"
+#include "history/view/history_view_element.h"
+#include "media/player/media_player_round_controller.h"
+#include "data/data_session.h"
+#include "data/data_feed.h"
+#include "passport/passport_form_controller.h"
+#include "boxes/calendar_box.h"
+#include "mainwidget.h"
 #include "mainwindow.h"
-#include "apiwrap.h" // ApiWrap::acceptTerms.
-#include "facades.h"
-#include "app.h"
-#include "styles/style_layers.h"
-
-#include <QtGui/QWindow>
-#include <QtGui/QScreen>
+#include "auth_session.h"
+#include "apiwrap.h"
+#include "styles/style_window.h"
+#include "styles/style_dialogs.h"
 
 namespace Window {
 
-Controller::Controller()
-: _widget(this)
-, _isActiveTimer([=] { updateIsActive(); }) {
-	_widget.init();
+DateClickHandler::DateClickHandler(Dialogs::Key chat, QDate date)
+: _chat(chat)
+, _date(date) {
 }
 
-Controller::~Controller() {
-	// We want to delete all widgets before the _sessionController.
-	_widget.ui_hideSettingsAndLayer(anim::type::instant);
-	_widget.clearWidgets();
+void DateClickHandler::setDate(QDate date) {
+	_date = date;
 }
 
-void Controller::showAccount(not_null<Main::Account*> account) {
-	const auto prevSessionUniqueId = (_account && _account->sessionExists())
-		? _account->session().uniqueId()
-		: 0;
-	_accountLifetime.destroy();
-	_account = account;
+void DateClickHandler::onClick(Qt::MouseButton) const {
+	App::wnd()->controller()->showJumpToDate(_chat, _date);
+}
 
-	const auto updateOnlineOfPrevSesssion = crl::guard(_account, [=] {
-		if (!prevSessionUniqueId) {
-			return;
-		}
-		for (auto &[index, account] : _account->domain().accounts()) {
-			if (const auto anotherSession = account->maybeSession()) {
-				if (anotherSession->uniqueId() == prevSessionUniqueId) {
-					anotherSession->updates().updateOnline();
-					return;
-				}
-			}
-		}
-	});
-
-	_account->sessionValue(
-	) | rpl::start_with_next([=](Main::Session *session) {
-		const auto was = base::take(_sessionController);
-		_sessionController = session
-			? std::make_unique<SessionController>(session, this)
-			: nullptr;
-		if (_sessionController) {
-			_sessionController->filtersMenuChanged(
-			) | rpl::start_with_next([=] {
-				sideBarChanged();
-			}, session->lifetime());
-		}
-		if (session && session->settings().dialogsFiltersEnabled()) {
-			_sessionController->toggleFiltersMenu(true);
+Controller::Controller(not_null<MainWindow*> window)
+: _window(window) {
+	Auth().data().animationPlayInlineRequest(
+	) | rpl::start_with_next([this](auto item) {
+		if (const auto video = roundVideo(item)) {
+			video->pauseResume();
 		} else {
-			sideBarChanged();
+			startRoundVideo(item);
 		}
-		_widget.updateWindowIcon();
-		if (session) {
-			setupMain();
-
-			session->termsLockValue(
-			) | rpl::start_with_next([=] {
-				checkLockByTerms();
-				_widget.updateGlobalMenu();
-			}, _lifetime);
-		} else {
-			setupIntro();
-			_widget.updateGlobalMenu();
-		}
-
-		crl::on_main(updateOnlineOfPrevSesssion);
-	}, _accountLifetime);
+	}, lifetime());
 }
 
-void Controller::checkLockByTerms() {
-	const auto data = account().sessionExists()
-		? account().session().termsLocked()
-		: std::nullopt;
-	if (!data) {
-		if (_termsBox) {
-			_termsBox->closeBox();
+void Controller::setActiveChatEntry(Dialogs::RowDescriptor row) {
+	_activeChatEntry = row;
+}
+
+void Controller::setActiveChatEntry(Dialogs::Key key) {
+	setActiveChatEntry({ key, FullMsgId() });
+}
+
+Dialogs::RowDescriptor Controller::activeChatEntryCurrent() const {
+	return _activeChatEntry.current();
+}
+
+Dialogs::Key Controller::activeChatCurrent() const {
+	return activeChatEntryCurrent().key;
+}
+
+auto Controller::activeChatEntryChanges() const
+-> rpl::producer<Dialogs::RowDescriptor> {
+	return _activeChatEntry.changes();
+}
+
+rpl::producer<Dialogs::Key> Controller::activeChatChanges() const {
+	return activeChatEntryChanges(
+	) | rpl::map([](const Dialogs::RowDescriptor &value) {
+		return value.key;
+	}) | rpl::distinct_until_changed();
+}
+
+auto Controller::activeChatEntryValue() const
+-> rpl::producer<Dialogs::RowDescriptor> {
+	return _activeChatEntry.value();
+}
+
+rpl::producer<Dialogs::Key> Controller::activeChatValue() const {
+	return activeChatEntryValue(
+	) | rpl::map([](const Dialogs::RowDescriptor &value) {
+		return value.key;
+	}) | rpl::distinct_until_changed();
+}
+
+void Controller::enableGifPauseReason(GifPauseReason reason) {
+	if (!(_gifPauseReasons & reason)) {
+		auto notify = (static_cast<int>(_gifPauseReasons) < static_cast<int>(reason));
+		_gifPauseReasons |= reason;
+		if (notify) {
+			_gifPauseLevelChanged.notify();
 		}
+	}
+}
+
+void Controller::disableGifPauseReason(GifPauseReason reason) {
+	if (_gifPauseReasons & reason) {
+		_gifPauseReasons &= ~reason;
+		if (_gifPauseReasons < reason) {
+			_gifPauseLevelChanged.notify();
+		}
+	}
+}
+
+bool Controller::isGifPausedAtLeastFor(GifPauseReason reason) const {
+	if (reason == GifPauseReason::Any) {
+		return (_gifPauseReasons != 0) || !window()->isActive();
+	}
+	return (static_cast<int>(_gifPauseReasons) >= 2 * static_cast<int>(reason)) || !window()->isActive();
+}
+
+int Controller::dialogsSmallColumnWidth() const {
+	return st::dialogsPadding.x() + st::dialogsPhotoSize + st::dialogsPadding.x();
+}
+
+int Controller::minimalThreeColumnWidth() const {
+	return st::columnMinimalWidthLeft
+		+ st::columnMinimalWidthMain
+		+ st::columnMinimalWidthThird;
+}
+
+bool Controller::forceWideDialogs() const {
+	if (dialogsListDisplayForced().value()) {
+		return true;
+	} else if (dialogsListFocused().value()) {
+		return true;
+	}
+	return !App::main()->isMainSectionShown();
+}
+
+Controller::ColumnLayout Controller::computeColumnLayout() const {
+	auto layout = Adaptive::WindowLayout::OneColumn;
+
+	auto bodyWidth = window()->bodyWidget()->width();
+	auto dialogsWidth = 0, chatWidth = 0, thirdWidth = 0;
+
+	auto useOneColumnLayout = [&] {
+		auto minimalNormal = st::columnMinimalWidthLeft
+			+ st::columnMinimalWidthMain;
+		if (bodyWidth < minimalNormal) {
+			return true;
+		}
+		return false;
+	};
+
+	auto useNormalLayout = [&] {
+		// Used if useSmallColumnLayout() == false.
+		if (bodyWidth < minimalThreeColumnWidth()) {
+			return true;
+		}
+		if (!Auth().settings().tabbedSelectorSectionEnabled()
+			&& !Auth().settings().thirdSectionInfoEnabled()) {
+			return true;
+		}
+		return false;
+	};
+
+	if (useOneColumnLayout()) {
+		dialogsWidth = chatWidth = bodyWidth;
+	} else if (useNormalLayout()) {
+		layout = Adaptive::WindowLayout::Normal;
+		dialogsWidth = countDialogsWidthFromRatio(bodyWidth);
+		accumulate_min(dialogsWidth, bodyWidth - st::columnMinimalWidthMain);
+		chatWidth = bodyWidth - dialogsWidth;
+	} else {
+		layout = Adaptive::WindowLayout::ThreeColumn;
+		dialogsWidth = countDialogsWidthFromRatio(bodyWidth);
+		thirdWidth = countThirdColumnWidthFromRatio(bodyWidth);
+		auto shrink = shrinkDialogsAndThirdColumns(
+			dialogsWidth,
+			thirdWidth,
+			bodyWidth);
+		dialogsWidth = shrink.dialogsWidth;
+		thirdWidth = shrink.thirdWidth;
+
+		chatWidth = bodyWidth - dialogsWidth - thirdWidth;
+	}
+	return { bodyWidth, dialogsWidth, chatWidth, thirdWidth, layout };
+}
+
+int Controller::countDialogsWidthFromRatio(int bodyWidth) const {
+	auto result = qRound(bodyWidth * Auth().settings().dialogsWidthRatio());
+	accumulate_max(result, st::columnMinimalWidthLeft);
+//	accumulate_min(result, st::columnMaximalWidthLeft);
+	return result;
+}
+
+int Controller::countThirdColumnWidthFromRatio(int bodyWidth) const {
+	auto result = Auth().settings().thirdColumnWidth();
+	accumulate_max(result, st::columnMinimalWidthThird);
+	accumulate_min(result, st::columnMaximalWidthThird);
+	return result;
+}
+
+Controller::ShrinkResult Controller::shrinkDialogsAndThirdColumns(
+		int dialogsWidth,
+		int thirdWidth,
+		int bodyWidth) const {
+	auto chatWidth = st::columnMinimalWidthMain;
+	if (dialogsWidth + thirdWidth + chatWidth <= bodyWidth) {
+		return { dialogsWidth, thirdWidth };
+	}
+	auto thirdWidthNew = ((bodyWidth - chatWidth) * thirdWidth)
+		/ (dialogsWidth + thirdWidth);
+	auto dialogsWidthNew = ((bodyWidth - chatWidth) * dialogsWidth)
+		/ (dialogsWidth + thirdWidth);
+	if (thirdWidthNew < st::columnMinimalWidthThird) {
+		thirdWidthNew = st::columnMinimalWidthThird;
+		dialogsWidthNew = bodyWidth - thirdWidthNew - chatWidth;
+		Assert(dialogsWidthNew >= st::columnMinimalWidthLeft);
+	} else if (dialogsWidthNew < st::columnMinimalWidthLeft) {
+		dialogsWidthNew = st::columnMinimalWidthLeft;
+		thirdWidthNew = bodyWidth - dialogsWidthNew - chatWidth;
+		Assert(thirdWidthNew >= st::columnMinimalWidthThird);
+	}
+	return { dialogsWidthNew, thirdWidthNew };
+}
+
+bool Controller::canShowThirdSection() const {
+	auto currentLayout = computeColumnLayout();
+	auto minimalExtendBy = minimalThreeColumnWidth()
+		- currentLayout.bodyWidth;
+	return (minimalExtendBy <= window()->maximalExtendBy());
+}
+
+bool Controller::canShowThirdSectionWithoutResize() const {
+	auto currentWidth = computeColumnLayout().bodyWidth;
+	return currentWidth >= minimalThreeColumnWidth();
+}
+
+bool Controller::takeThirdSectionFromLayer() {
+	return App::wnd()->takeThirdSectionFromLayer();
+}
+
+void Controller::resizeForThirdSection() {
+	if (Adaptive::ThreeColumn()) {
 		return;
 	}
-	Ui::hideSettingsAndLayer(anim::type::instant);
-	const auto box = Ui::show(Box<TermsBox>(
-		*data,
-		tr::lng_terms_agree(),
-		tr::lng_terms_decline()));
 
-	box->setCloseByEscape(false);
-	box->setCloseByOutsideClick(false);
+	auto layout = computeColumnLayout();
+	auto tabbedSelectorSectionEnabled =
+		Auth().settings().tabbedSelectorSectionEnabled();
+	auto thirdSectionInfoEnabled =
+		Auth().settings().thirdSectionInfoEnabled();
+	Auth().settings().setTabbedSelectorSectionEnabled(false);
+	Auth().settings().setThirdSectionInfoEnabled(false);
 
-	const auto id = data->id;
-	box->agreeClicks(
-	) | rpl::start_with_next([=] {
-		const auto mention = box ? box->lastClickedMention() : QString();
-		box->closeBox();
-		if (const auto session = account().maybeSession()) {
-			session->api().acceptTerms(id);
-			session->unlockTerms();
-			if (!mention.isEmpty()) {
-				MentionClickHandler(mention).onClick({});
+	auto wanted = countThirdColumnWidthFromRatio(layout.bodyWidth);
+	auto minimal = st::columnMinimalWidthThird;
+	auto extendBy = wanted;
+	auto extendedBy = [&] {
+		// Best - extend by third column without moving the window.
+		// Next - extend by minimal third column without moving.
+		// Next - show third column inside the window without moving.
+		// Last - extend with moving.
+		if (window()->canExtendNoMove(wanted)) {
+			return window()->tryToExtendWidthBy(wanted);
+		} else if (window()->canExtendNoMove(minimal)) {
+			extendBy = minimal;
+			return window()->tryToExtendWidthBy(minimal);
+		} else if (layout.bodyWidth >= minimalThreeColumnWidth()) {
+			return 0;
+		}
+		return window()->tryToExtendWidthBy(minimal);
+	}();
+	if (extendedBy) {
+		if (extendBy != Auth().settings().thirdColumnWidth()) {
+			Auth().settings().setThirdColumnWidth(extendBy);
+		}
+		auto newBodyWidth = layout.bodyWidth + extendedBy;
+		auto currentRatio = Auth().settings().dialogsWidthRatio();
+		Auth().settings().setDialogsWidthRatio(
+			(currentRatio * layout.bodyWidth) / newBodyWidth);
+	}
+	auto savedValue = (extendedBy == extendBy) ? -1 : extendedBy;
+	Auth().settings().setThirdSectionExtendedBy(savedValue);
+
+	Auth().settings().setTabbedSelectorSectionEnabled(
+		tabbedSelectorSectionEnabled);
+	Auth().settings().setThirdSectionInfoEnabled(
+		thirdSectionInfoEnabled);
+}
+
+void Controller::closeThirdSection() {
+	auto newWindowSize = window()->size();
+	auto layout = computeColumnLayout();
+	if (layout.windowLayout == Adaptive::WindowLayout::ThreeColumn) {
+		auto noResize = window()->isFullScreen()
+			|| window()->isMaximized();
+		auto savedValue = Auth().settings().thirdSectionExtendedBy();
+		auto extendedBy = (savedValue == -1)
+			? layout.thirdWidth
+			: savedValue;
+		auto newBodyWidth = noResize
+			? layout.bodyWidth
+			: (layout.bodyWidth - extendedBy);
+		auto currentRatio = Auth().settings().dialogsWidthRatio();
+		Auth().settings().setDialogsWidthRatio(
+			(currentRatio * layout.bodyWidth) / newBodyWidth);
+		newWindowSize = QSize(
+			window()->width() + (newBodyWidth - layout.bodyWidth),
+			window()->height());
+	}
+	Auth().settings().setTabbedSelectorSectionEnabled(false);
+	Auth().settings().setThirdSectionInfoEnabled(false);
+	Auth().saveSettingsDelayed();
+	if (window()->size() != newWindowSize) {
+		window()->resize(newWindowSize);
+	} else {
+		updateColumnLayout();
+	}
+}
+
+void Controller::showJumpToDate(Dialogs::Key chat, QDate requestedDate) {
+	const auto currentPeerDate = [&] {
+		if (const auto history = chat.history()) {
+			if (history->scrollTopItem) {
+				return history->scrollTopItem->dateTime().date();
+			} else if (history->loadedAtTop()
+				&& !history->isEmpty()
+				&& history->peer->migrateFrom()) {
+				if (const auto migrated = App::historyLoaded(history->peer->migrateFrom())) {
+					if (migrated->scrollTopItem) {
+						// We're up in the migrated history.
+						// So current date is the date of first message here.
+						return history->blocks.front()->messages.front()->dateTime().date();
+					}
+				}
+			} else if (!history->chatsListDate().isNull()) {
+				return history->chatsListDate().date();
+			}
+		} else if (const auto feed = chat.feed()) {
+			/*if (chatScrollPosition(feed)) { // #TODO feeds save position
+
+			} else */if (!feed->chatsListDate().isNull()) {
+				return feed->chatsListDate().date();
 			}
 		}
-	}, box->lifetime());
-
-	box->cancelClicks(
-	) | rpl::start_with_next([=] {
-		showTermsDecline();
-	}, box->lifetime());
-
-	QObject::connect(box, &QObject::destroyed, [=] {
-		crl::on_main(widget(), [=] { checkLockByTerms(); });
-	});
-
-	_termsBox = box;
-}
-
-void Controller::showTermsDecline() {
-	const auto box = Ui::show(
-		Box<Window::TermsBox>(
-			TextWithEntities{ tr::lng_terms_update_sorry(tr::now) },
-			tr::lng_terms_decline_and_delete(),
-			tr::lng_terms_back(),
-			true),
-		Ui::LayerOption::KeepOther);
-
-	box->agreeClicks(
-	) | rpl::start_with_next([=] {
-		if (box) {
-			box->closeBox();
-		}
-		showTermsDelete();
-	}, box->lifetime());
-
-	box->cancelClicks(
-	) | rpl::start_with_next([=] {
-		if (box) {
-			box->closeBox();
-		}
-	}, box->lifetime());
-}
-
-void Controller::showTermsDelete() {
-	const auto deleteByTerms = [=] {
-		if (const auto session = account().maybeSession()) {
-			session->termsDeleteNow();
-		} else {
-			Ui::hideLayer();
-		}
+		return QDate::currentDate();
 	};
-	Ui::show(
-		Box<ConfirmBox>(
-			tr::lng_terms_delete_warning(tr::now),
-			tr::lng_terms_delete_now(tr::now),
-			st::attentionBoxButton,
-			deleteByTerms),
-		Ui::LayerOption::KeepOther);
+	const auto maxPeerDate = [](Dialogs::Key chat) {
+		if (auto history = chat.history()) {
+			if (const auto channel = history->peer->migrateTo()) {
+				history = App::historyLoaded(channel);
+			}
+			if (history && !history->chatsListDate().isNull()) {
+				return history->chatsListDate().date();
+			}
+		} else if (const auto feed = chat.feed()) {
+			if (!feed->chatsListDate().isNull()) {
+				return feed->chatsListDate().date();
+			}
+		}
+		return QDate::currentDate();
+	};
+	const auto minPeerDate = [](Dialogs::Key chat) {
+		const auto startDate = [] {
+			// Telegram was launched in August 2013 :)
+			return QDate(2013, 8, 1);
+		};
+		if (const auto history = chat.history()) {
+			if (const auto chat = history->peer->migrateFrom()) {
+				if (const auto history = App::historyLoaded(chat)) {
+					if (history->loadedAtTop()) {
+						if (!history->isEmpty()) {
+							return history->blocks.front()->messages.front()->dateTime().date();
+						}
+					} else {
+						return startDate();
+					}
+				}
+			}
+			if (history->loadedAtTop()) {
+				if (!history->isEmpty()) {
+					return history->blocks.front()->messages.front()->dateTime().date();
+				}
+				return QDate::currentDate();
+			}
+		} else if (const auto feed = chat.feed()) {
+			return startDate();
+		}
+		return startDate();
+	};
+	const auto highlighted = requestedDate.isNull()
+		? currentPeerDate()
+		: requestedDate;
+	const auto month = highlighted;
+	auto callback = [=](const QDate &date) {
+		Auth().api().jumpToDate(chat, date);
+	};
+	auto box = Box<CalendarBox>(
+		month,
+		highlighted,
+		std::move(callback));
+	box->setMinDate(minPeerDate(chat));
+	box->setMaxDate(maxPeerDate(chat));
+	Ui::show(std::move(box));
 }
 
-void Controller::finishFirstShow() {
-	_widget.finishFirstShow();
-	checkThemeEditor();
+void Controller::showPassportForm(const Passport::FormRequest &request) {
+	_passportForm = std::make_unique<Passport::FormController>(
+		this,
+		request);
+	_passportForm->show();
 }
 
-bool Controller::locked() const {
-	if (Core::App().passcodeLocked()) {
+void Controller::clearPassportForm() {
+	_passportForm = nullptr;
+}
+
+void Controller::updateColumnLayout() {
+	App::main()->updateColumnLayout();
+}
+
+void Controller::showPeerHistory(
+		PeerId peerId,
+		const SectionShow &params,
+		MsgId msgId) {
+	App::main()->ui_showPeerHistory(
+		peerId,
+		params,
+		msgId);
+}
+
+void Controller::showPeerHistory(
+		not_null<PeerData*> peer,
+		const SectionShow &params,
+		MsgId msgId) {
+	showPeerHistory(
+		peer->id,
+		params,
+		msgId);
+}
+
+void Controller::showPeerHistory(
+		not_null<History*> history,
+		const SectionShow &params,
+		MsgId msgId) {
+	showPeerHistory(
+		history->peer->id,
+		params,
+		msgId);
+}
+
+void Navigation::showPeerInfo(
+		PeerId peerId,
+		const SectionShow &params) {
+	//if (Adaptive::ThreeColumn()
+	//	&& !Auth().settings().thirdSectionInfoEnabled()) {
+	//	Auth().settings().setThirdSectionInfoEnabled(true);
+	//	Auth().saveSettingsDelayed();
+	//}
+	showSection(Info::Memento(peerId), params);
+}
+
+void Navigation::showPeerInfo(
+		not_null<PeerData*> peer,
+		const SectionShow &params) {
+	showPeerInfo(peer->id, params);
+}
+
+void Navigation::showPeerInfo(
+		not_null<History*> history,
+		const SectionShow &params) {
+	showPeerInfo(history->peer->id, params);
+}
+
+void Controller::showSection(
+		SectionMemento &&memento,
+		const SectionShow &params) {
+	if (!params.thirdColumn && App::wnd()->showSectionInExistingLayer(
+			&memento,
+			params)) {
+		return;
+	}
+	App::main()->showSection(std::move(memento), params);
+}
+
+void Controller::showBackFromStack(const SectionShow &params) {
+	chats()->showBackFromStack(params);
+}
+
+void Controller::showSpecialLayer(
+		object_ptr<LayerWidget> &&layer,
+		anim::type animated) {
+	App::wnd()->showSpecialLayer(std::move(layer), animated);
+}
+
+not_null<MainWidget*> Controller::chats() const {
+	return App::wnd()->chatsWidget();
+}
+
+bool Controller::startRoundVideo(not_null<HistoryItem*> context) {
+	if (auto video = RoundController::TryStart(this, context)) {
+		enableGifPauseReason(Window::GifPauseReason::RoundPlaying);
+		_roundVideo = std::move(video);
 		return true;
-	} else if (const auto controller = sessionController()) {
-		return controller->session().termsLocked().has_value();
 	}
 	return false;
 }
 
-void Controller::checkThemeEditor() {
-	using namespace Window::Theme;
+auto Controller::currentRoundVideo() const -> RoundController* {
+	return _roundVideo.get();
+}
 
-	if (const auto editing = Background()->editingTheme()) {
-		showRightColumn(Box<Editor>(this, *editing));
+auto Controller::roundVideo(not_null<const HistoryItem*> context) const
+-> RoundController* {
+	return roundVideo(context->fullId());
+}
+
+auto Controller::roundVideo(FullMsgId contextId) const -> RoundController* {
+	if (const auto result = currentRoundVideo()) {
+		if (result->contextId() == contextId) {
+			return result;
+		}
+	}
+	return nullptr;
+}
+
+void Controller::roundVideoFinished(not_null<RoundController*> video) {
+	if (video == _roundVideo.get()) {
+		_roundVideo = nullptr;
+		disableGifPauseReason(Window::GifPauseReason::RoundPlaying);
 	}
 }
 
-void Controller::setupPasscodeLock() {
-	_widget.setupPasscodeLock();
-}
-
-void Controller::clearPasscodeLock() {
-	if (!_account) {
-		showAccount(&Core::App().activeAccount());
-	} else {
-		_widget.clearPasscodeLock();
-	}
-}
-
-void Controller::setupIntro() {
-	const auto parent = Core::App().domain().maybeLastOrSomeAuthedAccount();
-	if (!parent) {
-		_widget.setupIntro(Intro::EnterPoint::Start);
-		return;
-	}
-	const auto qrLogin = parent->appConfig().get<QString>(
-		"qr_login_code",
-		"[not-set]");
-	DEBUG_LOG(("qr_login_code in setup: %1").arg(qrLogin));
-	const auto qr = (qrLogin == "primary");
-	_widget.setupIntro(qr ? Intro::EnterPoint::Qr : Intro::EnterPoint::Phone);
-}
-
-void Controller::setupMain() {
-	Expects(_sessionController != nullptr);
-
-	_widget.setupMain();
-
-	if (const auto id = Ui::Emoji::NeedToSwitchBackToId()) {
-		Ui::Emoji::LoadAndSwitchTo(&_sessionController->session(), id);
-	}
-}
-
-void Controller::showSettings() {
-	_widget.showSettings();
-}
-
-int Controller::verticalShadowTop() const {
-	return (Platform::NativeTitleRequiresShadow()
-		&& Core::App().settings().nativeWindowFrame())
-		? st::lineWidth
-		: 0;
-}
-
-void Controller::showToast(const QString &text) {
-	Ui::Toast::Show(_widget.bodyWidget(), text);
-}
-
-void Controller::showBox(
-		object_ptr<Ui::BoxContent> content,
-		Ui::LayerOptions options,
-		anim::type animated) {
-	_widget.ui_showBox(std::move(content), options, animated);
-}
-
-void Controller::showRightColumn(object_ptr<TWidget> widget) {
-	_widget.showRightColumn(std::move(widget));
-}
-
-void Controller::sideBarChanged() {
-	_widget.recountGeometryConstraints();
-}
-
-void Controller::activate() {
-	_widget.activate();
-}
-
-void Controller::reActivate() {
-	_widget.reActivateWindow();
-}
-
-void Controller::updateIsActiveFocus() {
-	_isActiveTimer.callOnce(sessionController()
-		? sessionController()->session().serverConfig().onlineFocusTimeout
-		: crl::time(1000));
-}
-
-void Controller::updateIsActiveBlur() {
-	_isActiveTimer.callOnce(sessionController()
-		? sessionController()->session().serverConfig().offlineBlurTimeout
-		: crl::time(1000));
-}
-
-void Controller::updateIsActive() {
-	_widget.updateIsActive();
-}
-
-void Controller::minimize() {
-	if (Global::WorkMode().value() == dbiwmTrayOnly) {
-		_widget.minimizeToTray();
-	} else {
-		_widget.setWindowState(_widget.windowState() | Qt::WindowMinimized);
-	}
-}
-
-void Controller::close() {
-	_widget.close();
-}
-
-void Controller::preventOrInvoke(Fn<void()> &&callback) {
-	_widget.preventOrInvoke(std::move(callback));
-}
-
-QPoint Controller::getPointForCallPanelCenter() const {
-	Expects(_widget.windowHandle() != nullptr);
-
-	return _widget.isActive()
-		? _widget.geometry().center()
-		: _widget.windowHandle()->screen()->geometry().center();
-}
+Controller::~Controller() = default;
 
 } // namespace Window

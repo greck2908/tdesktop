@@ -10,23 +10,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "layout.h"
 #include "ui/text/text.h"
 
-class Image;
-
-namespace Data {
-class CloudImageView;
-} // namespace Data
-
 namespace InlineBots {
-
 class Result;
 
 namespace Layout {
 
-class ItemBase;
-
 class PaintContext : public PaintContextBase {
 public:
-	PaintContext(crl::time ms, bool selecting, bool paused, bool lastRow)
+	PaintContext(TimeMs ms, bool selecting, bool paused, bool lastRow)
 		: PaintContextBase(ms, selecting)
 		, paused(paused)
 		, lastRow(lastRow) {
@@ -38,7 +29,7 @@ public:
 // this type used as a flag, we dynamic_cast<> to it
 class SendClickHandler : public ClickHandler {
 public:
-	void onClick(ClickContext context) const override {
+	void onClick(Qt::MouseButton) const override {
 	}
 };
 
@@ -47,18 +38,13 @@ public:
 	virtual void inlineItemLayoutChanged(const ItemBase *layout) = 0;
 	virtual bool inlineItemVisible(const ItemBase *item) = 0;
 	virtual void inlineItemRepaint(const ItemBase *item) = 0;
-	virtual Data::FileOrigin inlineItemFileOrigin() = 0;
 };
 
 class ItemBase : public LayoutItemBase {
 public:
-	ItemBase(not_null<Context*> context, not_null<Result*> result)
-	: _result(result)
-	, _context(context) {
+	ItemBase(not_null<Context*> context, Result *result) : _result(result), _context(context) {
 	}
-	ItemBase(not_null<Context*> context, not_null<DocumentData*> document)
-	: _document(document)
-	, _context(context) {
+	ItemBase(not_null<Context*> context, DocumentData *doc) : _doc(doc), _context(context) {
 	}
 	// Not used anywhere currently.
 	//ItemBase(not_null<Context*> context, PhotoData *photo) : _photo(photo), _context(context) {
@@ -86,11 +72,8 @@ public:
 	PhotoData *getPreviewPhoto() const;
 
 	virtual void preload() const;
-	virtual void unloadHeavyPart() {
-		_thumbnail = nullptr;
-	}
 
-	void update() const;
+	void update();
 	void layoutChanged();
 
 	// ClickHandlerHost interface
@@ -101,33 +84,26 @@ public:
 		update();
 	}
 
-	static std::unique_ptr<ItemBase> createLayout(
-		not_null<Context*> context,
-		not_null<Result*> result,
-		bool forceThumb);
-	static std::unique_ptr<ItemBase> createLayoutGif(
-		not_null<Context*> context,
-		not_null<DocumentData*> document);
+	static std::unique_ptr<ItemBase> createLayout(not_null<Context*> context, Result *result, bool forceThumb);
+	static std::unique_ptr<ItemBase> createLayoutGif(not_null<Context*> context, DocumentData *document);
 
 protected:
 	DocumentData *getResultDocument() const;
 	PhotoData *getResultPhoto() const;
-	bool hasResultThumb() const;
-	Image *getResultThumb(Data::FileOrigin origin) const;
+	ImagePtr getResultThumb() const;
 	QPixmap getResultContactAvatar(int width, int height) const;
 	int getResultDuration() const;
 	QString getResultUrl() const;
 	ClickHandlerPtr getResultUrlHandler() const;
-	ClickHandlerPtr getResultPreviewHandler() const;
+	ClickHandlerPtr getResultContentUrlHandler() const;
 	QString getResultThumbLetter() const;
 
 	not_null<Context*> context() const {
 		return _context;
 	}
-	Data::FileOrigin fileOrigin() const;
 
 	Result *_result = nullptr;
-	DocumentData *_document = nullptr;
+	DocumentData *_doc = nullptr;
 	PhotoData *_photo = nullptr;
 
 	ClickHandlerPtr _send = ClickHandlerPtr{ new SendClickHandler() };
@@ -136,7 +112,6 @@ protected:
 
 private:
 	not_null<Context*> _context;
-	mutable std::shared_ptr<Data::CloudImageView> _thumbnail;
 
 };
 

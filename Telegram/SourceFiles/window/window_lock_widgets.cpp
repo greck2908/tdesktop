@@ -8,10 +8,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_lock_widgets.h"
 
 #include "lang/lang_keys.h"
-#include "storage/storage_domain.h"
+#include "storage/localstorage.h"
 #include "mainwindow.h"
-#include "core/application.h"
-#include "api/api_text_entities.h"
+#include "messenger.h"
 #include "ui/text/text.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/checkbox.h"
@@ -19,28 +18,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/toast/toast.h"
-#include "window/window_controller.h"
-#include "window/window_slide_animation.h"
-#include "window/window_session_controller.h"
-#include "main/main_domain.h"
-#include "facades.h"
-#include "styles/style_layers.h"
 #include "styles/style_boxes.h"
+#include "window/window_slide_animation.h"
+#include "window/window_controller.h"
+#include "auth_session.h"
 
 namespace Window {
 
-LockWidget::LockWidget(QWidget *parent, not_null<Controller*> window)
-: RpWidget(parent)
-, _window(window) {
+LockWidget::LockWidget(QWidget *parent) : RpWidget(parent) {
 	show();
 }
 
-not_null<Controller*> LockWidget::window() const {
-	return _window;
-}
-
 void LockWidget::setInnerFocus() {
-	if (const auto controller = _window->sessionController()) {
+	if (const auto controller = App::wnd()->controller()) {
 		controller->dialogsListFocused().set(false, true);
 	}
 	setFocus();
@@ -50,7 +40,7 @@ void LockWidget::showAnimated(const QPixmap &bgAnimCache, bool back) {
 	_showBack = back;
 	(_showBack ? _cacheOver : _cacheUnder) = bgAnimCache;
 
-	_a_show.stop();
+	_a_show.finish();
 
 	showChildren();
 	setInnerFocus();
@@ -69,23 +59,19 @@ void LockWidget::showAnimated(const QPixmap &bgAnimCache, bool back) {
 void LockWidget::animationCallback() {
 	update();
 	if (!_a_show.animating()) {
-		showFinished();
-	}
-}
+		showChildren();
+		if (App::wnd()) App::wnd()->setInnerFocus();
 
-void LockWidget::showFinished() {
-	showChildren();
-	_window->widget()->setInnerFocus();
-	if (const auto controller = _window->sessionController()) {
-		Ui::showChatsList(&controller->session());
+		Ui::showChatsList();
+
+		_cacheUnder = _cacheOver = QPixmap();
 	}
-	_cacheUnder = _cacheOver = QPixmap();
 }
 
 void LockWidget::paintEvent(QPaintEvent *e) {
 	Painter p(this);
 
-	auto progress = _a_show.value(1.);
+	auto progress = _a_show.current(getms(), 1.);
 	if (_a_show.animating()) {
 		auto coordUnder = _showBack ? anim::interpolate(-st::slideShift, 0, progress) : anim::interpolate(0, -st::slideShift, progress);
 		auto coordOver = _showBack ? anim::interpolate(0, width(), progress) : anim::interpolate(width(), 0, progress);
@@ -108,20 +94,16 @@ void LockWidget::paintContent(Painter &p) {
 	p.fillRect(rect(), st::windowBg);
 }
 
-PasscodeLockWidget::PasscodeLockWidget(
-	QWidget *parent,
-	not_null<Controller*> window)
-: LockWidget(parent, window)
-, _passcode(this, st::passcodeInput, tr::lng_passcode_ph())
-, _submit(this, tr::lng_passcode_submit(), st::passcodeSubmit)
-, _logout(this, tr::lng_passcode_logout(tr::now)) {
+PasscodeLockWidget::PasscodeLockWidget(QWidget *parent)
+: LockWidget(parent)
+, _passcode(this, st::passcodeInput, langFactory(lng_passcode_ph))
+, _submit(this, langFactory(lng_passcode_submit), st::passcodeSubmit)
+, _logout(this, lang(lng_passcode_logout)) {
 	connect(_passcode, &Ui::MaskedInputField::changed, [=] { changed(); });
 	connect(_passcode, &Ui::MaskedInputField::submitted, [=] { submit(); });
 
 	_submit->setClickedCallback([=] { submit(); });
-	_logout->setClickedCallback([=] {
-		window->widget()->showLogoutConfirmation();
-	});
+	_logout->setClickedCallback([] { App::wnd()->onLogout(); });
 }
 
 void PasscodeLockWidget::paintContent(Painter &p) {
@@ -129,7 +111,7 @@ void PasscodeLockWidget::paintContent(Painter &p) {
 
 	p.setFont(st::passcodeHeaderFont);
 	p.setPen(st::windowFg);
-	p.drawText(QRect(0, _passcode->y() - st::passcodeHeaderHeight, width(), st::passcodeHeaderHeight), tr::lng_passcode_enter(tr::now), style::al_center);
+	p.drawText(QRect(0, _passcode->y() - st::passcodeHeaderHeight, width(), st::passcodeHeaderHeight), lang(lng_passcode_enter), style::al_center);
 
 	if (!_error.isEmpty()) {
 		p.setFont(st::boxTextFont);
@@ -144,29 +126,28 @@ void PasscodeLockWidget::submit() {
 		return;
 	}
 	if (!passcodeCanTry()) {
-		_error = tr::lng_flood_error(tr::now);
+		_error = lang(lng_flood_error);
 		_passcode->showError();
 		update();
 		return;
 	}
 
 	const auto passcode = _passcode->text().toUtf8();
-	auto &domain = Core::App().domain();
-	const auto correct = domain.started()
-		? domain.local().checkPasscode(passcode)
-		: (domain.start(passcode) == Storage::StartResult::Success);
+	const auto correct = App::main()
+		? Local::checkPasscode(passcode)
+		: (Local::readMap(passcode) != Local::ReadMapPassNeeded);
 	if (!correct) {
 		cSetPasscodeBadTries(cPasscodeBadTries() + 1);
-		cSetPasscodeLastTry(crl::now());
+		cSetPasscodeLastTry(getms(true));
 		error();
 		return;
 	}
 
-	Core::App().unlockPasscode(); // Destroys this widget.
+	Messenger::Instance().unlockPasscode(); // Destroys this widget.
 }
 
 void PasscodeLockWidget::error() {
-	_error = tr::lng_passcode_wrong(tr::now);
+	_error = lang(lng_passcode_wrong);
 	_passcode->selectAll();
 	_passcode->showError();
 	update();
@@ -190,16 +171,15 @@ void PasscodeLockWidget::setInnerFocus() {
 	_passcode->setFocusFast();
 }
 
-TermsLock TermsLock::FromMTP(
-		Main::Session *session,
-		const MTPDhelp_termsOfService &data) {
-	const auto minAge = data.vmin_age_confirm();
+TermsLock TermsLock::FromMTP(const MTPDhelp_termsOfService &data) {
 	return {
-		bytes::make_vector(data.vid().c_dataJSON().vdata().v),
+		bytes::make_vector(data.vid.c_dataJSON().vdata.v),
 		TextWithEntities {
-			TextUtilities::Clean(qs(data.vtext())),
-			Api::EntitiesFromMTP(session, data.ventities().v) },
-		(minAge ? std::make_optional(minAge->v) : std::nullopt),
+			TextUtilities::Clean(qs(data.vtext)),
+			TextUtilities::EntitiesFromMTP(data.ventities.v) },
+		(data.has_min_age_confirm()
+			? base::make_optional(data.vmin_age_confirm.v)
+			: base::none),
 		data.is_popup()
 	};
 }
@@ -207,22 +187,22 @@ TermsLock TermsLock::FromMTP(
 TermsBox::TermsBox(
 	QWidget*,
 	const TermsLock &data,
-	rpl::producer<QString> agree,
-	rpl::producer<QString> cancel)
+	Fn<QString()> agree,
+	Fn<QString()> cancel)
 : _data(data)
-, _agree(std::move(agree))
-, _cancel(std::move(cancel)) {
+, _agree(agree)
+, _cancel(cancel) {
 }
 
 TermsBox::TermsBox(
 	QWidget*,
 	const TextWithEntities &text,
-	rpl::producer<QString> agree,
-	rpl::producer<QString> cancel,
+	Fn<QString()> agree,
+	Fn<QString()> cancel,
 	bool attentionAgree)
-: _data{ {}, text, std::nullopt, false }
-, _agree(std::move(agree))
-, _cancel(std::move(cancel))
+: _data{ {}, text, base::none, false }
+, _agree(agree)
+, _cancel(cancel)
 , _attentionAgree(attentionAgree) {
 }
 
@@ -235,7 +215,7 @@ rpl::producer<> TermsBox::cancelClicks() const {
 }
 
 void TermsBox::prepare() {
-	setTitle(tr::lng_terms_header());
+	setTitle(langFactory(lng_terms_header));
 
 	auto check = std::make_unique<Ui::CheckView>(st::defaultCheck, false);
 	const auto ageCheck = check.get();
@@ -244,7 +224,7 @@ void TermsBox::prepare() {
 			this,
 			object_ptr<Ui::Checkbox>(
 				this,
-				tr::lng_terms_age(tr::now, lt_count, *_data.minAge),
+				lng_terms_age(lt_count, *_data.minAge),
 				st::defaultCheckbox,
 				std::move(check)),
 			st::termsAgePadding)
@@ -263,7 +243,7 @@ void TermsBox::prepare() {
 			st::termsPadding),
 		0,
 		age ? age->height() : 0);
-	content->entity()->setClickHandlerFilter([=](
+	content->entity()->setClickHandlerHook([=](
 			const ClickHandlerPtr &handler,
 			Qt::MouseButton button) {
 		const auto link = handler
@@ -271,18 +251,19 @@ void TermsBox::prepare() {
 			: QString();
 		if (TextUtilities::RegExpMention().match(link).hasMatch()) {
 			_lastClickedMention = link;
-			Ui::Toast::Show(tr::lng_terms_agree_to_proceed(tr::now, lt_bot, link));
+			Ui::Toast::Show(lng_terms_agree_to_proceed(lt_bot, link));
 			return false;
 		}
 		return true;
 	});
 
 	const auto errorAnimationCallback = [=] {
+		// lambda 'this' gets deleted in _ageErrorAnimation.current() call.
 		const auto check = ageCheck;
-		const auto error = _ageErrorAnimation.value(
+		const auto error = _ageErrorAnimation.current(
 			_ageErrorShown ? 1. : 0.);
 		if (error == 0.) {
-			check->setUntoggledOverride(std::nullopt);
+			check->setUntoggledOverride(base::none);
 		} else {
 			const auto color = anim::color(
 				st::defaultCheck.untoggledFg,
@@ -305,25 +286,26 @@ void TermsBox::prepare() {
 	const auto &agreeStyle = _attentionAgree
 		? st::attentionBoxButton
 		: st::defaultBoxButton;
-	addButton(std::move(_agree), [=] {}, agreeStyle)->clicks(
+	addButton(_agree, [=] {}, agreeStyle)->clicks(
 	) | rpl::filter([=] {
 		if (age && !age->entity()->checked()) {
 			toggleAgeError(true);
 			return false;
 		}
 		return true;
-	}) | rpl::to_empty | rpl::start_to_stream(_agreeClicks, lifetime());
+	}) | rpl::start_to_stream(_agreeClicks, lifetime());
 
 	if (_cancel) {
-		addButton(std::move(_cancel), [] {})->clicks(
-		) | rpl::to_empty | rpl::start_to_stream(_cancelClicks, lifetime());
+		addButton(_cancel, [=] {})->clicks(
+		) | rpl::start_to_stream(_cancelClicks, lifetime());
 	}
 
 	if (age) {
-		age->entity()->checkedChanges(
+		base::ObservableViewer(
+			age->entity()->checkedChanged
 		) | rpl::start_with_next([=] {
 			toggleAgeError(false);
-		}, age->lifetime());
+		}, lifetime());
 
 		heightValue(
 		) | rpl::start_with_next([=](int height) {

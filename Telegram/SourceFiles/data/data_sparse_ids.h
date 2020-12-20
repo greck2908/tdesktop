@@ -22,25 +22,25 @@ public:
 	SparseIdsSlice(
 		const base::flat_set<MsgId> &ids,
 		MsgRange range,
-		std::optional<int> fullCount,
-		std::optional<int> skippedBefore,
-		std::optional<int> skippedAfter);
+		base::optional<int> fullCount,
+		base::optional<int> skippedBefore,
+		base::optional<int> skippedAfter);
 
-	std::optional<int> fullCount() const { return _fullCount; }
-	std::optional<int> skippedBefore() const { return _skippedBefore; }
-	std::optional<int> skippedAfter() const { return _skippedAfter; }
-	std::optional<int> indexOf(MsgId msgId) const;
+	base::optional<int> fullCount() const { return _fullCount; }
+	base::optional<int> skippedBefore() const { return _skippedBefore; }
+	base::optional<int> skippedAfter() const { return _skippedAfter; }
+	base::optional<int> indexOf(MsgId msgId) const;
 	int size() const { return _ids.size(); }
 	MsgId operator[](int index) const;
-	std::optional<int> distance(MsgId a, MsgId b) const;
-	std::optional<MsgId> nearest(MsgId msgId) const;
+	base::optional<int> distance(MsgId a, MsgId b) const;
+	base::optional<MsgId> nearest(MsgId msgId) const;
 
 private:
 	base::flat_set<MsgId> _ids;
 	MsgRange _range;
-	std::optional<int> _fullCount;
-	std::optional<int> _skippedBefore;
-	std::optional<int> _skippedAfter;
+	base::optional<int> _fullCount;
+	base::optional<int> _skippedBefore;
+	base::optional<int> _skippedAfter;
 
 };
 
@@ -76,16 +76,16 @@ public:
 	SparseIdsMergedSlice(
 		Key key,
 		SparseIdsSlice part,
-		std::optional<SparseIdsSlice> migrated);
+		base::optional<SparseIdsSlice> migrated);
 
-	std::optional<int> fullCount() const;
-	std::optional<int> skippedBefore() const;
-	std::optional<int> skippedAfter() const;
-	std::optional<int> indexOf(FullMsgId fullId) const;
+	base::optional<int> fullCount() const;
+	base::optional<int> skippedBefore() const;
+	base::optional<int> skippedAfter() const;
+	base::optional<int> indexOf(FullMsgId fullId) const;
 	int size() const;
 	FullMsgId operator[](int index) const;
-	std::optional<int> distance(const Key &a, const Key &b) const;
-	std::optional<FullMsgId> nearest(UniversalMsgId id) const;
+	base::optional<int> distance(const Key &a, const Key &b) const;
+	base::optional<FullMsgId> nearest(UniversalMsgId id) const;
 
 	using SimpleViewerFunction = rpl::producer<SparseIdsSlice>(
 		PeerId peerId,
@@ -107,10 +107,10 @@ private:
 			? (ServerMaxMsgId + key.universalId)
 			: (key.universalId > 0) ? (ServerMaxMsgId - 1) : 0;
 	}
-	static std::optional<SparseIdsSlice> MigratedSlice(const Key &key) {
+	static base::optional<SparseIdsSlice> MigratedSlice(const Key &key) {
 		return key.migratedPeerId
 			? base::make_optional(SparseIdsSlice())
-			: std::nullopt;
+			: base::none;
 	}
 
 	static bool IsFromSlice(PeerId peerId, FullMsgId fullId) {
@@ -128,10 +128,10 @@ private:
 			? ComputeId(key.peerId, key.universalId)
 			: ComputeId(key.migratedPeerId, ServerMaxMsgId + key.universalId);
 	}
-	static std::optional<int> Add(
-			const std::optional<int> &a,
-			const std::optional<int> &b) {
-		return (a && b) ? base::make_optional(*a + *b) : std::nullopt;
+	static base::optional<int> Add(
+			const base::optional<int> &a,
+			const base::optional<int> &b) {
+		return (a && b) ? base::make_optional(*a + *b) : base::none;
 	}
 
 	bool isFromPart(FullMsgId fullId) const {
@@ -156,7 +156,7 @@ private:
 
 	Key _key;
 	SparseIdsSlice _part;
-	std::optional<SparseIdsSlice> _migrated;
+	base::optional<SparseIdsSlice> _migrated;
 
 };
 
@@ -200,17 +200,17 @@ private:
 	void sliceToLimits();
 
 	void mergeSliceData(
-		std::optional<int> count,
+		base::optional<int> count,
 		const base::flat_set<MsgId> &messageIds,
-		std::optional<int> skippedBefore = std::nullopt,
-		std::optional<int> skippedAfter = std::nullopt);
+		base::optional<int> skippedBefore = base::none,
+		base::optional<int> skippedAfter = base::none);
 
 	Key _key;
 	base::flat_set<MsgId> _ids;
 	MsgRange _range;
-	std::optional<int> _fullCount;
-	std::optional<int> _skippedBefore;
-	std::optional<int> _skippedAfter;
+	base::optional<int> _fullCount;
+	base::optional<int> _skippedBefore;
+	base::optional<int> _skippedAfter;
 	int _limitBefore = 0;
 	int _limitAfter = 0;
 

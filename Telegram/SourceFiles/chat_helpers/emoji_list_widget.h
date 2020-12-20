@@ -8,37 +8,77 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "chat_helpers/tabbed_selector.h"
-#include "ui/widgets/tooltip.h"
-#include "base/timer.h"
-
-namespace tr {
-template <typename ...Tags>
-struct phrase;
-} // namespace tr
-
-namespace Ui {
-namespace Emoji {
-enum class Section;
-} // namespace Emoji
-} // namespace Ui
 
 namespace Window {
-class SessionController;
+class Controller;
 } // namespace Window
 
 namespace ChatHelpers {
 
-inline constexpr auto kEmojiSectionCount = 8;
+constexpr auto kEmojiSectionCount = 8;
 
-class EmojiColorPicker;
+class EmojiColorPicker : public TWidget {
+	Q_OBJECT
 
-class EmojiListWidget
-	: public TabbedSelector::Inner
-	, public Ui::AbstractTooltipShower {
 public:
-	EmojiListWidget(
-		QWidget *parent,
-		not_null<Window::SessionController*> controller);
+	EmojiColorPicker(QWidget *parent);
+
+	void showEmoji(EmojiPtr emoji);
+
+	void clearSelection();
+	void handleMouseMove(QPoint globalPos);
+	void handleMouseRelease(QPoint globalPos);
+	void setSingleSize(QSize size);
+
+	void hideFast();
+
+public slots:
+	void showAnimated();
+	void hideAnimated();
+
+signals:
+	void emojiSelected(EmojiPtr emoji);
+	void hidden();
+
+protected:
+	void paintEvent(QPaintEvent *e) override;
+	void enterEventHook(QEvent *e) override;
+	void leaveEventHook(QEvent *e) override;
+	void mousePressEvent(QMouseEvent *e) override;
+	void mouseReleaseEvent(QMouseEvent *e) override;
+	void mouseMoveEvent(QMouseEvent *e) override;
+
+private:
+	void animationCallback();
+	void updateSize();
+
+	void drawVariant(Painter &p, int variant);
+
+	void updateSelected();
+	void setSelected(int newSelected);
+
+	bool _ignoreShow = false;
+
+	QVector<EmojiPtr> _variants;
+
+	int _selected = -1;
+	int _pressedSel = -1;
+	QPoint _lastMousePos;
+	QSize _singleSize;
+
+	bool _hiding = false;
+	QPixmap _cache;
+	Animation _a_opacity;
+
+	QTimer _hideTimer;
+
+};
+
+class EmojiListWidget : public TabbedSelector::Inner {
+	Q_OBJECT
+
+public:
+	EmojiListWidget(QWidget *parent, not_null<Window::Controller*> controller);
 
 	using Section = Ui::Emoji::Section;
 
@@ -49,12 +89,16 @@ public:
 	void showEmojiSection(Section section);
 	Section currentSection(int yOffset) const;
 
-	// Ui::AbstractTooltipShower interface.
-	QString tooltipText() const override;
-	QPoint tooltipPos() const override;
-	bool tooltipWindowActive() const override;
+public slots:
+	void onShowPicker();
+	void onPickerHidden();
+	void onColorSelected(EmojiPtr emoji);
 
-	rpl::producer<EmojiPtr> chosen() const;
+	bool checkPickerHide();
+
+signals:
+	void selected(EmojiPtr emoji);
+	void switchToStickers();
 
 protected:
 	void visibleTopBottomUpdated(
@@ -91,12 +135,8 @@ private:
 	SectionInfo sectionInfo(int section) const;
 	SectionInfo sectionInfoByOffset(int yOffset) const;
 
-	void showPicker();
-	void pickerHidden();
-	void colorChosen(EmojiPtr emoji);
-	bool checkPickerHide();
-
 	void ensureLoaded(int section);
+	int countSectionTop(int section) const;
 	void updateSelected();
 	void setSelected(int newSelected);
 
@@ -120,12 +160,8 @@ private:
 	QPoint _lastMousePos;
 
 	object_ptr<EmojiColorPicker> _picker;
-	base::Timer _showPickerTimer;
-
-	rpl::event_stream<EmojiPtr> _chosen;
+	QTimer _showPickerTimer;
 
 };
-
-tr::phrase<> EmojiCategoryTitle(int index);
 
 } // namespace ChatHelpers

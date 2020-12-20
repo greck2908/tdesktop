@@ -9,10 +9,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/observer.h"
 
-namespace Main {
-class Session;
-} // namespace Main
-
 // legacy
 bool filedialogGetSaveFile(
 	QString &file,
@@ -34,15 +30,10 @@ QString filedialogNextFilename(
 namespace File {
 
 // Those functions are async wrappers to Platform::File::Unsafe* calls.
-void OpenUrl(const QString &url);
 void OpenEmailLink(const QString &email);
 void OpenWith(const QString &filepath, QPoint menuPosition);
 void Launch(const QString &filepath);
 void ShowInFolder(const QString &filepath);
-
-[[nodiscard]] QString DefaultDownloadPathFolder(
-	not_null<Main::Session*> session);
-[[nodiscard]] QString DefaultDownloadPath(not_null<Main::Session*> session);
 
 namespace internal {
 
@@ -50,7 +41,6 @@ inline QString UrlToLocalDefault(const QUrl &url) {
 	return url.toLocalFile();
 }
 
-void UnsafeOpenUrlDefault(const QString &url);
 void UnsafeOpenEmailLinkDefault(const QString &email);
 void UnsafeLaunchDefault(const QString &filepath);
 
@@ -89,11 +79,7 @@ void GetFolder(
 	Fn<void(QString &&result)> callback,
 	Fn<void()> failed = Fn<void()>());
 
-[[nodiscard]] QString AllFilesFilter();
-[[nodiscard]] QString ImagesFilter();
-[[nodiscard]] QString AllOrImagesFilter();
-[[nodiscard]] QString ImagesOrAllFilter();
-[[nodiscard]] QString PhotoVideoFilesFilter();
+QString AllFilesFilter();
 
 namespace internal {
 

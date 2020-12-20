@@ -5,7 +5,7 @@ the official desktop application for the Telegram messaging service.
 For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
-#include "data/data_messages.h"
+#include "data/data_feed_messages.h"
 
 namespace Data {
 
@@ -83,8 +83,7 @@ int MessagesList::addRangeItemsAndCountNew(
 		std::end(messages) };
 	auto slice = _slices.emplace(
 		std::move(sliceMessages),
-		noSkipRange
-	).first;
+		noSkipRange);
 	update.messages = &slice->messages;
 	update.range = slice->range;
 	return slice->messages.size();
@@ -94,10 +93,11 @@ template <typename Range>
 void MessagesList::addRange(
 		const Range &messages,
 		MessagesRange noSkipRange,
-		std::optional<int> count,
+		base::optional<int> count,
 		bool incrementCount) {
 	Expects(!count || !incrementCount);
 
+	auto wasCount = _count;
 	auto update = MessagesSliceUpdate();
 	auto result = addRangeItemsAndCountNew(
 		update,
@@ -117,25 +117,19 @@ void MessagesList::addRange(
 	_sliceUpdated.fire(std::move(update));
 }
 
-void MessagesList::addOne(MessagePosition messageId) {
-	auto range = { messageId };
-	addRange(range, { messageId, messageId }, std::nullopt, true);
-}
-
 void MessagesList::addNew(MessagePosition messageId) {
 	auto range = { messageId };
-	addRange(range, { messageId, MaxMessagePosition }, std::nullopt, true);
+	addRange(range, { messageId, MaxMessagePosition }, base::none, true);
 }
 
 void MessagesList::addSlice(
 		std::vector<MessagePosition> &&messageIds,
 		MessagesRange noSkipRange,
-		std::optional<int> count) {
+		base::optional<int> count) {
 	addRange(messageIds, noSkipRange, count);
 }
 
 void MessagesList::removeOne(MessagePosition messageId) {
-	auto update = MessagesSliceUpdate();
 	auto slice = ranges::lower_bound(
 		_slices,
 		messageId,
@@ -145,15 +139,9 @@ void MessagesList::removeOne(MessagePosition messageId) {
 		_slices.modify(slice, [&](Slice &slice) {
 			return slice.messages.remove(messageId);
 		});
-		update.messages = &slice->messages;
-		update.range = slice->range;
 	}
 	if (_count) {
 		--*_count;
-	}
-	update.count = _count;
-	if (update.messages) {
-		_sliceUpdated.fire(std::move(update));
 	}
 }
 
@@ -177,36 +165,9 @@ void MessagesList::removeAll(ChannelId channelId) {
 	}
 }
 
-void MessagesList::removeLessThan(MessagePosition messageId) {
-	auto removed = 0;
-	for (auto i = begin(_slices); i != end(_slices);) {
-		if (i->range.till <= messageId) {
-			removed += i->messages.size();
-			i = _slices.erase(i);
-			continue;
-		} else if (i->range.from <= messageId) {
-			_slices.modify(i, [&](Slice &slice) {
-				slice.range.from = MinMessagePosition;
-				auto from = begin(slice.messages);
-				auto till = ranges::lower_bound(slice.messages, messageId);
-				if (from != till) {
-					removed += till - from;
-					slice.messages.erase(from, till);
-				}
-			});
-			break;
-		} else {
-			break;
-		}
-	}
-	if (removed && _count) {
-		*_count -= removed;
-	}
-}
-
 void MessagesList::invalidate() {
 	_slices.clear();
-	_count = std::nullopt;
+	_count = base::none;
 }
 
 void MessagesList::invalidateBottom() {
@@ -220,29 +181,22 @@ void MessagesList::invalidateBottom() {
 			});
 		}
 	}
-	_count = std::nullopt;
-}
-
-MessagesResult MessagesList::queryCurrent(const MessagesQuery &query) const {
-	if (!query.aroundId) {
-		return MessagesResult();
-	}
-	const auto slice = ranges::lower_bound(
-		_slices,
-		query.aroundId,
-		std::less<>(),
-		[](const Slice &slice) { return slice.range.till; });
-	return (slice != _slices.end() && slice->range.from <= query.aroundId)
-		? queryFromSlice(query, *slice)
-		: MessagesResult();
+	_count = base::none;
 }
 
 rpl::producer<MessagesResult> MessagesList::query(
 		MessagesQuery &&query) const {
 	return [this, query = std::move(query)](auto consumer) {
-		auto current = queryCurrent(query);
-		if (current.count.has_value() || !current.messageIds.empty()) {
-			consumer.put_next(std::move(current));
+		auto slice = query.aroundId
+			? ranges::lower_bound(
+				_slices,
+				query.aroundId,
+				std::less<>(),
+				[](const Slice &slice) { return slice.range.till; })
+			: _slices.end();
+		if (slice != _slices.end()
+			&& slice->range.from <= query.aroundId) {
+			consumer.put_next(queryFromSlice(query, *slice));
 		}
 		consumer.put_done();
 		return rpl::lifetime();
@@ -251,31 +205,6 @@ rpl::producer<MessagesResult> MessagesList::query(
 
 rpl::producer<MessagesSliceUpdate> MessagesList::sliceUpdated() const {
 	return _sliceUpdated.events();
-}
-
-MessagesResult MessagesList::snapshot(MessagesQuery &&query) const {
-	return queryCurrent(query);
-}
-
-bool MessagesList::empty() const {
-	for (const auto &slice : _slices) {
-		if (!slice.messages.empty()) {
-			return false;
-		}
-	}
-	return true;
-}
-
-rpl::producer<MessagesResult> MessagesList::viewer(
-		MessagesQuery &&query) const {
-	auto copy = query;
-	return rpl::single(
-		queryCurrent(query)
-	) | rpl::then(sliceUpdated() | rpl::map([=] {
-		return queryCurrent(query);
-	})) | rpl::filter([=](const MessagesResult &value) {
-		return value.count.has_value() || !value.messageIds.empty();
-	});
 }
 
 MessagesResult MessagesList::queryFromSlice(
@@ -343,10 +272,10 @@ bool MessagesSliceBuilder::applyUpdate(const MessagesSliceUpdate &update) {
 	}
 	auto skippedBefore = (update.range.from == MinMessagePosition)
 		? 0
-		: std::optional<int> {};
+		: base::optional<int> {};
 	auto skippedAfter = (update.range.till == MaxMessagePosition)
 		? 0
-		: std::optional<int> {};
+		: base::optional<int> {};
 	mergeSliceData(
 		update.count,
 		needMergeMessages
@@ -402,20 +331,20 @@ bool MessagesSliceBuilder::removeFromChannel(ChannelId channelId) {
 			++i;
 		}
 	}
-	_skippedBefore = _skippedAfter = std::nullopt;
+	_skippedBefore = _skippedAfter = base::none;
 	checkInsufficient();
 	return true;
 }
 
 bool MessagesSliceBuilder::invalidated() {
-	_fullCount = _skippedBefore = _skippedAfter = std::nullopt;
+	_fullCount = _skippedBefore = _skippedAfter = base::none;
 	_ids.clear();
 	checkInsufficient();
 	return false;
 }
 
 bool MessagesSliceBuilder::bottomInvalidated() {
-	_fullCount = _skippedAfter = std::nullopt;
+	_fullCount = _skippedAfter = base::none;
 	checkInsufficient();
 	return true;
 }
@@ -425,10 +354,10 @@ void MessagesSliceBuilder::checkInsufficient() {
 }
 
 void MessagesSliceBuilder::mergeSliceData(
-		std::optional<int> count,
+		base::optional<int> count,
 		const base::flat_set<MessagePosition> &messageIds,
-		std::optional<int> skippedBefore,
-		std::optional<int> skippedAfter) {
+		base::optional<int> skippedBefore,
+		base::optional<int> skippedAfter) {
 	if (messageIds.empty()) {
 		if (count && _fullCount != count) {
 			_fullCount = count;
@@ -443,7 +372,7 @@ void MessagesSliceBuilder::mergeSliceData(
 	if (count) {
 		_fullCount = count;
 	}
-	const auto impossible = MessagePosition{ .fullId = {}, .date = -1 };
+	const auto impossible = MessagePosition(-1, FullMsgId());
 	auto wasMinId = _ids.empty() ? impossible : _ids.front();
 	auto wasMaxId = _ids.empty() ? impossible : _ids.back();
 	_ids.merge(messageIds.begin(), messageIds.end());
@@ -459,7 +388,7 @@ void MessagesSliceBuilder::mergeSliceData(
 	} else if (wasMinId != impossible && _skippedBefore) {
 		adjustSkippedBefore(wasMinId, *_skippedBefore);
 	} else {
-		_skippedBefore = std::nullopt;
+		_skippedBefore = base::none;
 	}
 
 	auto adjustSkippedAfter = [&](MessagePosition oldId, int oldSkippedAfter) {
@@ -473,7 +402,7 @@ void MessagesSliceBuilder::mergeSliceData(
 	} else if (wasMaxId != impossible && _skippedAfter) {
 		adjustSkippedAfter(wasMaxId, *_skippedAfter);
 	} else {
-		_skippedAfter = std::nullopt;
+		_skippedAfter = base::none;
 	}
 	fillSkippedAndSliceToLimits();
 }
@@ -550,15 +479,9 @@ void MessagesSliceBuilder::requestMessagesCount() {
 MessagesSlice MessagesSliceBuilder::snapshot() const {
 	auto result = MessagesSlice();
 	result.ids.reserve(_ids.size());
-	auto nearestToAround = std::optional<FullMsgId>();
 	for (const auto &position : _ids) {
 		result.ids.push_back(position.fullId);
-		if (!nearestToAround && position >= _key) {
-			nearestToAround = position.fullId;
-		}
 	}
-	result.nearestToAround = nearestToAround.value_or(
-		_ids.empty() ? FullMsgId() : _ids.back().fullId);
 	result.skippedBefore = _skippedBefore;
 	result.skippedAfter = _skippedAfter;
 	result.fullCount = _fullCount;

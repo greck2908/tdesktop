@@ -23,10 +23,11 @@ template <typename Widget>
 class PaddingWrap;
 } // namespace Ui
 
+namespace Data {
+class Feed;
+} // namespace Data
+
 namespace Info {
-namespace Settings {
-struct Tag;
-} // namespace Settings
 
 class ContentMemento;
 class Controller;
@@ -39,14 +40,15 @@ public:
 
 	virtual bool showInternal(
 		not_null<ContentMemento*> memento) = 0;
-	std::shared_ptr<ContentMemento> createMemento();
+	std::unique_ptr<ContentMemento> createMemento();
 
+	virtual rpl::producer<Section> sectionRequest() const;
 	virtual void setIsStackBottom(bool isStackBottom) {
 	}
 
 	rpl::producer<int> scrollHeightValue() const;
 	rpl::producer<int> desiredHeightValue() const override;
-	virtual rpl::producer<bool> desiredShadowVisibility() const;
+	rpl::producer<bool> desiredShadowVisibility() const;
 	bool hasTopBarShadow() const;
 
 	virtual void setInnerFocus();
@@ -62,15 +64,12 @@ public:
 	rpl::producer<int> scrollTillBottomChanges() const;
 
 	// Float player interface.
-	bool floatPlayerHandleWheelEvent(QEvent *e);
-	QRect floatPlayerAvailableRect() const;
+	bool wheelEventFromFloatPlayer(QEvent *e);
+	QRect rectForFloatPlayer() const;
 
 	virtual rpl::producer<SelectedItems> selectedListValue() const;
 	virtual void cancelSelection() {
 	}
-
-	virtual rpl::producer<bool> canSaveChanges() const;
-	virtual void saveChanges(FnMut<void()> done);
 
 protected:
 	template <typename Widget>
@@ -96,7 +95,7 @@ private:
 	void updateControlsGeometry();
 	void refreshSearchField(bool shown);
 
-	virtual std::shared_ptr<ContentMemento> doCreateMemento() = 0;
+	virtual std::unique_ptr<ContentMemento> doCreateMemento() = 0;
 
 	const not_null<Controller*> _controller;
 
@@ -116,16 +115,12 @@ private:
 
 class ContentMemento {
 public:
-	ContentMemento(not_null<PeerData*> peer, PeerId migratedPeerId)
-	: _peer(peer)
+	ContentMemento(PeerId peerId, PeerId migratedPeerId)
+	: _peerId(peerId)
 	, _migratedPeerId(migratedPeerId) {
 	}
-	//explicit ContentMemento(not_null<Data::Feed*> feed) : _feed(feed) { // #feed
-	//}
-	explicit ContentMemento(Settings::Tag settings);
-	ContentMemento(not_null<PollData*> poll, FullMsgId contextId)
-	: _poll(poll)
-	, _pollContextId(contextId) {
+	explicit ContentMemento(not_null<Data::Feed*> feed)
+	: _feed(feed) {
 	}
 
 	virtual object_ptr<ContentWidget> createWidget(
@@ -133,25 +128,15 @@ public:
 		not_null<Controller*> controller,
 		const QRect &geometry) = 0;
 
-	PeerData *peer() const {
-		return _peer;
+	PeerId peerId() const {
+		return _peerId;
 	}
 	PeerId migratedPeerId() const {
 		return _migratedPeerId;
 	}
-	//Data::Feed *feed() const { // #feed
-	//	return _feed;
-	//}
-	UserData *settingsSelf() const {
-		return _settingsSelf;
+	Data::Feed *feed() const {
+		return _feed;
 	}
-	PollData *poll() const {
-		return _poll;
-	}
-	FullMsgId pollContextId() const {
-		return _pollContextId;
-	}
-	Key key() const;
 
 	virtual Section section() const = 0;
 
@@ -183,13 +168,9 @@ public:
 	}
 
 private:
-	PeerData * const _peer = nullptr;
+	const PeerId _peerId = 0;
 	const PeerId _migratedPeerId = 0;
-	//Data::Feed * const _feed = nullptr; // #feed
-	UserData * const _settingsSelf = nullptr;
-	PollData * const _poll = nullptr;
-	const FullMsgId _pollContextId;
-
+	Data::Feed * const _feed = nullptr;
 	int _scrollTop = 0;
 	QString _searchFieldQuery;
 	bool _searchEnabledByContent = false;

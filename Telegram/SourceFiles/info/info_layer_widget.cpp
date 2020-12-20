@@ -7,75 +7,41 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/info_layer_widget.h"
 
+#include <rpl/mappers.h>
 #include "info/info_content_widget.h"
 #include "info/info_top_bar.h"
 #include "info/info_memento.h"
 #include "ui/rp_widget.h"
 #include "ui/focus_persister.h"
 #include "ui/widgets/buttons.h"
-#include "ui/cached_round_corners.h"
 #include "window/section_widget.h"
-#include "window/window_session_controller.h"
+#include "window/window_controller.h"
 #include "window/main_window.h"
-#include "main/main_session.h"
-#include "boxes/abstract_box.h"
-#include "core/application.h"
-#include "app.h" // App::quitting.
+#include "auth_session.h"
 #include "styles/style_info.h"
+#include "styles/style_settings.h"
 #include "styles/style_window.h"
-#include "styles/style_layers.h"
+#include "styles/style_boxes.h"
 
 namespace Info {
 
 LayerWidget::LayerWidget(
-	not_null<Window::SessionController*> controller,
+	not_null<Window::Controller*> controller,
 	not_null<Memento*> memento)
 : _controller(controller)
 , _content(this, controller, Wrap::Layer, memento) {
 	setupHeightConsumers();
-	Core::App().replaceFloatPlayerDelegate(floatPlayerDelegate());
 }
 
 LayerWidget::LayerWidget(
-	not_null<Window::SessionController*> controller,
+	not_null<Window::Controller*> controller,
 	not_null<MoveMemento*> memento)
 : _controller(controller)
 , _content(memento->takeContent(this, Wrap::Layer)) {
 	setupHeightConsumers();
-	Core::App().replaceFloatPlayerDelegate(floatPlayerDelegate());
-}
-
-auto LayerWidget::floatPlayerDelegate()
--> not_null<::Media::Player::FloatDelegate*> {
-	return static_cast<::Media::Player::FloatDelegate*>(this);
-}
-
-not_null<Ui::RpWidget*> LayerWidget::floatPlayerWidget() {
-	return this;
-}
-
-auto LayerWidget::floatPlayerGetSection(Window::Column column)
--> not_null<::Media::Player::FloatSectionDelegate*> {
-	Expects(_content != nullptr);
-
-	return _content;
-}
-
-void LayerWidget::floatPlayerEnumerateSections(Fn<void(
-		not_null<::Media::Player::FloatSectionDelegate*> widget,
-		Window::Column widgetColumn)> callback) {
-	Expects(_content != nullptr);
-
-	callback(_content, Window::Column::Second);
-}
-
-bool LayerWidget::floatPlayerIsVisible(not_null<HistoryItem*> item) {
-	return false;
 }
 
 void LayerWidget::setupHeightConsumers() {
-	Expects(_content != nullptr);
-
 	_content->scrollTillBottomChanges(
 	) | rpl::filter([this] {
 		return !_inResize;
@@ -92,37 +58,17 @@ void LayerWidget::setupHeightConsumers() {
 }
 
 void LayerWidget::showFinished() {
-	floatPlayerShowVisible();
 }
 
 void LayerWidget::parentResized() {
-	if (!_content) {
-		return;
-	}
-
 	auto parentSize = parentWidget()->size();
 	auto parentWidth = parentSize.width();
 	if (parentWidth < MinimalSupportedWidth()) {
 		Ui::FocusPersister persister(this);
-		restoreFloatPlayerDelegate();
-
-		auto memento = std::make_shared<MoveMemento>(std::move(_content));
-
-		// We want to call hideSpecialLayer synchronously to avoid glitches,
-		// but we can't destroy LayerStackWidget from its' resizeEvent,
-		// because QWidget has such code for resizing:
-		//
-		// QResizeEvent e(r.size(), olds);
-		// QApplication::sendEvent(q, &e);
-		// if (q->windowHandle())
-		//   q->update();
-		//
-		// So we call it queued. It would be cool to call it 'right after'
-		// the resize event handling was finished.
-		InvokeQueued(this, [=] {
-			_controller->hideSpecialLayer(anim::type::instant);
-		});
-		_controller->showSection(
+		auto localCopy = _controller;
+		auto memento = MoveMemento(std::move(_content));
+		localCopy->hideSpecialLayer(anim::type::instant);
+		localCopy->showSection(
 			std::move(memento),
 			Window::SectionShow(
 				Window::SectionShow::Way::Forward,
@@ -162,10 +108,10 @@ bool LayerWidget::takeToThirdSection() {
 	//// shrink the window size.
 	////
 	//// See https://github.com/telegramdesktop/tdesktop/issues/4091
-	//localCopy->session()().settings().setThirdSectionExtendedBy(0);
+	//Auth().settings().setThirdSectionExtendedBy(0);
 
-	//localCopy->session()().settings().setThirdSectionInfoEnabled(true);
-	//localCopy->session()().saveSettingsDelayed();
+	//Auth().settings().setThirdSectionInfoEnabled(true);
+	//Auth().saveSettingsDelayed();
 	//localCopy->showSection(
 	//	std::move(memento),
 	//	Window::SectionShow(
@@ -178,7 +124,7 @@ bool LayerWidget::takeToThirdSection() {
 bool LayerWidget::showSectionInternal(
 		not_null<Window::SectionMemento*> memento,
 		const Window::SectionShow &params) {
-	if (_content && _content->showInternal(memento, params)) {
+	if (_content->showInternal(memento, params)) {
 		if (params.activation != anim::activation::background) {
 			Ui::hideLayer();
 		}
@@ -187,12 +133,8 @@ bool LayerWidget::showSectionInternal(
 	return false;
 }
 
-bool LayerWidget::closeByOutsideClick() const {
-	return _content ? _content->closeByOutsideClick() : true;
-}
-
 int LayerWidget::MinimalSupportedWidth() {
-	const auto minimalMargins = 2 * st::infoMinimalLayerMargin;
+	auto minimalMargins = 2 * st::infoMinimalLayerMargin;
 	return st::infoMinimalWidth + minimalMargins;
 }
 
@@ -245,14 +187,7 @@ int LayerWidget::resizeGetHeight(int newWidth) {
 		move(newGeometry.topLeft());
 	}
 
-	floatPlayerUpdatePositions();
 	return desiredHeight;
-}
-
-void LayerWidget::doSetInnerFocus() {
-	if (_content) {
-		_content->setInnerFocus();
-	}
 }
 
 void LayerWidget::paintEvent(QPaintEvent *e) {
@@ -270,30 +205,13 @@ void LayerWidget::paintEvent(QPaintEvent *e) {
 		}
 	}
 	if (parts) {
-		Ui::FillRoundRect(
+		App::roundRect(
 			p,
 			rect(),
 			st::boxBg,
-			Ui::BoxCorners,
+			BoxCorners,
 			nullptr,
 			parts);
-	}
-}
-
-void LayerWidget::restoreFloatPlayerDelegate() {
-	if (!_floatPlayerDelegateRestored) {
-		_floatPlayerDelegateRestored = true;
-		Core::App().restoreFloatPlayerDelegate(floatPlayerDelegate());
-	}
-}
-
-void LayerWidget::closeHook() {
-	restoreFloatPlayerDelegate();
-}
-
-LayerWidget::~LayerWidget() {
-	if (!App::quitting()) {
-		restoreFloatPlayerDelegate();
 	}
 }
 

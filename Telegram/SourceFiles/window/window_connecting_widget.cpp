@@ -9,26 +9,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/widgets/buttons.h"
 #include "ui/effects/radial_animation.h"
-#include "ui/ui_utility.h"
-#include "mtproto/mtp_instance.h"
-#include "mtproto/facade.h"
-#include "main/main_account.h"
-#include "core/update_checker.h"
 #include "window/themes/window_theme.h"
 #include "boxes/connection_box.h"
-#include "boxes/abstract_box.h"
 #include "lang/lang_keys.h"
-#include "facades.h"
-#include "app.h"
 #include "styles/style_window.h"
 
 namespace Window {
 namespace {
 
-constexpr auto kIgnoreStartConnectingFor = crl::time(3000);
-constexpr auto kConnectingStateDelay = crl::time(1000);
-constexpr auto kRefreshTimeout = crl::time(200);
-constexpr auto kMinimalWaitingStateDuration = crl::time(4000);
+constexpr auto kIgnoreStartConnectingFor = TimeMs(3000);
+constexpr auto kConnectingStateDelay = TimeMs(1000);
+constexpr auto kRefreshTimeout = TimeMs(200);
+constexpr auto kMinimalWaitingStateDuration = TimeMs(4000);
 
 class Progress : public Ui::RpWidget {
 public:
@@ -38,7 +30,7 @@ protected:
 	void paintEvent(QPaintEvent *e) override;
 
 private:
-	void animationStep();
+	void step(TimeMs ms, bool timer);
 
 	Ui::InfiniteRadialAnimation _animation;
 
@@ -46,11 +38,11 @@ private:
 
 Progress::Progress(QWidget *parent)
 : RpWidget(parent)
-, _animation([=] { animationStep(); }, st::connectingRadial) {
+, _animation(animation(this, &Progress::step), st::connectingRadial) {
 	setAttribute(Qt::WA_OpaquePaintEvent);
 	setAttribute(Qt::WA_TransparentForMouseEvents);
 	resize(st::connectingRadial.size);
-	_animation.start(st::connectingRadial.sineDuration);
+	_animation.start();
 }
 
 void Progress::paintEvent(QPaintEvent *e) {
@@ -66,53 +58,15 @@ void Progress::paintEvent(QPaintEvent *e) {
 		width());
 }
 
-void Progress::animationStep() {
-	if (!anim::Disabled()) {
+void Progress::step(TimeMs ms, bool timer) {
+	if (timer) {
 		update();
 	}
 }
 
 } // namespace
 
-class ConnectionState::Widget : public Ui::AbstractButton {
-public:
-	Widget(
-		QWidget *parent,
-		not_null<Main::Account*> account,
-		const Layout &layout);
-
-	void refreshRetryLink(bool hasRetry);
-	void setLayout(const Layout &layout);
-	void setProgressVisibility(bool visible);
-
-	rpl::producer<> refreshStateRequests() const;
-
-protected:
-	void resizeEvent(QResizeEvent *e) override;
-	void paintEvent(QPaintEvent *e) override;
-
-	void onStateChanged(State was, StateChangeSource source) override;
-
-private:
-	class ProxyIcon;
-	using State = ConnectionState::State;
-	using Layout = ConnectionState::Layout;
-
-	void updateRetryGeometry();
-	QRect innerRect() const;
-	QRect contentRect() const;
-	QRect textRect() const;
-
-	const not_null<Main::Account*> _account;
-	Layout _currentLayout;
-	base::unique_qptr<Ui::LinkButton> _retry;
-	QPointer<Ui::RpWidget> _progress;
-	QPointer<ProxyIcon> _proxyIcon;
-	rpl::event_stream<> _refreshStateRequests;
-
-};
-
-class ConnectionState::Widget::ProxyIcon
+class ConnectingWidget::ProxyIcon
 	: public Ui::RpWidget
 	, private base::Subscriber {
 public:
@@ -134,7 +88,7 @@ private:
 
 };
 
-ConnectionState::Widget::ProxyIcon::ProxyIcon(QWidget *parent) : RpWidget(parent) {
+ConnectingWidget::ProxyIcon::ProxyIcon(QWidget *parent) : RpWidget(parent) {
 	resize(
 		std::max(
 			st::connectingRadial.size.width(),
@@ -153,7 +107,7 @@ ConnectionState::Widget::ProxyIcon::ProxyIcon(QWidget *parent) : RpWidget(parent
 	refreshCacheImages();
 }
 
-void ConnectionState::Widget::ProxyIcon::refreshCacheImages() {
+void ConnectingWidget::ProxyIcon::refreshCacheImages() {
 	const auto prepareCache = [&](const style::icon &icon) {
 		auto image = QImage(
 			size() * cIntRetinaFactor(),
@@ -174,14 +128,14 @@ void ConnectionState::Widget::ProxyIcon::refreshCacheImages() {
 	_cacheOff = prepareCache(st::connectingProxyOff);
 }
 
-void ConnectionState::Widget::ProxyIcon::setToggled(bool toggled) {
+void ConnectingWidget::ProxyIcon::setToggled(bool toggled) {
 	if (_toggled != toggled) {
 		_toggled = toggled;
 		update();
 	}
 }
 
-void ConnectionState::Widget::ProxyIcon::setOpacity(float64 opacity) {
+void ConnectingWidget::ProxyIcon::setOpacity(float64 opacity) {
 	_opacity = opacity;
 	if (_opacity == 0.) {
 		hide();
@@ -191,320 +145,111 @@ void ConnectionState::Widget::ProxyIcon::setOpacity(float64 opacity) {
 	update();
 }
 
-void ConnectionState::Widget::ProxyIcon::paintEvent(QPaintEvent *e) {
+void ConnectingWidget::ProxyIcon::paintEvent(QPaintEvent *e) {
 	Painter p(this);
 	p.setOpacity(_opacity);
 	p.drawPixmap(0, 0, _toggled ? _cacheOn : _cacheOff);
 }
 
-bool ConnectionState::State::operator==(const State &other) const {
+bool ConnectingWidget::State::operator==(const State &other) const {
 	return (type == other.type)
 		&& (useProxy == other.useProxy)
 		&& (underCursor == other.underCursor)
-		&& (updateReady == other.updateReady)
 		&& (waitTillRetry == other.waitTillRetry);
 }
 
-ConnectionState::ConnectionState(
-	not_null<Ui::RpWidget*> parent,
-	not_null<Main::Account*> account,
-	rpl::producer<bool> shown)
-: _account(account)
-, _parent(parent)
+ConnectingWidget::ConnectingWidget(QWidget *parent)
+: AbstractButton(parent)
 , _refreshTimer([=] { refreshState(); })
 , _currentLayout(computeLayout(_state)) {
-	rpl::combine(
-		std::move(shown),
-		visibility()
-	) | rpl::start_with_next([=](bool shown, float64 visible) {
-		if (!shown || visible == 0.) {
-			_widget = nullptr;
-		} else if (!_widget) {
-			createWidget();
-		}
-	}, _lifetime);
-
-	subscribe(Global::RefConnectionTypeChanged(), [=] {
-		refreshState();
-	});
-	if (!Core::UpdaterDisabled()) {
-		Core::UpdateChecker checker;
-		rpl::merge(
-			rpl::single(rpl::empty_value()),
-			checker.ready()
-		) | rpl::start_with_next([=] {
-			refreshState();
-		}, _lifetime);
-	}
-	refreshState();
-}
-
-void ConnectionState::createWidget() {
-	_widget = base::make_unique_q<Widget>(_parent, _account, _currentLayout);
-	_widget->setVisible(!_forceHidden);
-
-	updateWidth();
-
-	rpl::combine(
-		visibility(),
-		_parent->heightValue()
-	) | rpl::start_with_next([=](float64 visible, int height) {
-		_widget->moveToLeft(0, anim::interpolate(
-			height - st::connectingMargin.top(),
-			height - _widget->height(),
-			visible));
-	}, _widget->lifetime());
-
-	_widget->refreshStateRequests(
-	) | rpl::start_with_next([=] {
-		refreshState();
-	}, _widget->lifetime());
-}
-
-void ConnectionState::raise() {
-	if (_widget) {
-		_widget->raise();
-	}
-}
-
-void ConnectionState::finishAnimating() {
-	if (_contentWidth.animating()) {
-		_contentWidth.stop();
-		updateWidth();
-	}
-	if (_visibility.animating()) {
-		_visibility.stop();
-		updateVisibility();
-	}
-}
-
-void ConnectionState::setForceHidden(bool hidden) {
-	_forceHidden = hidden;
-	if (_widget) {
-		_widget->setVisible(!hidden);
-	}
-}
-
-void ConnectionState::refreshState() {
-	using Checker = Core::UpdateChecker;
-	const auto state = [&]() -> State {
-		const auto under = _widget && _widget->isOver();
-		const auto ready = (Checker().state() == Checker::State::Ready);
-		const auto state = _account->mtp().dcstate();
-		const auto proxy
-			= (Global::ProxySettings() == MTP::ProxyData::Settings::Enabled);
-		if (state == MTP::ConnectingState
-			|| state == MTP::DisconnectedState
-			|| (state < 0 && state > -600)) {
-			return { State::Type::Connecting, proxy, under, ready };
-		} else if (state < 0
-			&& state >= -kMinimalWaitingStateDuration
-			&& _state.type != State::Type::Waiting) {
-			return { State::Type::Connecting, proxy, under, ready };
-		} else if (state < 0) {
-			const auto wait = ((-state) / 1000) + 1;
-			return { State::Type::Waiting, proxy, under, ready, wait };
-		}
-		return { State::Type::Connected, proxy, under, ready };
-	}();
-	if (state.waitTillRetry > 0) {
-		_refreshTimer.callOnce(kRefreshTimeout);
-	}
-	if (state == _state) {
-		return;
-	} else if (state.type == State::Type::Connecting
-		&& _state.type == State::Type::Connected) {
-		const auto now = crl::now();
-		if (!_connectingStartedAt) {
-			_connectingStartedAt = now;
-			_refreshTimer.callOnce(kConnectingStateDelay);
-			return;
-		}
-		const auto applyConnectingAt = std::max(
-			_connectingStartedAt + kConnectingStateDelay,
-			kIgnoreStartConnectingFor);
-		if (now < applyConnectingAt) {
-			_refreshTimer.callOnce(applyConnectingAt - now);
-			return;
-		}
-	}
-	applyState(state);
-}
-
-void ConnectionState::applyState(const State &state) {
-	const auto newLayout = computeLayout(state);
-	const auto guard = gsl::finally([&] { updateWidth(); });
-
-	_state = state;
-	if (_currentLayout.visible != newLayout.visible) {
-		changeVisibilityWithLayout(newLayout);
-		return;
-	}
-	if (_currentLayout.contentWidth != newLayout.contentWidth) {
-		if (!_currentLayout.contentWidth
-			|| !newLayout.contentWidth
-			|| _contentWidth.animating()) {
-			_contentWidth.start(
-				[=] { updateWidth(); },
-				_currentLayout.contentWidth,
-				newLayout.contentWidth,
-				st::connectingDuration);
-		}
-	}
-	const auto saved = _currentLayout;
-	setLayout(newLayout);
-	if (_currentLayout.text.isEmpty()
-		&& !saved.text.isEmpty()
-		&& _contentWidth.animating()) {
-		_currentLayout.text = saved.text;
-		_currentLayout.textWidth = saved.textWidth;
-	}
-}
-
-void ConnectionState::changeVisibilityWithLayout(const Layout &layout) {
-	Expects(_currentLayout.visible != layout.visible);
-
-	const auto changeLayout = !_currentLayout.visible;
-	_visibility.start(
-		[=] { updateVisibility(); },
-		layout.visible ? 0. : 1.,
-		layout.visible ? 1. : 0.,
-		st::connectingDuration);
-	if (_contentWidth.animating()) {
-		_contentWidth.start(
-			[=] { updateWidth(); },
-			_currentLayout.contentWidth,
-			(changeLayout ? layout : _currentLayout).contentWidth,
-			st::connectingDuration);
-	}
-	if (changeLayout) {
-		setLayout(layout);
-	} else {
-		_currentLayout.visible = layout.visible;
-	}
-}
-
-void ConnectionState::setLayout(const Layout &layout) {
-	_currentLayout = layout;
-	if (_widget) {
-		_widget->setLayout(layout);
-	}
-	refreshProgressVisibility();
-}
-
-void ConnectionState::refreshProgressVisibility() {
-	if (_widget) {
-		_widget->setProgressVisibility(_contentWidth.animating()
-			|| _currentLayout.progressShown);
-	}
-}
-
-void ConnectionState::updateVisibility() {
-	const auto value = currentVisibility();
-	if (value == 0. && _contentWidth.animating()) {
-		_contentWidth.stop();
-		updateWidth();
-	}
-	_visibilityValues.fire_copy(value);
-}
-
-float64 ConnectionState::currentVisibility() const {
-	return _visibility.value(_currentLayout.visible ? 1. : 0.);
-}
-
-rpl::producer<float64> ConnectionState::visibility() const {
-	return _visibilityValues.events_starting_with(currentVisibility());
-}
-
-auto ConnectionState::computeLayout(const State &state) const -> Layout {
-	auto result = Layout();
-	result.proxyEnabled = state.useProxy;
-	result.progressShown = (state.type != State::Type::Connected);
-	result.visible = !state.updateReady
-		&& (state.useProxy
-			|| state.type == State::Type::Connecting
-			|| state.type == State::Type::Waiting);
-	switch (state.type) {
-	case State::Type::Connecting:
-		result.text = state.underCursor
-			? tr::lng_connecting(tr::now)
-			: QString();
-		break;
-
-	case State::Type::Waiting:
-		Assert(state.waitTillRetry > 0);
-		result.text = tr::lng_reconnecting(
-			tr::now,
-			lt_count,
-			state.waitTillRetry);
-		break;
-	}
-	result.textWidth = st::normalFont->width(result.text);
-	const auto maxTextWidth = (state.type == State::Type::Waiting)
-		? st::normalFont->width(tr::lng_reconnecting(tr::now, lt_count, 88))
-		: result.textWidth;
-	result.contentWidth = (result.textWidth > 0)
-		? (st::connectingTextPadding.left()
-			+ result.textWidth
-			+ st::connectingTextPadding.right())
-		: 0;
-	if (state.type == State::Type::Waiting) {
-		result.contentWidth += st::connectingRetryLink.padding.left()
-			+ st::connectingRetryLink.font->width(
-				tr::lng_reconnecting_try_now(tr::now))
-			+ st::connectingRetryLink.padding.right();
-	}
-	result.hasRetry = (state.type == State::Type::Waiting);
-	return result;
-}
-
-void ConnectionState::updateWidth() {
-	const auto current = _contentWidth.value(_currentLayout.contentWidth);
-	const auto height = st::connectingLeft.height();
-	const auto desired = QRect(0, 0, current, height).marginsAdded(
-		style::margins(
-			st::connectingLeft.width(),
-			0,
-			st::connectingRight.width(),
-			0)
-	).marginsAdded(
-		st::connectingMargin
-	);
-	if (_widget) {
-		_widget->resize(desired.size());
-		_widget->update();
-	}
-	refreshProgressVisibility();
-}
-
-ConnectionState::Widget::Widget(
-	QWidget *parent,
-	not_null<Main::Account*> account,
-	const Layout &layout)
-: AbstractButton(parent)
-, _account(account)
-, _currentLayout(layout) {
 	_proxyIcon = Ui::CreateChild<ProxyIcon>(this);
 	_progress = Ui::CreateChild<Progress>(this);
 
 	addClickHandler([=] {
-		Ui::show(ProxiesBoxController::CreateOwningBox(account));
+		Ui::show(ProxiesBoxController::CreateOwningBox());
 	});
+
+	subscribe(Global::RefConnectionTypeChanged(), [=] {
+		refreshState();
+	});
+	refreshState();
 }
 
-void ConnectionState::Widget::onStateChanged(
+rpl::producer<float64> ConnectingWidget::visibility() const {
+	return _visibilityValues.events_starting_with(currentVisibility());
+}
+
+void ConnectingWidget::finishAnimating() {
+	if (_contentWidth.animating()) {
+		_contentWidth.finish();
+		updateWidth();
+	}
+	if (_visibility.animating()) {
+		_visibility.finish();
+		updateVisibility();
+	}
+}
+
+void ConnectingWidget::setForceHidden(bool hidden) {
+	if (_forceHidden == hidden) {
+		return;
+	}
+	if (hidden) {
+		const auto real = isHidden();
+		if (!real) {
+			hide();
+		}
+		_realHidden = real;
+	}
+	_forceHidden = hidden;
+	if (!hidden && isHidden() != _realHidden) {
+		setVisible(!_realHidden);
+	}
+}
+
+void ConnectingWidget::setVisibleHook(bool visible) {
+	if (_forceHidden) {
+		_realHidden = !visible;
+		return;
+	}
+	QWidget::setVisible(visible);
+}
+
+base::unique_qptr<ConnectingWidget> ConnectingWidget::CreateDefaultWidget(
+		Ui::RpWidget *parent,
+		rpl::producer<bool> shown) {
+	auto result = base::make_unique_q<Window::ConnectingWidget>(parent);
+	const auto weak = result.get();
+	rpl::combine(
+		result->visibility(),
+		parent->heightValue()
+	) | rpl::start_with_next([=](float64 visible, int height) {
+		const auto hidden = (visible == 0.);
+		if (weak->isHidden() != hidden) {
+			weak->setVisible(!hidden);
+		}
+		const auto size = weak->size();
+		weak->moveToLeft(0, anim::interpolate(
+			height - st::connectingMargin.top(),
+			height - weak->height(),
+			visible));
+	}, weak->lifetime());
+	std::move(
+		shown
+	) | rpl::start_with_next([=](bool shown) {
+		weak->setForceHidden(!shown);
+	}, weak->lifetime());
+	result->finishAnimating();
+	return result;
+}
+
+void ConnectingWidget::onStateChanged(
 		AbstractButton::State was,
 		StateChangeSource source) {
-	Ui::PostponeCall(crl::guard(this, [=] {
-		_refreshStateRequests.fire({});
-	}));
+	crl::on_main(this, [=] { refreshState(); });
 }
 
-rpl::producer<> ConnectionState::Widget::refreshStateRequests() const {
-	return _refreshStateRequests.events();
-}
-
-void ConnectionState::Widget::paintEvent(QPaintEvent *e) {
+void ConnectingWidget::paintEvent(QPaintEvent *e) {
 	Painter p(this);
 	PainterHighQualityEnabler hq(p);
 
@@ -543,13 +288,13 @@ void ConnectionState::Widget::paintEvent(QPaintEvent *e) {
 	}
 }
 
-QRect ConnectionState::Widget::innerRect() const {
+QRect ConnectingWidget::innerRect() const {
 	return rect().marginsRemoved(
 		st::connectingMargin
 	);
 }
 
-QRect ConnectionState::Widget::contentRect() const {
+QRect ConnectingWidget::contentRect() const {
 	return innerRect().marginsRemoved(style::margins(
 		st::connectingLeft.width(),
 		0,
@@ -557,13 +302,13 @@ QRect ConnectionState::Widget::contentRect() const {
 		0));
 }
 
-QRect ConnectionState::Widget::textRect() const {
+QRect ConnectingWidget::textRect() const {
 	return contentRect().marginsRemoved(
 		st::connectingTextPadding
 	);
 }
 
-void ConnectionState::Widget::resizeEvent(QResizeEvent *e) {
+void ConnectingWidget::resizeEvent(QResizeEvent *e) {
 	{
 		const auto xShift = (height() - _progress->width()) / 2;
 		const auto yShift = (height() - _progress->height()) / 2;
@@ -577,7 +322,7 @@ void ConnectionState::Widget::resizeEvent(QResizeEvent *e) {
 	updateRetryGeometry();
 }
 
-void ConnectionState::Widget::updateRetryGeometry() {
+void ConnectingWidget::updateRetryGeometry() {
 	if (!_retry) {
 		return;
 	}
@@ -596,31 +341,194 @@ void ConnectionState::Widget::updateRetryGeometry() {
 	}
 }
 
-void ConnectionState::Widget::setLayout(const Layout &layout) {
-	_currentLayout = layout;
-	_proxyIcon->setToggled(_currentLayout.proxyEnabled);
+void ConnectingWidget::refreshState() {
+	const auto state = [&]() -> State {
+		const auto under = isOver();
+		const auto mtp = MTP::dcstate();
+		const auto throughProxy = Global::UseProxy();
+		if (mtp == MTP::ConnectingState
+			|| mtp == MTP::DisconnectedState
+			|| (mtp < 0 && mtp > -600)) {
+			return { State::Type::Connecting, throughProxy, under };
+		} else if (mtp < 0
+			&& mtp >= -kMinimalWaitingStateDuration
+			&& _state.type != State::Type::Waiting) {
+			return { State::Type::Connecting, throughProxy, under };
+		} else if (mtp < 0) {
+			const auto seconds = ((-mtp) / 1000) + 1;
+			return { State::Type::Waiting, throughProxy, under, seconds };
+		}
+		return { State::Type::Connected, throughProxy, under };
+	}();
+	if (state.waitTillRetry > 0) {
+		_refreshTimer.callOnce(kRefreshTimeout);
+	}
+	if (state == _state) {
+		return;
+	} else if (state.type == State::Type::Connecting
+		&& _state.type == State::Type::Connected) {
+		const auto now = getms();
+		if (!_connectingStartedAt) {
+			_connectingStartedAt = now;
+			_refreshTimer.callOnce(kConnectingStateDelay);
+			return;
+		}
+		const auto applyConnectingAt = std::max(
+			_connectingStartedAt + kConnectingStateDelay,
+			kIgnoreStartConnectingFor);
+		if (now < applyConnectingAt) {
+			_refreshTimer.callOnce(applyConnectingAt - now);
+			return;
+		}
+	}
+	applyState(state);
+}
+
+void ConnectingWidget::applyState(const State &state) {
+	const auto newLayout = computeLayout(state);
+	const auto guard = gsl::finally([&] {
+		updateWidth();
+		update();
+	});
+
+	_state = state;
+	if (_currentLayout.visible != newLayout.visible) {
+		changeVisibilityWithLayout(newLayout);
+		return;
+	}
+	if (_currentLayout.contentWidth != newLayout.contentWidth) {
+		if (!_currentLayout.contentWidth
+			|| !newLayout.contentWidth
+			|| _contentWidth.animating()) {
+			_contentWidth.start(
+				[=] { updateWidth(); },
+				_currentLayout.contentWidth,
+				newLayout.contentWidth,
+				st::connectingDuration);
+		}
+	}
+	const auto saved = _currentLayout;
+	setLayout(newLayout);
+	if (_currentLayout.text.isEmpty()
+		&& !saved.text.isEmpty()
+		&& _contentWidth.animating()) {
+		_currentLayout.text = saved.text;
+		_currentLayout.textWidth = saved.textWidth;
+	}
 	refreshRetryLink(_currentLayout.hasRetry);
 }
 
-void ConnectionState::Widget::setProgressVisibility(bool visible) {
-	if (_progress->isHidden() == visible) {
-		_progress->setVisible(visible);
+void ConnectingWidget::changeVisibilityWithLayout(const Layout &layout) {
+	Expects(_currentLayout.visible != layout.visible);
+
+	const auto changeLayout = !_currentLayout.visible;
+	_visibility.start(
+		[=] { updateVisibility(); },
+		layout.visible ? 0. : 1.,
+		layout.visible ? 1. : 0.,
+		st::connectingDuration);
+	if (_contentWidth.animating()) {
+		_contentWidth.start(
+			[=] { updateWidth(); },
+			_currentLayout.contentWidth,
+			(changeLayout ? layout : _currentLayout).contentWidth,
+			st::connectingDuration);
+	}
+	if (changeLayout) {
+		setLayout(layout);
+	} else {
+		_currentLayout.visible = layout.visible;
 	}
 }
 
-void ConnectionState::Widget::refreshRetryLink(bool hasRetry) {
+void ConnectingWidget::setLayout(const Layout &layout) {
+	_currentLayout = layout;
+	_proxyIcon->setToggled(_currentLayout.proxyEnabled);
+	_progress->setVisible(_contentWidth.animating()
+		|| _currentLayout.progressShown);
+}
+
+void ConnectingWidget::refreshRetryLink(bool hasRetry) {
 	if (hasRetry && !_retry) {
 		_retry = base::make_unique_q<Ui::LinkButton>(
 			this,
-			tr::lng_reconnecting_try_now(tr::now),
+			lang(lng_reconnecting_try_now),
 			st::connectingRetryLink);
 		_retry->addClickHandler([=] {
-			_account->mtp().restart();
+			MTP::restart();
 		});
 		updateRetryGeometry();
 	} else if (!hasRetry) {
 		_retry = nullptr;
 	}
+}
+
+void ConnectingWidget::updateVisibility() {
+	const auto value = currentVisibility();
+	if (value == 0. && _contentWidth.animating()) {
+		_contentWidth.finish();
+		updateWidth();
+	}
+	_visibilityValues.fire_copy(value);
+}
+
+float64 ConnectingWidget::currentVisibility() const {
+	return _visibility.current(_currentLayout.visible ? 1. : 0.);
+}
+
+auto ConnectingWidget::computeLayout(const State &state) const -> Layout {
+	auto result = Layout();
+	result.proxyEnabled = state.useProxy;
+	result.progressShown = (state.type != State::Type::Connected);
+	result.visible = state.useProxy
+		|| state.type == State::Type::Connecting
+		|| state.type == State::Type::Waiting;
+	switch (state.type) {
+	case State::Type::Connecting:
+		result.text = state.underCursor ? lang(lng_connecting) : QString();
+		break;
+
+	case State::Type::Waiting:
+		Assert(state.waitTillRetry > 0);
+		result.text = lng_reconnecting(lt_count, state.waitTillRetry);
+		break;
+	}
+	result.textWidth = st::normalFont->width(result.text);
+	const auto maxTextWidth = (state.type == State::Type::Waiting)
+		? st::normalFont->width(lng_reconnecting(lt_count, 88))
+		: result.textWidth;
+	result.contentWidth = (result.textWidth > 0)
+		? (st::connectingTextPadding.left()
+			+ result.textWidth
+			+ st::connectingTextPadding.right())
+		: 0;
+	if (state.type == State::Type::Waiting) {
+		result.contentWidth += st::connectingRetryLink.padding.left()
+			+ st::connectingRetryLink.font->width(
+				lang(lng_reconnecting_try_now))
+			+ st::connectingRetryLink.padding.right();
+	}
+	result.hasRetry = (state.type == State::Type::Waiting);
+	return result;
+}
+
+void ConnectingWidget::updateWidth() {
+	const auto current = _contentWidth.current(_currentLayout.contentWidth);
+	const auto height = st::connectingLeft.height();
+	const auto desired = QRect(0, 0, current, height).marginsAdded(
+		style::margins(
+			st::connectingLeft.width(),
+			0,
+			st::connectingRight.width(),
+			0)
+	).marginsAdded(
+		st::connectingMargin
+	);
+	resize(desired.size());
+	if (!_contentWidth.animating()) {
+		_progress->setVisible(_currentLayout.progressShown);
+	}
+	update();
 }
 
 rpl::producer<bool> AdaptiveIsOneColumn() {

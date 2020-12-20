@@ -9,11 +9,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/timer.h"
 #include "ui/rp_widget.h"
-#include "ui/effects/animations.h"
 #include "info/info_controller.h"
 
 namespace Window {
-class SessionController;
+class Controller;
 } // namespace Window
 
 namespace Ui {
@@ -28,9 +27,14 @@ class CoverWidget;
 
 class Panel : public Ui::RpWidget, private Info::AbstractController {
 public:
+	enum class Layout {
+		Full,
+		OnlyPlaylist,
+	};
 	Panel(
 		QWidget *parent,
-		not_null<Window::SessionController*> controller);
+		not_null<Window::Controller*> controller,
+		Layout layout);
 
 	bool overlaps(const QRect &globalRect);
 
@@ -38,6 +42,10 @@ public:
 
 	void showFromOther();
 	void hideFromOther();
+
+	using ButtonCallback = Fn<void()>;
+	void setPinCallback(ButtonCallback &&callback);
+	void setCloseCallback(ButtonCallback &&callback);
 
 	int bestPositionFor(int left) const;
 
@@ -60,6 +68,7 @@ private:
 	void listHeightUpdated(int newHeight);
 	int emptyInnerHeight() const;
 	bool contentTooSmall() const;
+	void windowActiveChanged();
 
 	void ensureCreated();
 	void performDestroy();
@@ -87,17 +96,21 @@ private:
 		return static_cast<Info::AbstractController*>(this);
 	}
 
+	Layout _layout;
 	bool _hiding = false;
 
 	QPixmap _cache;
-	Ui::Animations::Simple _a_appearance;
+	Animation _a_appearance;
 
 	bool _ignoringEnterEvents = false;
 
 	base::Timer _showTimer;
 	base::Timer _hideTimer;
 
+	ButtonCallback _pinCallback, _closeCallback;
+	object_ptr<CoverWidget> _cover = { nullptr };
 	object_ptr<Ui::ScrollArea> _scroll;
+	object_ptr<Ui::Shadow> _scrollShadow = { nullptr };
 
 	rpl::lifetime _refreshListLifetime;
 	PeerData *_listPeer = nullptr;
@@ -105,5 +118,5 @@ private:
 
 };
 
-} // namespace Player
+} // namespace Clip
 } // namespace Media

@@ -32,15 +32,9 @@ public:
 		int outerWidth,
 		int size) const;
 	QPixmap generate(int size);
-	InMemoryKey uniqueKey() const;
+	StorageKey uniqueKey() const;
 
 	static void PaintSavedMessages(
-		Painter &p,
-		int x,
-		int y,
-		int outerWidth,
-		int size);
-	static void PaintSavedMessagesRounded(
 		Painter &p,
 		int x,
 		int y,
@@ -54,47 +48,6 @@ public:
 		int size,
 		const style::color &bg,
 		const style::color &fg);
-	static void PaintSavedMessagesRounded(
-		Painter &p,
-		int x,
-		int y,
-		int outerWidth,
-		int size,
-		const style::color &bg,
-		const style::color &fg);
-	static QPixmap GenerateSavedMessages(int size);
-	static QPixmap GenerateSavedMessagesRounded(int size);
-
-	static void PaintRepliesMessages(
-		Painter &p,
-		int x,
-		int y,
-		int outerWidth,
-		int size);
-	static void PaintRepliesMessagesRounded(
-		Painter &p,
-		int x,
-		int y,
-		int outerWidth,
-		int size);
-	static void PaintRepliesMessages(
-		Painter &p,
-		int x,
-		int y,
-		int outerWidth,
-		int size,
-		const style::color &bg,
-		const style::color &fg);
-	static void PaintRepliesMessagesRounded(
-		Painter &p,
-		int x,
-		int y,
-		int outerWidth,
-		int size,
-		const style::color &bg,
-		const style::color &fg);
-	static QPixmap GenerateRepliesMessages(int size);
-	static QPixmap GenerateRepliesMessagesRounded(int size);
 
 	~EmptyUserpic();
 

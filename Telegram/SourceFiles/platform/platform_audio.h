@@ -19,9 +19,7 @@ void DeInit();
 
 // Platform dependent implementations.
 
-#if defined Q_OS_WINRT || defined Q_OS_WIN
-#include "platform/win/audio_win.h"
-#else // Q_OS_WINRT || Q_OS_WIN
+#if defined Q_OS_MAC || defined Q_OS_LINUX
 namespace Platform {
 namespace Audio {
 
@@ -33,4 +31,6 @@ inline void DeInit() {
 
 } // namespace Audio
 } // namespace Platform
-#endif // Q_OS_WINRT || Q_OS_WIN
+#elif defined Q_OS_WINRT || defined Q_OS_WIN // Q_OS_MAC || Q_OS_LINUX
+#include "platform/win/audio_win.h"
+#endif // Q_OS_MAC || Q_OS_LINUX || Q_OS_WINRT || Q_OS_WIN

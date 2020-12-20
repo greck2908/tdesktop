@@ -23,17 +23,14 @@ namespace Passport {
 Panel::Panel(not_null<PanelController*> controller)
 : _controller(controller)
 , _widget(std::make_unique<Ui::SeparatePanel>()) {
-	_widget->setTitle(tr::lng_passport_title());
+	_widget->setTitle(Lang::Viewer(lng_passport_title));
 	_widget->setInnerSize(st::passportPanelSize);
 
-	_widget->closeRequests(
+	rpl::merge(
+		_widget->closeRequests(),
+		_widget->destroyRequests()
 	) | rpl::start_with_next([=] {
 		_controller->cancelAuth();
-	}, _widget->lifetime());
-
-	_widget->closeEvents(
-	) | rpl::start_with_next([=] {
-		_controller->cancelAuthSure();
 	}, _widget->lifetime());
 }
 
@@ -50,7 +47,7 @@ not_null<Ui::RpWidget*> Panel::widget() const {
 }
 
 int Panel::hideAndDestroyGetDuration() {
-	return _widget->hideGetDuration();
+	return _widget->hideAndDestroyGetDuration();
 }
 
 void Panel::showAskPassword() {
@@ -71,6 +68,7 @@ void Panel::showCriticalError(const QString &error) {
 		object_ptr<Ui::FlatLabel>(
 			_widget.get(),
 			error,
+			Ui::FlatLabel::InitType::Simple,
 			st::passportErrorLabel),
 		style::margins(0, st::passportPanelSize.height() / 3, 0, 0));
 	container->widthValue(
@@ -93,11 +91,10 @@ void Panel::showEditValue(object_ptr<Ui::RpWidget> from) {
 }
 
 void Panel::showBox(
-		object_ptr<Ui::BoxContent> box,
-		Ui::LayerOptions options,
+		object_ptr<BoxContent> box,
+		LayerOptions options,
 		anim::type animated) {
 	_widget->showBox(std::move(box), options, animated);
-	_widget->showAndActivate();
 }
 
 void Panel::showToast(const QString &text) {

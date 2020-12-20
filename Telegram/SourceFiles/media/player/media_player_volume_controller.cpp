@@ -7,47 +7,35 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "media/player/media_player_volume_controller.h"
 
-#include "media/audio/media_audio.h"
+#include "media/media_audio.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/shadow.h"
 #include "ui/widgets/continuous_sliders.h"
-#include "ui/ui_utility.h"
-#include "ui/cached_round_corners.h"
-#include "base/object_ptr.h"
-#include "mainwindow.h"
-#include "main/main_session.h"
-#include "window/window_session_controller.h"
-#include "core/application.h"
-#include "core/core_settings.h"
 #include "styles/style_media_player.h"
 #include "styles/style_widgets.h"
+#include "mainwindow.h"
 
 namespace Media {
 namespace Player {
 
-VolumeController::VolumeController(
-	QWidget *parent,
-	not_null<Window::SessionController*> controller)
-: RpWidget(parent)
+VolumeController::VolumeController(QWidget *parent) : TWidget(parent)
 , _slider(this, st::mediaPlayerPanelPlayback) {
 	_slider->setMoveByWheel(true);
-	_slider->setChangeProgressCallback([=](float64 volume) {
+	_slider->setChangeProgressCallback([this](float64 volume) {
 		applyVolumeChange(volume);
 	});
-	_slider->setChangeFinishedCallback([=](float64 volume) {
+	_slider->setChangeFinishedCallback([this](float64 volume) {
 		if (volume > 0) {
-			Core::App().settings().setRememberedSongVolume(volume);
+			Global::SetRememberedSongVolume(volume);
 		}
 		applyVolumeChange(volume);
-		Core::App().saveSettingsDelayed();
 	});
-	Core::App().settings().songVolumeChanges(
-	) | rpl::start_with_next([=](float64 volume) {
+	subscribe(Global::RefSongVolumeChanged(), [this] {
 		if (!_slider->isChanging()) {
-			_slider->setValue(volume);
+			_slider->setValue(Global::SongVolume());
 		}
-	}, lifetime());
-	setVolume(Core::App().settings().songVolume());
+	});
+	setVolume(Global::SongVolume());
 
 	resize(st::mediaPlayerPanelVolumeWidth, 2 * st::mediaPlayerPanelPlaybackPadding + st::mediaPlayerPanelPlayback.width);
 }
@@ -65,23 +53,21 @@ void VolumeController::resizeEvent(QResizeEvent *e) {
 void VolumeController::setVolume(float64 volume) {
 	_slider->setValue(volume);
 	if (volume > 0) {
-		Core::App().settings().setRememberedSongVolume(volume);
+		Global::SetRememberedSongVolume(volume);
 	}
 	applyVolumeChange(volume);
 }
 
 void VolumeController::applyVolumeChange(float64 volume) {
-	if (volume != Core::App().settings().songVolume()) {
-		Core::App().settings().setSongVolume(volume);
-		mixer()->setSongVolume(Core::App().settings().songVolume());
+	if (volume != Global::SongVolume()) {
+		Global::SetSongVolume(volume);
+		mixer()->setSongVolume(Global::SongVolume());
+		Global::RefSongVolumeChanged().notify();
 	}
 }
 
-VolumeWidget::VolumeWidget(
-	QWidget *parent,
-	not_null<Window::SessionController*> controller)
-: RpWidget(parent)
-, _controller(this, controller) {
+VolumeWidget::VolumeWidget(QWidget *parent) : TWidget(parent)
+, _controller(this) {
 	hide();
 	_controller->setIsVertical(true);
 
@@ -91,12 +77,9 @@ VolumeWidget::VolumeWidget(
 	_showTimer.setSingleShot(true);
 	connect(&_showTimer, SIGNAL(timeout()), this, SLOT(onShowStart()));
 
-	macWindowDeactivateEvents(
-	) | rpl::filter([=] {
-		return !isHidden();
-	}) | rpl::start_with_next([=] {
-		leaveEvent(nullptr);
-	}, lifetime());
+	if (cPlatform() == dbipMac || cPlatform() == dbipMacOld) {
+		connect(App::wnd()->windowHandle(), SIGNAL(activeChanged()), this, SLOT(onWindowActiveChanged()));
+	}
 
 	hide();
 	auto margin = getMargin();
@@ -104,17 +87,19 @@ VolumeWidget::VolumeWidget(
 }
 
 QMargins VolumeWidget::getMargin() const {
-	const auto top = st::mediaPlayerHeight
-		+ st::lineWidth
-		- st::mediaPlayerPlayTop
-		- st::mediaPlayerVolumeToggle.height;
-	return QMargins(st::mediaPlayerVolumeMargin, top, st::mediaPlayerVolumeMargin, st::mediaPlayerVolumeMargin);
+	return QMargins(st::mediaPlayerVolumeMargin, st::mediaPlayerPlayback.fullWidth, st::mediaPlayerVolumeMargin, st::mediaPlayerVolumeMargin);
 }
 
 bool VolumeWidget::overlaps(const QRect &globalRect) {
 	if (isHidden() || _a_appearance.animating()) return false;
 
 	return rect().marginsRemoved(getMargin()).contains(QRect(mapFromGlobal(globalRect.topLeft()), globalRect.size()));
+}
+
+void VolumeWidget::onWindowActiveChanged() {
+	if (!App::wnd()->windowHandle()->isActive() && !isHidden()) {
+		leaveEvent(nullptr);
+	}
 }
 
 void VolumeWidget::resizeEvent(QResizeEvent *e) {
@@ -126,9 +111,9 @@ void VolumeWidget::paintEvent(QPaintEvent *e) {
 	Painter p(this);
 
 	if (!_cache.isNull()) {
-		bool animating = _a_appearance.animating();
+		bool animating = _a_appearance.animating(getms());
 		if (animating) {
-			p.setOpacity(_a_appearance.value(_hiding ? 0. : 1.));
+			p.setOpacity(_a_appearance.current(_hiding));
 		} else if (_hiding || isHidden()) {
 			hidingFinished();
 			return;
@@ -146,32 +131,32 @@ void VolumeWidget::paintEvent(QPaintEvent *e) {
 	auto shadowedSides = RectPart::Left | RectPart::Right | RectPart::Bottom;
 	Ui::Shadow::paint(p, shadowedRect, width(), st::defaultRoundShadow, shadowedSides);
 	auto parts = RectPart::NoTopBottom | RectPart::FullBottom;
-	Ui::FillRoundRect(p, QRect(shadowedRect.x(), -st::roundRadiusSmall, shadowedRect.width(), shadowedRect.y() + shadowedRect.height() + st::roundRadiusSmall), st::menuBg, Ui::MenuCorners, nullptr, parts);
+	App::roundRect(p, QRect(shadowedRect.x(), -st::buttonRadius, shadowedRect.width(), shadowedRect.y() + shadowedRect.height() + st::buttonRadius), st::menuBg, MenuCorners, nullptr, parts);
 }
 
 void VolumeWidget::enterEventHook(QEvent *e) {
 	_hideTimer.stop();
-	if (_a_appearance.animating()) {
+	if (_a_appearance.animating(getms())) {
 		onShowStart();
 	} else {
 		_showTimer.start(0);
 	}
-	return RpWidget::enterEventHook(e);
+	return TWidget::enterEventHook(e);
 }
 
 void VolumeWidget::leaveEventHook(QEvent *e) {
 	_showTimer.stop();
-	if (_a_appearance.animating()) {
+	if (_a_appearance.animating(getms())) {
 		onHideStart();
 	} else {
 		_hideTimer.start(300);
 	}
-	return RpWidget::leaveEventHook(e);
+	return TWidget::leaveEventHook(e);
 }
 
 void VolumeWidget::otherEnter() {
 	_hideTimer.stop();
-	if (_a_appearance.animating()) {
+	if (_a_appearance.animating(getms())) {
 		onShowStart();
 	} else {
 		_showTimer.start(0);
@@ -180,7 +165,7 @@ void VolumeWidget::otherEnter() {
 
 void VolumeWidget::otherLeave() {
 	_showTimer.stop();
-	if (_a_appearance.animating()) {
+	if (_a_appearance.animating(getms())) {
 		onHideStart();
 	} else {
 		_hideTimer.start(0);
@@ -205,16 +190,14 @@ void VolumeWidget::onHideStart() {
 }
 
 void VolumeWidget::startAnimation() {
+	auto from = _hiding ? 1. : 0.;
+	auto to = _hiding ? 0. : 1.;
 	if (_cache.isNull()) {
 		showChildren();
 		_cache = Ui::GrabWidget(this);
 	}
 	hideChildren();
-	_a_appearance.start(
-		[=] { appearanceCallback(); },
-		_hiding ? 1. : 0.,
-		_hiding ? 0. : 1.,
-		st::defaultInnerDropdown.duration);
+	_a_appearance.start([this] { appearanceCallback(); }, from, to, st::defaultInnerDropdown.duration);
 }
 
 void VolumeWidget::appearanceCallback() {
