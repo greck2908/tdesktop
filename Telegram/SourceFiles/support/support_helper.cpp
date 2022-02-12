@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/toast/toast.h"
 #include "ui/widgets/input_fields.h"
 #include "ui/chat/attach/attach_prepare.h"
+#include "ui/text/format_values.h"
 #include "ui/text/text_entity.h"
 #include "ui/text/text_options.h"
 #include "chat_helpers/message_field.h"
@@ -135,29 +136,6 @@ void EditInfoBox::setInnerFocus() {
 	_field->setFocusFast();
 }
 
-QString FormatDateTime(TimeId value) {
-	const auto now = QDateTime::currentDateTime();
-	const auto date = base::unixtime::parse(value);
-	if (date.date() == now.date()) {
-		return tr::lng_mediaview_today(
-			tr::now,
-			lt_time,
-			date.time().toString(cTimeFormat()));
-	} else if (date.date().addDays(1) == now.date()) {
-		return tr::lng_mediaview_yesterday(
-			tr::now,
-			lt_time,
-			date.time().toString(cTimeFormat()));
-	} else {
-		return tr::lng_mediaview_date_time(
-			tr::now,
-			lt_date,
-			date.date().toString(qsl("dd.MM.yy")),
-			lt_time,
-			date.time().toString(cTimeFormat()));
-	}
-}
-
 uint32 OccupationTag() {
 	return uint32(Core::Sandbox::Instance().installationTag() & 0xFFFFFFFF);
 }
@@ -177,7 +155,7 @@ Data::Draft OccupiedDraft(const QString &normalizedName) {
 			+ normalizedName },
 		MsgId(0),
 		MessageCursor(),
-		false
+		Data::PreviewState::Allowed
 	};
 }
 
@@ -199,22 +177,18 @@ uint32 ParseOccupationTag(History *history) {
 		return 0;
 	}
 	const auto &text = draft->textWithTags.text;
-#ifndef OS_MAC_OLD
-	const auto parts = text.splitRef(';');
-#else // OS_MAC_OLD
-	const auto parts = text.split(';');
-#endif // OS_MAC_OLD
+	const auto parts = QStringView(text).split(';');
 	auto valid = false;
 	auto result = uint32();
 	for (const auto &part : parts) {
 		if (part.startsWith(qstr("t:"))) {
-			if (part.mid(2).toInt() >= base::unixtime::now()) {
+			if (base::StringViewMid(part, 2).toInt() >= base::unixtime::now()) {
 				valid = true;
 			} else {
 				return 0;
 			}
 		} else if (part.startsWith(qstr("u:"))) {
-			result = part.mid(2).toUInt();
+			result = base::StringViewMid(part, 2).toUInt();
 		}
 	}
 	return valid ? result : 0;
@@ -229,26 +203,18 @@ QString ParseOccupationName(History *history) {
 		return QString();
 	}
 	const auto &text = draft->textWithTags.text;
-#ifndef OS_MAC_OLD
-	const auto parts = text.splitRef(';');
-#else // OS_MAC_OLD
-	const auto parts = text.split(';');
-#endif // OS_MAC_OLD
+	const auto parts = QStringView(text).split(';');
 	auto valid = false;
 	auto result = QString();
 	for (const auto &part : parts) {
 		if (part.startsWith(qstr("t:"))) {
-			if (part.mid(2).toInt() >= base::unixtime::now()) {
+			if (base::StringViewMid(part, 2).toInt() >= base::unixtime::now()) {
 				valid = true;
 			} else {
 				return 0;
 			}
 		} else if (part.startsWith(qstr("n:"))) {
-#ifndef OS_MAC_OLD
-			result = part.mid(2).toString();
-#else // OS_MAC_OLD
-			result = part.mid(2);
-#endif // OS_MAC_OLD
+			result = base::StringViewMid(part, 2).toString();
 		}
 	}
 	return valid ? result : QString();
@@ -263,22 +229,18 @@ TimeId OccupiedBySomeoneTill(History *history) {
 		return 0;
 	}
 	const auto &text = draft->textWithTags.text;
-#ifndef OS_MAC_OLD
-	const auto parts = text.splitRef(';');
-#else // OS_MAC_OLD
-	const auto parts = text.split(';');
-#endif // OS_MAC_OLD
+	const auto parts = QStringView(text).split(';');
 	auto valid = false;
 	auto result = TimeId();
 	for (const auto &part : parts) {
 		if (part.startsWith(qstr("t:"))) {
-			if (part.mid(2).toInt() >= base::unixtime::now()) {
-				result = part.mid(2).toInt();
+			if (base::StringViewMid(part, 2).toInt() >= base::unixtime::now()) {
+				result = base::StringViewMid(part, 2).toInt();
 			} else {
 				return 0;
 			}
 		} else if (part.startsWith(qstr("u:"))) {
-			if (part.mid(2).toUInt() != OccupationTag()) {
+			if (base::StringViewMid(part, 2).toUInt() != OccupationTag()) {
 				valid = true;
 			} else {
 				return 0;
@@ -301,7 +263,7 @@ Helper::Helper(not_null<Main::Session*> session)
 		result.match([&](const MTPDhelp_supportName &data) {
 			setSupportName(qs(data.vname()));
 		});
-	}).fail([=](const RPCError &error) {
+	}).fail([=] {
 		setSupportName(
 			qsl("[rand^")
 			+ QString::number(Core::Sandbox::Instance().installationTag())
@@ -484,7 +446,11 @@ rpl::producer<QString> Helper::infoLabelValue(
 	return infoValue(
 		user
 	) | rpl::map([](const Support::UserInfo &info) {
-		return info.author + ", " + FormatDateTime(info.date);
+		const auto time = Ui::FormatDateTime(
+			base::unixtime::parse(info.date),
+			cDateFormat(),
+			cTimeFormat());
+		return info.author + ", " + time;
 	});
 }
 
@@ -526,7 +492,7 @@ void Helper::showEditInfoBox(
 			TextUtilities::ConvertTextTagsToEntities(result.tags)
 		}, done);
 	};
-	Ui::show(
+	controller->show(
 		Box<EditInfoBox>(controller, editData, save),
 		Ui::LayerOption::KeepOther);
 }
@@ -563,7 +529,7 @@ void Helper::saveInfo(
 	)).done([=](const MTPhelp_UserInfo &result) {
 		applyInfo(user, result);
 		done(true);
-	}).fail([=](const RPCError &error) {
+	}).fail([=] {
 		done(false);
 	}).send();
 }
@@ -595,11 +561,16 @@ QString InterpretSendPath(
 	auto caption = QString();
 	for (const auto &line : lines) {
 		if (line.startsWith(qstr("from: "))) {
-			if (window->session().userId() != line.mid(qstr("from: ").size()).toInt()) {
+			if (window->session().userId().bare
+				!= base::StringViewMid(
+					line,
+					qstr("from: ").size()).toULongLong()) {
 				return "App Error: Wrong current user.";
 			}
 		} else if (line.startsWith(qstr("channel: "))) {
-			const auto channelId = line.mid(qstr("channel: ").size()).toInt();
+			const auto channelId = base::StringViewMid(
+				line,
+				qstr("channel: ").size()).toULongLong();
 			toId = peerFromChannel(channelId);
 		} else if (line.startsWith(qstr("file: "))) {
 			const auto path = line.mid(qstr("file: ").size());
@@ -617,7 +588,8 @@ QString InterpretSendPath(
 	}
 	const auto history = window->session().data().historyLoaded(toId);
 	if (!history) {
-		return "App Error: Could not find channel with id: " + QString::number(peerToChannel(toId));
+		return "App Error: Could not find channel with id: "
+			+ QString::number(peerToChannel(toId).bare);
 	}
 	Ui::showPeerHistory(history, ShowAtUnreadMsgId);
 	history->session().api().sendFiles(

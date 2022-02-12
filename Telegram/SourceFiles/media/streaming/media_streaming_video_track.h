@@ -58,6 +58,11 @@ public:
 	[[nodiscard]] QImage frame(
 		const FrameRequest &request,
 		const Instance *instance);
+	[[nodiscard]] FrameWithInfo frameWithInfo(
+		const FrameRequest &request,
+		const Instance *instance);
+	[[nodiscard]] FrameWithInfo frameWithInfo(const Instance *instance);
+	[[nodiscard]] QImage currentFrameImage();
 	void unregisterInstance(not_null<const Instance*> instance);
 	[[nodiscard]] rpl::producer<> checkNextFrame() const;
 	[[nodiscard]] rpl::producer<> waitingForData() const;
@@ -78,13 +83,20 @@ private:
 	struct Frame {
 		FFmpeg::FramePointer decoded = FFmpeg::MakeFramePointer();
 		QImage original;
+		FrameYUV420 yuv420;
 		crl::time position = kTimeUnknown;
 		crl::time displayed = kTimeUnknown;
 		crl::time display = kTimeUnknown;
+		FrameFormat format = FrameFormat::None;
 
 		base::flat_map<const Instance*, Prepared> prepared;
 
+		int index = 0;
 		bool alpha = false;
+	};
+	struct FrameWithIndex {
+		not_null<Frame*> frame;
+		int index = -1;
 	};
 
 	class Shared {
@@ -102,7 +114,7 @@ private:
 		};
 
 		// Called from the wrapped object queue.
-		void init(QImage &&cover, crl::time position);
+		void init(QImage &&cover, bool hasAlpha, crl::time position);
 		[[nodiscard]] bool initialized() const;
 
 		[[nodiscard]] PrepareState prepareState(
@@ -123,6 +135,7 @@ private:
 		bool markFrameShown();
 		[[nodiscard]] crl::time nextFrameDisplayTime() const;
 		[[nodiscard]] not_null<Frame*> frameForPaint();
+		[[nodiscard]] FrameWithIndex frameForPaintWithIndex();
 
 	private:
 		[[nodiscard]] not_null<Frame*> getFrame(int index);
@@ -147,6 +160,11 @@ private:
 	[[nodiscard]] static bool IsStale(
 		not_null<const Frame*> frame,
 		crl::time trackTime);
+
+	[[nodiscard]] QImage frameImage(
+		not_null<Frame*> frame,
+		const FrameRequest &request,
+		const Instance *instance);
 
 	const int _streamIndex = 0;
 	const AVRational _streamTimeBase;

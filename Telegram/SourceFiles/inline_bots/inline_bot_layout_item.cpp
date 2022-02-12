@@ -28,14 +28,6 @@ NeverFreedPointer<DocumentItems> documentItemsMap;
 
 } // namespace
 
-void ItemBase::setPosition(int32 position) {
-	_position = position;
-}
-
-int32 ItemBase::position() const {
-	return _position;
-}
-
 Result *ItemBase::getResult() const {
 	return _result;
 }
@@ -166,7 +158,7 @@ Image *ItemBase::getResultThumb(Data::FileOrigin origin) const {
 QPixmap ItemBase::getResultContactAvatar(int width, int height) const {
 	if (_result->_type == Result::Type::Contact) {
 		auto result = Ui::EmptyUserpic(
-			Data::PeerUserpicColor(qHash(_result->_id)),
+			Data::PeerUserpicColor(FakeChatId(BareId(qHash(_result->_id)))),
 			_result->getLayoutTitle()
 		).generate(width);
 		if (result.height() != height * cIntRetinaFactor()) {
@@ -198,21 +190,16 @@ ClickHandlerPtr ItemBase::getResultPreviewHandler() const {
 			_result->_content_url,
 			false);
 	} else if (const auto document = _result->_document
-		&& _result->_document->createMediaView()->canBePlayed()) {
-		return std::make_shared<DocumentOpenClickHandler>(
-			_result->_document);
+		; document && document->createMediaView()->canBePlayed(nullptr)) {
+		return std::make_shared<OpenFileClickHandler>();
 	} else if (_result->_photo) {
-		return std::make_shared<PhotoOpenClickHandler>(_result->_photo);
+		return std::make_shared<OpenFileClickHandler>();
 	}
 	return ClickHandlerPtr();
 }
 
 QString ItemBase::getResultThumbLetter() const {
-#ifndef OS_MAC_OLD
-	auto parts = _result->_url.splitRef('/');
-#else // OS_MAC_OLD
-	auto parts = _result->_url.split('/');
-#endif // OS_MAC_OLD
+	auto parts = QStringView(_result->_url).split('/');
 	if (!parts.isEmpty()) {
 		auto domain = parts.at(0);
 		if (parts.size() > 2 && domain.endsWith(':') && parts.at(1).isEmpty()) { // http:// and others

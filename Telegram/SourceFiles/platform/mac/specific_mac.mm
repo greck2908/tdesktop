@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "storage/localstorage.h"
+#include "window/window_controller.h"
 #include "mainwindow.h"
 #include "history/history_location_manager.h"
 #include "base/platform/mac/base_utilities_mac.h"
@@ -22,7 +23,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtGui/QDesktopServices>
 #include <QtWidgets/QApplication>
-#include <QtWidgets/QDesktopWidget>
 
 #include <cstdlib>
 #include <execinfo.h>
@@ -32,31 +32,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <CoreFoundation/CFURL.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/hidsystem/ev_keymap.h>
-#include <SPMediaKeyTap.h>
 #include <mach-o/dyld.h>
 #include <AVFoundation/AVFoundation.h>
 
-QRect psDesktopRect() {
-	static QRect _monitorRect;
-	static crl::time _monitorLastGot = 0;
-	auto tnow = crl::now();
-	if (tnow > _monitorLastGot + 1000 || tnow < _monitorLastGot) {
-		_monitorLastGot = tnow;
-		_monitorRect = QApplication::desktop()->availableGeometry(App::wnd());
-	}
-	return _monitorRect;
-}
-
-void psWriteDump() {
-#ifndef DESKTOP_APP_DISABLE_CRASH_REPORTS
-	double v = objc_appkitVersion();
-	CrashReports::dump() << "OS-Version: " << v;
-#endif // DESKTOP_APP_DISABLE_CRASH_REPORTS
-}
-
 void psActivateProcess(uint64 pid) {
 	if (!pid) {
-		objc_activateProgram(App::wnd() ? App::wnd()->winId() : 0);
+		const auto window = Core::App().activeWindow();
+		objc_activateProgram(window ? window->widget()->winId() : 0);
 	}
 }
 
@@ -66,7 +48,7 @@ QString psAppDataPath() {
 
 void psDoCleanup() {
 	try {
-		psAutoStart(false, true);
+		Platform::AutostartToggle(false);
 		psSendToMenu(false, true);
 	} catch (...) {
 	}
@@ -122,16 +104,17 @@ std::optional<bool> IsDarkMode() {
 		: std::nullopt;
 }
 
-void RegisterCustomScheme(bool force) {
-	OSStatus result = LSSetDefaultHandlerForURLScheme(CFSTR("tg"), (CFStringRef)[[NSBundle mainBundle] bundleIdentifier]);
-	DEBUG_LOG(("App Info: set default handler for 'tg' scheme result: %1").arg(result));
+void WriteCrashDumpDetails() {
+#ifndef DESKTOP_APP_DISABLE_CRASH_REPORTS
+	double v = objc_appkitVersion();
+	CrashReports::dump() << "OS-Version: " << v;
+#endif // DESKTOP_APP_DISABLE_CRASH_REPORTS
 }
 
 // I do check for availability, just not in the exact way clang is content with
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunguarded-availability"
 PermissionStatus GetPermissionStatus(PermissionType type) {
-#ifndef OS_MAC_OLD
 	switch (type) {
 	case PermissionType::Microphone:
 	case PermissionType::Camera:
@@ -151,12 +134,10 @@ PermissionStatus GetPermissionStatus(PermissionType type) {
 		}
 		break;
 	}
-#endif // OS_MAC_OLD
 	return PermissionStatus::Granted;
 }
 
 void RequestPermission(PermissionType type, Fn<void(PermissionStatus)> resultCallback) {
-#ifndef OS_MAC_OLD
 	switch (type) {
 	case PermissionType::Microphone:
 	case PermissionType::Camera:
@@ -172,13 +153,11 @@ void RequestPermission(PermissionType type, Fn<void(PermissionStatus)> resultCal
 		}
 		break;
 	}
-#endif // OS_MAC_OLD
 	resultCallback(PermissionStatus::Granted);
 }
 #pragma clang diagnostic pop // -Wunguarded-availability
 
 void OpenSystemSettingsForPermission(PermissionType type) {
-#ifndef OS_MAC_OLD
 	switch (type) {
 	case PermissionType::Microphone:
 		[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"]];
@@ -187,7 +166,6 @@ void OpenSystemSettingsForPermission(PermissionType type) {
 		[[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"]];
 		break;
 	}
-#endif // OS_MAC_OLD
 }
 
 bool OpenSystemSettings(SystemSettingsType type) {
@@ -203,23 +181,19 @@ void IgnoreApplicationActivationRightNow() {
 	objc_ignoreApplicationActivationRightNow();
 }
 
-Window::ControlsLayout WindowControlsLayout() {
-	return Window::ControlsLayout{
-		.left = {
-			Window::Control::Close,
-			Window::Control::Minimize,
-			Window::Control::Maximize,
-		}
-	};
+void AutostartToggle(bool enabled, Fn<void(bool)> done) {
+	if (done) {
+		done(false);
+	}
+}
+
+bool AutostartSkip() {
+	return !cAutoStart();
 }
 
 } // namespace Platform
 
 void psNewVersion() {
-	Platform::RegisterCustomScheme();
-}
-
-void psAutoStart(bool start, bool silent) {
 }
 
 void psSendToMenu(bool send, bool silent) {

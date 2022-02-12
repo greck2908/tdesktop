@@ -22,6 +22,7 @@ enum class Type;
 
 namespace Api {
 struct SendOptions;
+struct SendAction;
 } // namespace Api
 
 namespace Ui {
@@ -74,6 +75,9 @@ public:
 		const Window::SectionShow &params) override;
 	std::shared_ptr<Window::SectionMemento> createMemento() override;
 
+	Window::SectionActionResult sendBotCommand(
+		Bot::SendCommandRequest request) override;
+
 	void setInternalState(
 		const QRect &geometry,
 		not_null<ScheduledMemento*> memento);
@@ -115,6 +119,11 @@ public:
 		const QString &command,
 		const FullMsgId &context) override;
 	void listHandleViaClick(not_null<UserData*> bot) override;
+	not_null<Ui::ChatTheme*> listChatTheme() override;
+	CopyRestrictionType listCopyRestrictionType(HistoryItem *item) override;
+	CopyRestrictionType listSelectRestrictionType() override;
+	auto listAllowedReactionsValue()
+		-> rpl::producer<std::optional<base::flat_set<QString>>> override;
 
 protected:
 	void resizeEvent(QResizeEvent *e) override;
@@ -149,6 +158,8 @@ private:
 	void confirmDeleteSelected();
 	void clearSelected();
 
+	[[nodiscard]] Api::SendAction prepareSendAction(
+		Api::SendOptions options) const;
 	void send();
 	void send(Api::SendOptions options);
 	void sendVoice(QByteArray bytes, VoiceWaveform waveform, int duration);
@@ -203,6 +214,7 @@ private:
 		Api::SendOptions options);
 
 	const not_null<History*> _history;
+	std::shared_ptr<Ui::ChatTheme> _theme;
 	object_ptr<Ui::ScrollArea> _scroll;
 	QPointer<ListWidget> _inner;
 	object_ptr<TopBarWidget> _topBar;

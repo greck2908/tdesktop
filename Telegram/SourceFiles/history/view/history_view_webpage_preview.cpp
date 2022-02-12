@@ -15,7 +15,6 @@ namespace HistoryView {
 WebPageText TitleAndDescriptionFromWebPage(not_null<WebPageData*> d) {
 	QString resultTitle, resultDescription;
 	const auto document = d->document;
-	const auto photo = d->photo;
 	const auto author = d->author;
 	const auto siteName = d->siteName;
 	const auto title = d->title;
@@ -57,9 +56,13 @@ WebPageText TitleAndDescriptionFromWebPage(not_null<WebPageData*> d) {
 	return { resultTitle, resultDescription };
 }
 
-bool DrawWebPageDataPreview(Painter &p, not_null<WebPageData*> d, QRect to) {
-	const auto document = d->document;
-	const auto photo = d->photo;
+bool DrawWebPageDataPreview(
+		Painter &p,
+		not_null<WebPageData*> webpage,
+		not_null<PeerData*> context,
+		QRect to) {
+	const auto document = webpage->document;
+	const auto photo = webpage->photo;
 	if ((!photo || photo->isNull())
 		&& (!document
 			|| !document->hasThumbnail()
@@ -68,8 +71,8 @@ bool DrawWebPageDataPreview(Painter &p, not_null<WebPageData*> d, QRect to) {
 	}
 
 	const auto preview = photo
-		? photo->getReplyPreview(Data::FileOrigin())
-		: document->getReplyPreview(Data::FileOrigin());
+		? photo->getReplyPreview(Data::FileOrigin(), context)
+		: document->getReplyPreview(Data::FileOrigin(), context);
 	if (preview) {
 		const auto w = preview->width();
 		const auto h = preview->height();

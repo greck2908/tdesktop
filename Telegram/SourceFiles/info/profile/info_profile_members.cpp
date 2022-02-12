@@ -25,7 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_utilities.h" // Ui::Text::ToUpper
 #include "ui/search_field_controller.h"
 #include "lang/lang_keys.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "boxes/peers/add_participants_box.h"
 #include "window/window_session_controller.h"
 #include "data/data_channel.h"
@@ -326,9 +326,9 @@ void Members::addMember() {
 		AddParticipantsBoxController::Start(_controller, chat);
 	} else if (const auto channel = _peer->asChannel()) {
 		const auto state = _listController->saveState();
-		const auto users = ranges::view::all(
+		const auto users = ranges::views::all(
 			state->list
-		) | ranges::view::transform([](not_null<PeerData*> peer) {
+		) | ranges::views::transform([](not_null<PeerData*> peer) {
 			return peer->asUser();
 		}) | ranges::to_vector;
 		AddParticipantsBoxController::Start(
@@ -421,10 +421,6 @@ bool Members::peerListIsRowChecked(not_null<PeerListRow*> row) {
 
 int Members::peerListSelectedRowsCount() {
 	return 0;
-}
-
-std::vector<not_null<PeerData*>> Members::peerListCollectSelectedRows() {
-	return {};
 }
 
 void Members::peerListScrollToTop() {

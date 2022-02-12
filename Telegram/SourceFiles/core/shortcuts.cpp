@@ -13,10 +13,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "media/player/media_player_instance.h"
 #include "base/platform/base_platform_info.h"
+#include "platform/platform_specific.h"
 #include "base/parse_helper.h"
-#include "facades.h"
 
-#include <QtWidgets/QShortcut>
+#include <QShortcut>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QJsonArray>
@@ -371,9 +371,9 @@ void Manager::fillDefaults() {
 	set(qsl("ctrl+4"), Command::ChatPinned4);
 	set(qsl("ctrl+5"), Command::ChatPinned5);
 
-	auto &&folders = ranges::view::zip(
+	auto &&folders = ranges::views::zip(
 		kShowFolder,
-		ranges::view::ints(1, ranges::unreachable));
+		ranges::views::ints(1, ranges::unreachable));
 
 	for (const auto [command, index] : folders) {
 		set(qsl("%1+%2").arg(ctrl).arg(index), command);
@@ -441,7 +441,7 @@ void Manager::set(const QString &keys, Command command, bool replace) {
 	}
 	auto shortcut = base::make_unique_q<QShortcut>(
 		result,
-		Core::App().activeWindow()->widget().get(),
+		Core::App().primaryWindow()->widget().get(),
 		nullptr,
 		nullptr,
 		Qt::ApplicationShortcut);
@@ -552,8 +552,6 @@ rpl::producer<not_null<Request*>> Requests() {
 }
 
 void Start() {
-	Assert(Global::started());
-
 	Data.fill();
 }
 
@@ -567,7 +565,6 @@ bool HandleEvent(not_null<QShortcutEvent*> event) {
 
 void ToggleMediaShortcuts(bool toggled) {
 	Data.toggleMedia(toggled);
-	Platform::SetWatchingMediaKeys(toggled);
 }
 
 void ToggleSupportShortcuts(bool toggled) {

@@ -13,8 +13,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item.h"
 #include "history/history.h"
 #include "ui/image/image.h"
+#include "ui/chat/chat_style.h"
 #include "data/data_file_origin.h"
-#include "layout.h"
 #include "styles/style_chat.h"
 
 namespace HistoryView {
@@ -38,7 +38,7 @@ auto ResolveImages(
 auto NonEmpty(const std::array<std::shared_ptr<EmojiImage>, Ui::Text::kIsolatedEmojiLimit> &images) {
 	using namespace rpl::mappers;
 
-	return images | ranges::view::filter(_1 != nullptr);
+	return images | ranges::views::filter(_1 != nullptr);
 }
 
 } // namespace
@@ -66,7 +66,10 @@ QSize LargeEmoji::size() {
 	return _size;
 }
 
-void LargeEmoji::draw(Painter &p, const QRect &r, bool selected) {
+void LargeEmoji::draw(
+		Painter &p,
+		const PaintContext &context,
+		const QRect &r) {
 	auto &&images = NonEmpty(_images);
 	const auto &padding = st::largeEmojiPadding;
 	auto x = r.x() + (r.width() - _size.width()) / 2 + padding.left();
@@ -74,18 +77,15 @@ void LargeEmoji::draw(Painter &p, const QRect &r, bool selected) {
 	const auto skip = st::largeEmojiSkip - 2 * st::largeEmojiOutline;
 	const auto size = EmojiImage::Size() / cIntRetinaFactor();
 	for (const auto &image : images) {
-		const auto w = size.width();
 		if (const auto &prepared = image->image) {
-			const auto h = size.height();
-			const auto &c = st::msgStickerOverlay;
-			const auto pixmap = selected
-				? prepared->pixColored(c, w, h)
-				: prepared->pix(w, h);
-			p.drawPixmap(x, y, pixmap);
+			const auto colored = context.selected()
+				? &context.st->msgStickerOverlay()
+				: nullptr;
+			p.drawPixmap(x, y, prepared->pix(size, { .colored = colored }));
 		} else if (image->load) {
 			image->load();
 		}
-		x += w + skip;
+		x += size.width() + skip;
 	}
 }
 

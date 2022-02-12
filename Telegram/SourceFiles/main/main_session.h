@@ -58,10 +58,9 @@ namespace Main {
 class Account;
 class Domain;
 class SessionSettings;
+class SendAsPeers;
 
-class Session final
-	: public base::has_weak_ptr
-	, private base::Subscriber {
+class Session final : public base::has_weak_ptr {
 public:
 	Session(
 		not_null<Account*> account,
@@ -83,8 +82,11 @@ public:
 	[[nodiscard]] not_null<UserData*> user() const {
 		return _user;
 	}
-	bool validateSelf(const MTPUser &user);
+	bool validateSelf(UserId id);
 
+	[[nodiscard]] Data::Changes &changes() const {
+		return *_changes;
+	}
 	[[nodiscard]] Api::Updates &updates() const {
 		return *_updates;
 	}
@@ -106,14 +108,14 @@ public:
 	[[nodiscard]] Stickers::DicePacks &diceStickersPacks() const {
 		return *_diceStickersPacks;
 	}
-	[[nodiscard]] Data::Changes &changes() const {
-		return *_changes;
-	}
 	[[nodiscard]] Data::Session &data() const {
 		return *_data;
 	}
 	[[nodiscard]] SessionSettings &settings() const {
 		return *_settings;
+	}
+	[[nodiscard]] SendAsPeers &sendAsPeers() const {
+		return *_sendAsPeers;
 	}
 
 	void saveSettings();
@@ -123,6 +125,7 @@ public:
 	void addWindow(not_null<Window::SessionController*> controller);
 	[[nodiscard]] auto windows() const
 		-> const base::flat_set<not_null<Window::SessionController*>> &;
+	[[nodiscard]] Window::SessionController *tryResolveWindow() const;
 
 	// Shortcuts.
 	void notifyDownloaderTaskFinished();
@@ -144,9 +147,21 @@ public:
 
 	[[nodiscard]] QString createInternalLink(const QString &query) const;
 	[[nodiscard]] QString createInternalLinkFull(const QString &query) const;
+	[[nodiscard]] TextWithEntities createInternalLink(
+		const TextWithEntities &query) const;
+	[[nodiscard]] TextWithEntities createInternalLinkFull(
+		TextWithEntities query) const;
+
+	void setTmpPassword(const QByteArray &password, TimeId validUntil);
+	[[nodiscard]] QByteArray validTmpPassword() const;
 
 	// Can be called only right before ~Session.
 	void finishLogout();
+
+	// Uploads cancel with confirmation.
+	[[nodiscard]] bool uploadsInProgress() const;
+	void uploadsStopWithConfirmation(Fn<void()> done);
+	void uploadsStop();
 
 	[[nodiscard]] rpl::lifetime &lifetime() {
 		return _lifetime;
@@ -164,6 +179,7 @@ private:
 	const not_null<Account*> _account;
 
 	const std::unique_ptr<SessionSettings> _settings;
+	const std::unique_ptr<Data::Changes> _changes;
 	const std::unique_ptr<ApiWrap> _api;
 	const std::unique_ptr<Api::Updates> _updates;
 	const std::unique_ptr<Api::SendProgressManager> _sendProgressManager;
@@ -172,13 +188,14 @@ private:
 	const std::unique_ptr<Storage::Facade> _storage;
 
 	// _data depends on _downloader / _uploader.
-	const std::unique_ptr<Data::Changes> _changes;
 	const std::unique_ptr<Data::Session> _data;
+	const UserId _userId;
 	const not_null<UserData*> _user;
 
 	// _emojiStickersPack depends on _data.
 	const std::unique_ptr<Stickers::EmojiPack> _emojiStickersPack;
 	const std::unique_ptr<Stickers::DicePacks> _diceStickersPacks;
+	const std::unique_ptr<SendAsPeers> _sendAsPeers;
 
 	const std::unique_ptr<Support::Helper> _supportHelper;
 
@@ -189,6 +206,9 @@ private:
 
 	base::flat_set<not_null<Window::SessionController*>> _windows;
 	base::Timer _saveSettingsTimer;
+
+	QByteArray _tmpPassword;
+	TimeId _tmpPasswordValidUntil = 0;
 
 	rpl::lifetime _lifetime;
 

@@ -11,6 +11,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class HistoryService;
 
+namespace Ui {
+class ChatStyle;
+struct CornersPixmaps;
+} // namespace Ui
+
 namespace HistoryView {
 
 class Service : public Element {
@@ -23,11 +28,7 @@ public:
 	int marginTop() const override;
 	int marginBottom() const override;
 	bool isHidden() const override;
-	void draw(
-		Painter &p,
-		QRect clip,
-		TextSelection selection,
-		crl::time ms) const override;
+	void draw(Painter &p, const PaintContext &context) const override;
 	PointState pointState(QPoint point) const override;
 	TextState textState(
 		QPoint point,
@@ -50,29 +51,63 @@ private:
 
 int WideChatWidth();
 
-struct PaintContext {
-	PaintContext(crl::time ms, const QRect &clip, TextSelection selection)
-		: ms(ms)
-		, clip(clip)
-		, selection(selection) {
-	}
-	crl::time ms;
-	const QRect &clip;
-	TextSelection selection;
-};
-
 class ServiceMessagePainter {
 public:
-	static void paintDate(Painter &p, const QDateTime &date, int y, int w);
-	static void paintDate(Painter &p, const QString &dateText, int y, int w);
-	static void paintDate(Painter &p, const QString &dateText, int dateTextWidth, int y, int w);
+	static void PaintDate(
+		Painter &p,
+		not_null<const Ui::ChatStyle*> st,
+		const QDateTime &date,
+		int y,
+		int w,
+		bool chatWide);
+	static void PaintDate(
+		Painter &p,
+		not_null<const Ui::ChatStyle*> st,
+		const QString &dateText,
+		int y,
+		int w,
+		bool chatWide);
+	static void PaintDate(
+		Painter &p,
+		not_null<const Ui::ChatStyle*> st,
+		const QString &dateText,
+		int dateTextWidth,
+		int y,
+		int w,
+		bool chatWide);
+	static void PaintDate(
+		Painter &p,
+		const style::color &bg,
+		const Ui::CornersPixmaps &corners,
+		const style::color &fg,
+		const QString &dateText,
+		int dateTextWidth,
+		int y,
+		int w,
+		bool chatWide);
 
-	static void paintBubble(Painter &p, int x, int y, int w, int h);
+	static void PaintBubble(
+		Painter &p,
+		not_null<const Ui::ChatStyle*> st,
+		QRect rect);
+	static void PaintBubble(
+		Painter &p,
+		const style::color &bg,
+		const Ui::CornersPixmaps &corners,
+		QRect rect);
 
-	static void paintComplexBubble(Painter &p, int left, int width, const Ui::Text::String &text, const QRect &textRect);
+	static void PaintComplexBubble(
+		Painter &p,
+		not_null<const Ui::ChatStyle*> st,
+		int left,
+		int width,
+		const Ui::Text::String &text,
+		const QRect &textRect);
 
 private:
-	static QVector<int> countLineWidths(const Ui::Text::String &text, const QRect &textRect);
+	static QVector<int> CountLineWidths(
+		const Ui::Text::String &text,
+		const QRect &textRect);
 
 };
 
@@ -80,7 +115,11 @@ class EmptyPainter {
 public:
 	explicit EmptyPainter(not_null<History*> history);
 
-	void paint(Painter &p, int width, int height);
+	void paint(
+		Painter &p,
+		not_null<const Ui::ChatStyle*> st,
+		int width,
+		int height);
 
 private:
 	void fillAboutGroup();
@@ -91,7 +130,5 @@ private:
 	std::vector<Ui::Text::String> _phrases;
 
 };
-
-void serviceColorsUpdated();
 
 } // namespace HistoryView

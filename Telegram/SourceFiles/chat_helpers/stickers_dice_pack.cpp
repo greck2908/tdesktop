@@ -47,12 +47,15 @@ void DicePack::load() {
 		return;
 	}
 	_requestId = _session->api().request(MTPmessages_GetStickerSet(
-		MTP_inputStickerSetDice(MTP_string(_emoji))
+		MTP_inputStickerSetDice(MTP_string(_emoji)),
+		MTP_int(0) // hash
 	)).done([=](const MTPmessages_StickerSet &result) {
 		result.match([&](const MTPDmessages_stickerSet &data) {
 			applySet(data);
+		}, [](const MTPDmessages_stickerSetNotModified &) {
+			LOG(("API Error: Unexpected messages.stickerSetNotModified."));
 		});
-	}).fail([=](const RPCError &error) {
+	}).fail([=] {
 		_requestId = 0;
 	}).send();
 }
@@ -75,7 +78,7 @@ void DicePack::applySet(const MTPDmessages_stickerSet &data) {
 	if (isSlotMachine) {
 		return;
 	}
-	for (const auto pack : data.vpacks().v) {
+	for (const auto &pack : data.vpacks().v) {
 		pack.match([&](const MTPDstickerPack &data) {
 			const auto emoji = qs(data.vemoticon());
 			if (emoji.isEmpty()) {
@@ -86,7 +89,7 @@ void DicePack::applySet(const MTPDmessages_stickerSet &data) {
 			if (index < 0 || index > 6) {
 				return;
 			}
-			for (const auto id : data.vdocuments().v) {
+			for (const auto &id : data.vdocuments().v) {
 				if (const auto document = documents.take(id.v)) {
 					_map.emplace(index, *document);
 				}
@@ -125,7 +128,7 @@ void DicePack::generateLocal(int index, const QString &name) {
 		QByteArray(),
 		nullptr,
 		SendMediaType::File,
-		FileLoadTo(0, {}, 0),
+		FileLoadTo(0, {}, 0, 0),
 		{});
 	task.process({ .generateGoodThumbnail = false });
 	const auto result = task.peekResult();
@@ -138,7 +141,7 @@ void DicePack::generateLocal(int index, const QString &name) {
 	_map.emplace(index, document);
 
 	Ensures(document->sticker());
-	Ensures(document->sticker()->animated);
+	Ensures(document->sticker()->isLottie());
 }
 
 DicePacks::DicePacks(not_null<Main::Session*> session) : _session(session) {

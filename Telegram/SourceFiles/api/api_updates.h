@@ -10,13 +10,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_pts_waiter.h"
 #include "base/timer.h"
 
-class RPCError;
 class ApiWrap;
 class History;
+
+namespace MTP {
+class Error;
+} // namespace MTP
 
 namespace Main {
 class Session;
 } // namespace Main
+
+namespace ChatHelpers {
+struct EmojiInteractionsBunch;
+} // namespace ChatHelpers
 
 namespace Api {
 
@@ -35,9 +42,10 @@ public:
 
 	[[nodiscard]] int32 pts() const;
 
-	void updateOnline();
+	void updateOnline(crl::time lastNonIdleTime = 0);
 	[[nodiscard]] bool isIdle() const;
-	void checkIdleFinish();
+	[[nodiscard]] rpl::producer<bool> isIdleValue() const;
+	void checkIdleFinish(crl::time lastNonIdleTime = 0);
 	bool lastWasOnline() const;
 	crl::time lastSetOnline() const;
 	bool isQuitPrevent();
@@ -63,6 +71,12 @@ private:
 		AfterFail,
 	};
 
+	enum class SkipUpdatePolicy {
+		SkipNone,
+		SkipMessageIds,
+		SkipExceptGroupCallParticipants,
+	};
+
 	struct ActiveChatTracker {
 		PeerData *peer = nullptr;
 		rpl::lifetime lifetime;
@@ -77,7 +91,7 @@ private:
 		MsgRange range,
 		const MTPupdates_ChannelDifference &result);
 
-	void updateOnline(bool gotOtherOffline);
+	void updateOnline(crl::time lastNonIdleTime, bool gotOtherOffline);
 	void sendPing();
 	void getDifferenceByPts();
 	void getDifferenceAfterFail();
@@ -89,7 +103,7 @@ private:
 		not_null<ChannelData*> channel,
 		ChannelDifferenceRequest from = ChannelDifferenceRequest::Unknown);
 	void differenceDone(const MTPupdates_Difference &result);
-	void differenceFail(const RPCError &error);
+	void differenceFail(const MTP::Error &error);
 	void feedDifference(
 		const MTPVector<MTPUser> &users,
 		const MTPVector<MTPChat> &chats,
@@ -102,7 +116,7 @@ private:
 		const MTPupdates_ChannelDifference &diff);
 	void channelDifferenceFail(
 		not_null<ChannelData*> channel,
-		const RPCError &error);
+		const MTP::Error &error);
 	void failDifferenceStartTimerFor(ChannelData *channel);
 	void feedChannelDifference(const MTPDupdates_channelDifference &data);
 
@@ -110,11 +124,13 @@ private:
 	void mtpNewSessionCreated();
 	void feedUpdateVector(
 		const MTPVector<MTPUpdate> &updates,
-		bool skipMessageIds = false);
+		SkipUpdatePolicy policy = SkipUpdatePolicy::SkipNone);
 	// Doesn't call sendHistoryChangeNotifications itself.
 	void feedMessageIds(const MTPVector<MTPUpdate> &updates);
 	// Doesn't call sendHistoryChangeNotifications itself.
 	void feedUpdate(const MTPUpdate &update);
+
+	void applyGroupCallParticipantUpdates(const MTPUpdates &updates);
 
 	bool whenGetDiffChanged(
 		ChannelData *channel,
@@ -125,8 +141,23 @@ private:
 	void handleSendActionUpdate(
 		PeerId peerId,
 		MsgId rootId,
-		UserId userId,
+		PeerId fromId,
 		const MTPSendMessageAction &action);
+	void handleEmojiInteraction(
+		not_null<PeerData*> peer,
+		const MTPDsendMessageEmojiInteraction &data);
+	void handleSpeakingInCall(
+		not_null<PeerData*> peer,
+		PeerId participantPeerId,
+		PeerData *participantPeerLoaded);
+	void handleEmojiInteraction(
+		not_null<PeerData*> peer,
+		MsgId messageId,
+		const QString &emoticon,
+		ChatHelpers::EmojiInteractionsBunch bunch);
+	void handleEmojiInteraction(
+		not_null<PeerData*> peer,
+		const QString &emoticon);
 
 	const not_null<Main::Session*> _session;
 
@@ -168,13 +199,13 @@ private:
 	base::flat_map<int, ActiveChatTracker> _activeChats;
 	base::flat_map<
 		not_null<PeerData*>,
-		base::flat_map<UserId, crl::time>> _pendingSpeakingCallMembers;
+		base::flat_map<PeerId, crl::time>> _pendingSpeakingCallParticipants;
 
 	mtpRequestId _onlineRequest = 0;
 	base::Timer _idleFinishTimer;
 	crl::time _lastSetOnline = 0;
 	bool _lastWasOnline = false;
-	bool _isIdle = false;
+	rpl::variable<bool> _isIdle = false;
 
 	rpl::lifetime _lifetime;
 

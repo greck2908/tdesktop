@@ -9,50 +9,54 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/platform/base_platform_info.h"
 
-#include <QtGui/QWindow>
+#include <connection_thread.h>
+#include <registry.h>
+#include <surface.h>
+#include <plasmashell.h>
 
-#include <private/qwaylanddisplay_p.h>
-#include <private/qwaylandwindow_p.h>
-#include <private/qwaylandshellsurface_p.h>
-
-#if QT_VERSION < QT_VERSION_CHECK(5, 13, 0) && !defined DESKTOP_APP_QT_PATCHED
-#include <wayland-client.h>
-#endif // Qt < 5.13 && !DESKTOP_APP_QT_PATCHED
-
-using QtWaylandClient::QWaylandWindow;
+using namespace KWayland::Client;
 
 namespace Platform {
 namespace internal {
 
-namespace {
+struct WaylandIntegration::Private {
+	std::unique_ptr<ConnectionThread> connection;
+	Registry registry;
+	std::unique_ptr<PlasmaShell> plasmaShell;
+};
 
-#if QT_VERSION < QT_VERSION_CHECK(5, 13, 0) && !defined DESKTOP_APP_QT_PATCHED
-enum wl_shell_surface_resize WlResizeFromEdges(Qt::Edges edges) {
-	if (edges == (Qt::TopEdge | Qt::LeftEdge))
-		return WL_SHELL_SURFACE_RESIZE_TOP_LEFT;
-	if (edges == Qt::TopEdge)
-		return WL_SHELL_SURFACE_RESIZE_TOP;
-	if (edges == (Qt::TopEdge | Qt::RightEdge))
-		return WL_SHELL_SURFACE_RESIZE_TOP_RIGHT;
-	if (edges == Qt::RightEdge)
-		return WL_SHELL_SURFACE_RESIZE_RIGHT;
-	if (edges == (Qt::RightEdge | Qt::BottomEdge))
-		return WL_SHELL_SURFACE_RESIZE_BOTTOM_RIGHT;
-	if (edges == Qt::BottomEdge)
-		return WL_SHELL_SURFACE_RESIZE_BOTTOM;
-	if (edges == (Qt::BottomEdge | Qt::LeftEdge))
-		return WL_SHELL_SURFACE_RESIZE_BOTTOM_LEFT;
-	if (edges == Qt::LeftEdge)
-		return WL_SHELL_SURFACE_RESIZE_LEFT;
+WaylandIntegration::WaylandIntegration()
+: _private(std::make_unique<Private>()) {
+	_private->connection = std::unique_ptr<ConnectionThread>{
+		ConnectionThread::fromApplication(),
+	};
 
-	return WL_SHELL_SURFACE_RESIZE_NONE;
+	_private->registry.create(_private->connection.get());
+	_private->registry.setup();
+
+	QObject::connect(
+		_private->connection.get(),
+		&ConnectionThread::connectionDied,
+		&_private->registry,
+		&Registry::destroy);
+
+	QObject::connect(
+		&_private->registry,
+		&Registry::plasmaShellAnnounced,
+		[=](uint name, uint version) {
+			_private->plasmaShell = std::unique_ptr<PlasmaShell>{
+				_private->registry.createPlasmaShell(name, version),
+			};
+
+			QObject::connect(
+				_private->connection.get(),
+				&ConnectionThread::connectionDied,
+				_private->plasmaShell.get(),
+				&PlasmaShell::destroy);
+		});
 }
-#endif // Qt < 5.13 && !DESKTOP_APP_QT_PATCHED
 
-} // namespace
-
-WaylandIntegration::WaylandIntegration() {
-}
+WaylandIntegration::~WaylandIntegration() = default;
 
 WaylandIntegration *WaylandIntegration::Instance() {
 	if (!IsWayland()) return nullptr;
@@ -60,57 +64,27 @@ WaylandIntegration *WaylandIntegration::Instance() {
 	return &instance;
 }
 
-bool WaylandIntegration::startMove(QWindow *window) {
-	// There are startSystemMove on Qt 5.15
-#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0) && !defined DESKTOP_APP_QT_PATCHED
-	if (const auto waylandWindow = static_cast<QWaylandWindow*>(
-		window->handle())) {
-		if (const auto seat = waylandWindow->display()->lastInputDevice()) {
-			if (const auto shellSurface = waylandWindow->shellSurface()) {
-				return shellSurface->move(seat);
-			}
-		}
-	}
-#endif // Qt < 5.15 && !DESKTOP_APP_QT_PATCHED
-
-	return false;
+bool WaylandIntegration::skipTaskbarSupported() {
+	return _private->plasmaShell != nullptr;
 }
 
-bool WaylandIntegration::startResize(QWindow *window, Qt::Edges edges) {
-	// There are startSystemResize on Qt 5.15
-#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0) && !defined DESKTOP_APP_QT_PATCHED
-	if (const auto waylandWindow = static_cast<QWaylandWindow*>(
-		window->handle())) {
-		if (const auto seat = waylandWindow->display()->lastInputDevice()) {
-			if (const auto shellSurface = waylandWindow->shellSurface()) {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 13, 0)
-				shellSurface->resize(seat, edges);
-				return true;
-#else // Qt >= 5.13
-				shellSurface->resize(seat, WlResizeFromEdges(edges));
-				return true;
-#endif // Qt < 5.13
-			}
-		}
+void WaylandIntegration::skipTaskbar(QWindow *window, bool skip) {
+	const auto shell = _private->plasmaShell.get();
+	if (!shell) {
+		return;
 	}
-#endif // Qt < 5.15 && !DESKTOP_APP_QT_PATCHED
 
-	return false;
-}
-
-bool WaylandIntegration::showWindowMenu(QWindow *window) {
-#if QT_VERSION >= QT_VERSION_CHECK(5, 13, 0) || defined DESKTOP_APP_QT_PATCHED
-	if (const auto waylandWindow = static_cast<QWaylandWindow*>(
-		window->handle())) {
-		if (const auto seat = waylandWindow->display()->lastInputDevice()) {
-			if (const auto shellSurface = waylandWindow->shellSurface()) {
-				return shellSurface->showWindowMenu(seat);
-			}
-		}
+	const auto surface = Surface::fromWindow(window);
+	if (!surface) {
+		return;
 	}
-#endif // Qt >= 5.13 || DESKTOP_APP_QT_PATCHED
 
-	return false;
+	const auto plasmaSurface = shell->createSurface(surface, surface);
+	if (!plasmaSurface) {
+		return;
+	}
+
+	plasmaSurface->setSkipTaskbar(skip);
 }
 
 } // namespace internal

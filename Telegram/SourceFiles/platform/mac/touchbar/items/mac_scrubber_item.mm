@@ -7,15 +7,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "platform/mac/touchbar/items/mac_scrubber_item.h"
 
-#ifndef OS_OSX
-
 #include "api/api_common.h"
 #include "api/api_sending.h"
 #include "base/call_delayed.h"
 #include "base/platform/mac/base_utilities_mac.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "chat_helpers/emoji_list_widget.h"
 #include "core/sandbox.h"
+#include "core/application.h"
+#include "core/core_settings.h"
+#include "data/data_chat_participant_status.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "data/data_file_origin.h"
@@ -105,11 +106,8 @@ struct PickerScrubberItem {
 		const auto size = sticker->size()
 			.scaled(kCircleDiameter, kCircleDiameter, Qt::KeepAspectRatio);
 		image = sticker->pixSingle(
-			size.width(),
-			size.height(),
-			kCircleDiameter,
-			kCircleDiameter,
-			ImageRoundRadius::None).toImage();
+			size,
+			{ .outer = { kCircleDiameter, kCircleDiameter } }).toImage();
 	}
 
 	bool isStickerLoaded() const {
@@ -177,7 +175,7 @@ bool CanWriteToActiveChat(not_null<Window::Controller*> controller) {
 std::optional<QString> RestrictionToSendStickers(not_null<PeerData*> peer) {
 	return Data::RestrictionError(
 		peer,
-		ChatRestriction::f_send_stickers);
+		ChatRestriction::SendStickers);
 }
 
 std::optional<QString> RestrictionToSendStickers(
@@ -204,10 +202,10 @@ void AppendStickerSet(
 		return;
 	}
 	const auto set = it->second.get();
-	if (set->flags & MTPDstickerSet::Flag::f_archived) {
+	if (set->flags & Data::StickersSetFlag::Archived) {
 		return;
 	}
-	if (!(set->flags & MTPDstickerSet::Flag::f_installed_date)) {
+	if (!(set->flags & Data::StickersSetFlag::Installed)) {
 		return;
 	}
 
@@ -237,7 +235,7 @@ void AppendRecentStickers(
 			to.emplace_back(PickerScrubberItem(document));
 		}
 	}
-	for (const auto recent : recentPack) {
+	for (const auto &recent : recentPack) {
 		to.emplace_back(PickerScrubberItem(recent.first));
 	}
 }
@@ -265,7 +263,7 @@ void AppendEmojiPacks(
 	for (auto i = 0; i != ChatHelpers::kEmojiSectionCount; ++i) {
 		const auto section = static_cast<Ui::Emoji::Section>(i);
 		const auto list = (section == Ui::Emoji::Section::Recent)
-			? GetRecentEmojiSection()
+			? Core::App().settings().recentEmojiSection()
 			: Ui::Emoji::GetSection(section);
 		const auto title = (section == Ui::Emoji::Section::Recent)
 			? TitleRecentlyUsed(sets)
@@ -462,18 +460,19 @@ void AppendEmojiPacks(
 	auto callback = [=] {
 		if (document) {
 			if (const auto error = RestrictionToSendStickers(_controller)) {
-				Ui::show(Box<InformBox>(*error));
+				_controller->show(Box<Ui::InformBox>(*error));
 				return true;
 			}
 			Api::SendExistingDocument(
-				Api::MessageToSend(ActiveChat(_controller).history()),
+				Api::MessageToSend(
+					Api::SendAction(ActiveChat(_controller).history())),
 				document);
 			return true;
 		} else if (emoji) {
 			if (const auto inputField = qobject_cast<QTextEdit*>(
 					QApplication::focusWidget())) {
 				Ui::InsertEmojiAtCursor(inputField->textCursor(), emoji);
-				AddRecentEmoji(emoji);
+				Core::App().settings().incrementRecentEmoji(emoji);
 				return true;
 			}
 		}
@@ -540,10 +539,7 @@ void AppendEmojiPacks(
 	self.popoverTouchBar = [[[NSTouchBar alloc] init] autorelease];
 	self.popoverTouchBar.delegate = self;
 
-	rpl::single(
-		controller->sessionController()->activeChatCurrent()
-	) | rpl::then(
-		controller->sessionController()->activeChatChanges()
+	controller->sessionController()->activeChatValue(
 	) | rpl::map([](Dialogs::Key k) {
 		return k.peer()
 			&& k.history()
@@ -567,10 +563,13 @@ void AppendEmojiPacks(
 	rpl::merge(
 		rpl::merge(
 			_session->data().stickers().updated(),
-			_session->data().stickers().recentUpdated()
+			_session->data().stickers().recentUpdated(
+			) | rpl::filter([](Data::Stickers::Recent recent) {
+				return (recent != Data::Stickers::Recent::Attached);
+			}) | rpl::to_empty
 		) | rpl::map_to(ScrubberItemType::Sticker),
 		rpl::merge(
-			UpdatedRecentEmoji(),
+			Core::App().settings().recentEmojiUpdated(),
 			Ui::Emoji::Updated()
 		) | rpl::map_to(ScrubberItemType::Emoji)
 	) | rpl::start_with_next([=](ScrubberItemType type) {
@@ -681,5 +680,3 @@ void AppendEmojiPacks(
 }
 
 @end // @implementation StickerEmojiPopover
-
-#endif // OS_OSX

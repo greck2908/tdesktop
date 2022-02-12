@@ -7,20 +7,22 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-class QWindow;
-
 namespace Platform {
 namespace internal {
 
 class WaylandIntegration {
 public:
-	static WaylandIntegration *Instance();
-	bool startMove(QWindow *window);
-	bool startResize(QWindow *window, Qt::Edges edges);
-	bool showWindowMenu(QWindow *window);
+	[[nodiscard]] static WaylandIntegration *Instance();
+
+	[[nodiscard]] bool skipTaskbarSupported();
+	void skipTaskbar(QWindow *window, bool skip);
 
 private:
 	WaylandIntegration();
+	~WaylandIntegration();
+
+	struct Private;
+	const std::unique_ptr<Private> _private;
 };
 
 } // namespace internal

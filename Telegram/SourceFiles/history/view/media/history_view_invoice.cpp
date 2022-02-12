@@ -8,12 +8,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/media/history_view_invoice.h"
 
 #include "lang/lang_keys.h"
-#include "layout.h"
 #include "history/view/history_view_element.h"
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/media/history_view_photo.h"
 #include "history/view/media/history_view_media_common.h"
 #include "ui/item_text_options.h"
+#include "ui/chat/chat_style.h"
 #include "ui/text/format_values.h"
 #include "ui/cached_round_corners.h"
 #include "data/data_media_types.h"
@@ -58,7 +58,7 @@ void Invoice::fillFromData(not_null<Data::Invoice*> invoice) {
 	statusText.entities.push_back({
 		EntityType::Bold,
 		0,
-		statusText.text.size() });
+		int(statusText.text.size()) });
 	statusText.text += ' ' + labelText().toUpper();
 	_status.setMarkedText(
 		st::defaultTextStyle,
@@ -70,7 +70,7 @@ void Invoice::fillFromData(not_null<Data::Invoice*> invoice) {
 	// init strings
 	if (!invoice->description.isEmpty()) {
 		auto marked = TextWithEntities { invoice->description };
-		auto parseFlags = TextParseLinks | TextParseMultiline | TextParseRichText;
+		auto parseFlags = TextParseLinks | TextParseMultiline;
 		TextUtilities::ParseEntities(marked, parseFlags);
 		_description.setMarkedText(
 			st::webPageDescriptionStyle,
@@ -99,7 +99,6 @@ QSize Invoice::countOptimalSize() {
 	}
 
 	// init dimensions
-	auto l = st::msgPadding.left(), r = st::msgPadding.right();
 	auto skipBlockWidth = _parent->skipBlockWidth();
 	auto maxWidth = skipBlockWidth;
 	auto minHeight = 0;
@@ -200,16 +199,15 @@ void Invoice::refreshParentId(not_null<HistoryItem*> realParent) {
 	}
 }
 
-void Invoice::draw(Painter &p, const QRect &r, TextSelection selection, crl::time ms) const {
+void Invoice::draw(Painter &p, const PaintContext &context) const {
 	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) return;
-	auto paintw = width(), painth = height();
+	auto paintw = width();
 
-	auto outbg = _parent->hasOutLayout();
-	bool selected = (selection == FullSelection);
+	const auto st = context.st;
+	const auto sti = context.imageStyle();
+	const auto stm = context.messageStyle();
 
-	auto &barfg = selected ? (outbg ? st::msgOutReplyBarSelColor : st::msgInReplyBarSelColor) : (outbg ? st::msgOutReplyBarColor : st::msgInReplyBarColor);
-	auto &semibold = selected ? (outbg ? st::msgOutServiceFgSelected : st::msgInServiceFgSelected) : (outbg ? st::msgOutServiceFg : st::msgInServiceFg);
-	auto &regular = selected ? (outbg ? st::msgOutDateFgSelected : st::msgInDateFgSelected) : (outbg ? st::msgOutDateFg : st::msgInDateFg);
+	auto &semibold = stm->msgServiceFg;
 
 	QMargins bubble(_attach ? _attach->bubbleMargins() : QMargins());
 	auto padding = inBubblePadding();
@@ -223,20 +221,20 @@ void Invoice::draw(Painter &p, const QRect &r, TextSelection selection, crl::tim
 	auto lineHeight = unitedLineHeight();
 	if (_titleHeight) {
 		p.setPen(semibold);
-		p.setTextPalette(selected ? (outbg ? st::outTextPaletteSelected : st::inTextPaletteSelected) : (outbg ? st::outSemiboldPalette : st::inSemiboldPalette));
+		p.setTextPalette(stm->semiboldPalette);
 
 		auto endskip = 0;
 		if (_title.hasSkipBlock()) {
 			endskip = _parent->skipBlockWidth();
 		}
-		_title.drawLeftElided(p, padding.left(), tshift, paintw, width(), _titleHeight / lineHeight, style::al_left, 0, -1, endskip, false, selection);
+		_title.drawLeftElided(p, padding.left(), tshift, paintw, width(), _titleHeight / lineHeight, style::al_left, 0, -1, endskip, false, context.selection);
 		tshift += _titleHeight;
 
-		p.setTextPalette(selected ? (outbg ? st::outTextPaletteSelected : st::inTextPaletteSelected) : (outbg ? st::outTextPalette : st::inTextPalette));
+		p.setTextPalette(stm->textPalette);
 	}
 	if (_descriptionHeight) {
-		p.setPen(outbg ? st::webPageDescriptionOutFg : st::webPageDescriptionInFg);
-		_description.drawLeft(p, padding.left(), tshift, paintw, width(), style::al_left, 0, -1, toDescriptionSelection(selection));
+		p.setPen(stm->historyTextFg);
+		_description.drawLeft(p, padding.left(), tshift, paintw, width(), style::al_left, 0, -1, toDescriptionSelection(context.selection));
 		tshift += _descriptionHeight;
 	}
 	if (_attach) {
@@ -247,12 +245,14 @@ void Invoice::draw(Painter &p, const QRect &r, TextSelection selection, crl::tim
 		auto attachTop = tshift - bubble.top();
 		if (rtl()) attachLeft = width() - attachLeft - _attach->width();
 
-		auto attachSelection = selected ? FullSelection : TextSelection { 0, 0 };
-
 		p.translate(attachLeft, attachTop);
-		_attach->draw(p, r.translated(-attachLeft, -attachTop), attachSelection, ms);
+		_attach->draw(p, context.translated(
+			-attachLeft,
+			-attachTop
+		).withSelection(context.selected()
+			? FullSelection
+			: TextSelection()));
 		auto pixwidth = _attach->width();
-		auto pixheight = _attach->height();
 
 		auto available = _status.maxWidth();
 		auto statusW = available + 2 * st::msgDateImgPadding.x();
@@ -260,15 +260,15 @@ void Invoice::draw(Painter &p, const QRect &r, TextSelection selection, crl::tim
 		auto statusX = st::msgDateImgDelta;
 		auto statusY = st::msgDateImgDelta;
 
-		Ui::FillRoundRect(p, style::rtlrect(statusX, statusY, statusW, statusH, pixwidth), selected ? st::msgDateImgBgSelected : st::msgDateImgBg, selected ? Ui::DateSelectedCorners : Ui::DateCorners);
+		Ui::FillRoundRect(p, style::rtlrect(statusX, statusY, statusW, statusH, pixwidth), sti->msgDateImgBg, sti->msgDateImgBgCorners);
 
 		p.setFont(st::msgDateFont);
-		p.setPen(st::msgDateImgFg);
+		p.setPen(st->msgDateImgFg());
 		_status.drawLeftElided(p, statusX + st::msgDateImgPadding.x(), statusY + st::msgDateImgPadding.y(), available, pixwidth);
 
 		p.translate(-attachLeft, -attachTop);
 	} else {
-		p.setPen(outbg ? st::webPageDescriptionOutFg : st::webPageDescriptionInFg);
+		p.setPen(stm->historyTextFg);
 		_status.drawLeft(p, padding.left(), tshift + st::mediaInBubbleSkip, paintw, width());
 	}
 }
@@ -279,7 +279,7 @@ TextState Invoice::textState(QPoint point, StateRequest request) const {
 	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) {
 		return result;
 	}
-	auto paintw = width(), painth = height();
+	auto paintw = width();
 
 	QMargins bubble(_attach ? _attach->bubbleMargins() : QMargins());
 	auto padding = inBubblePadding();

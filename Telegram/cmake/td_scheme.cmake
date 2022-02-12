@@ -5,7 +5,7 @@
 # https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 add_library(td_scheme OBJECT)
-init_target(td_scheme)
+init_non_host_target(td_scheme)
 add_library(tdesktop::td_scheme ALIAS td_scheme)
 
 include(cmake/generate_scheme.cmake)
@@ -33,3 +33,12 @@ PUBLIC
     desktop-app::lib_base
     desktop-app::lib_tl
 )
+
+if (CMAKE_SYSTEM_PROCESSOR STREQUAL "mips64")
+    # Sometimes final linking may fail with error "relocation truncated to fit"
+    # due to large scheme size.
+    target_compile_options(td_scheme
+    PRIVATE
+        -mxgot
+    )
+endif()

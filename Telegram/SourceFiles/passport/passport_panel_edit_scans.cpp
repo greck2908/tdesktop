@@ -8,7 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "passport/passport_panel_edit_scans.h"
 
 #include "passport/passport_panel_controller.h"
-#include "passport/passport_panel_details_row.h"
+#include "passport/ui/passport_details_row.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/box_content_divider.h"
@@ -18,12 +18,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/attach/attach_prepare.h"
 #include "ui/text/text_utilities.h" // Ui::Text::ToUpper
 #include "ui/text/text_options.h"
+#include "ui/image/image_prepare.h"
 #include "core/file_utilities.h"
 #include "lang/lang_keys.h"
 #include "boxes/abstract_box.h"
 #include "storage/storage_media_prepare.h"
 #include "storage/file_upload.h" // For Storage::kUseBigFilesFrom.
-#include "app.h"
 #include "styles/style_layers.h"
 #include "styles/style_passport.h"
 
@@ -39,7 +39,12 @@ constexpr auto kJpegQuality = 89;
 static_assert(kMaxSize <= Storage::kUseBigFilesFrom);
 
 std::variant<ReadScanError, QByteArray> ProcessImage(QByteArray &&bytes) {
-	auto image = App::readImage(base::take(bytes));
+	auto read = Images::Read({
+		.content = base::take(bytes),
+		.forceOpaque = true,
+	});
+
+	auto &image = read.image;
 	if (image.isNull()) {
 		return ReadScanError::CantReadImage;
 	} else if (!Ui::ValidateThumbDimensions(image.width(), image.height())) {
@@ -55,7 +60,7 @@ std::variant<ReadScanError, QByteArray> ProcessImage(QByteArray &&bytes) {
 	auto result = QByteArray();
 	{
 		QBuffer buffer(&result);
-		if (!image.save(&buffer, QByteArray("JPG"), kJpegQuality)) {
+		if (!image.save(&buffer, "JPG", kJpegQuality)) {
 			return ReadScanError::Unknown;
 		}
 		base::take(image);
@@ -599,19 +604,6 @@ void EditScans::setupSpecialScans(
 		std::map<FileType, ScanInfo> &&files) {
 	const auto requiresBothSides = files.find(FileType::ReverseSide)
 		!= end(files);
-	const auto title = [&](FileType type) {
-		switch (type) {
-		case FileType::FrontSide:
-			return requiresBothSides
-				? tr::lng_passport_front_side_title(tr::now)
-				: tr::lng_passport_main_page_title(tr::now);
-		case FileType::ReverseSide:
-			return tr::lng_passport_reverse_side_title(tr::now);
-		case FileType::Selfie:
-			return tr::lng_passport_selfie_title(tr::now);
-		}
-		Unexpected("Type in special row title.");
-	};
 	const auto uploadText = [=](FileType type, bool hasScan) {
 		switch (type) {
 		case FileType::FrontSide:
@@ -871,7 +863,7 @@ void EditScans::ChooseScan(
 
 			auto content = [&] {
 				QFile f(file);
-				if (f.size() > App::kImageSizeLimit) {
+				if (f.size() > Images::kReadBytesLimit) {
 					guardedError(ReadScanError::FileTooLarge);
 					return QByteArray();
 				} else if (!f.open(QIODevice::ReadOnly)) {

@@ -22,7 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/toast/toast.h"
 #include "ui/text/text_options.h"
 #include "storage/localstorage.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "mainwidget.h"
 #include "mainwindow.h"
 #include "core/application.h"
@@ -33,6 +33,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_info.h"
 #include "styles/style_passport.h"
 #include "styles/style_chat_helpers.h"
+#include "styles/style_menu_icons.h"
 
 #include <QtGui/QGuiApplication>
 #include <QtGui/QClipboard>
@@ -115,12 +116,12 @@ private:
 	const Rows::Row &rowBySelection(Selection selected) const;
 	std::unique_ptr<Ui::RippleAnimation> &rippleBySelection(
 		Selection selected);
-	const std::unique_ptr<Ui::RippleAnimation> &rippleBySelection(
+	[[maybe_unused]] const std::unique_ptr<Ui::RippleAnimation> &rippleBySelection(
 		Selection selected) const;
 	std::unique_ptr<Ui::RippleAnimation> &rippleBySelection(
 		not_null<Row*> row,
 		Selection selected);
-	const std::unique_ptr<Ui::RippleAnimation> &rippleBySelection(
+	[[maybe_unused]] const std::unique_ptr<Ui::RippleAnimation> &rippleBySelection(
 		not_null<const Row*> row,
 		Selection selected) const;
 	void addRipple(Selection selected, QPoint position);
@@ -216,7 +217,6 @@ std::pair<Languages, Languages> PrepareLists() {
 					Lang::GetInstance().nativeName()
 				};
 			};
-			const auto i = ranges::find(official, current, projId);
 			recent.insert(begin(recent), generate());
 		}
 	}
@@ -424,11 +424,11 @@ void Rows::remove(not_null<Row*> row) {
 
 void Rows::restore(not_null<Row*> row) {
 	row->removed = false;
-	Local::saveRecentLanguages(ranges::view::all(
+	Local::saveRecentLanguages(ranges::views::all(
 		_rows
-	) | ranges::view::filter([](const Row &row) {
+	) | ranges::views::filter([](const Row &row) {
 		return !row.removed;
-	}) | ranges::view::transform([](const Row &row) {
+	}) | ranges::views::transform([](const Row &row) {
 		return row.data;
 	}) | ranges::to_vector);
 }
@@ -438,7 +438,9 @@ void Rows::showMenu(int index) {
 	if (_menu || !hasMenu(row)) {
 		return;
 	}
-	_menu = base::make_unique_q<Ui::DropdownMenu>(window());
+	_menu = base::make_unique_q<Ui::DropdownMenu>(
+		window(),
+		st::dropdownMenuWithIcons);
 	const auto weak = _menu.get();
 	_menu->setHiddenCallback([=] {
 		weak->deleteLater();
@@ -461,26 +463,29 @@ void Rows::showMenu(int index) {
 	});
 	const auto addAction = [&](
 			const QString &text,
-			Fn<void()> callback) {
-		return _menu->addAction(text, std::move(callback));
+			Fn<void()> callback,
+			const style::icon *icon) {
+		return _menu->addAction(text, std::move(callback), icon);
 	};
-	const auto id = row->data.id;
 	if (canShare(row)) {
-		addAction(tr::lng_proxy_edit_share(tr::now), [=] { share(row); });
+		addAction(
+			tr::lng_proxy_edit_share(tr::now),
+			[=] { share(row); },
+			&st::menuIconShare);
 	}
 	if (canRemove(row)) {
 		if (row->removed) {
 			addAction(tr::lng_proxy_menu_restore(tr::now), [=] {
 				restore(row);
-			});
+			}, &st::menuIconRestore);
 		} else {
 			addAction(tr::lng_proxy_menu_delete(tr::now), [=] {
 				remove(row);
-			});
+			}, &st::menuIconDelete);
 		}
 	}
 	const auto toggle = menuToggleArea(row);
-	const auto parentTopLeft = window()->mapToGlobal({ 0, 0 });
+	const auto parentTopLeft = window()->mapToGlobal(QPoint());
 	const auto buttonTopLeft = mapToGlobal(toggle.topLeft());
 	const auto parent = QRect(parentTopLeft, window()->size());
 	const auto button = QRect(buttonTopLeft, toggle.size());
@@ -1167,15 +1172,19 @@ base::binary_guard LanguageBox::Show() {
 	if (manager.languageList().empty()) {
 		auto guard = std::make_shared<base::binary_guard>(
 			result.make_guard());
-		auto alive = std::make_shared<std::unique_ptr<base::Subscription>>(
-			std::make_unique<base::Subscription>());
-		**alive = manager.languageListChanged().add_subscription([=] {
+		auto lifetime = std::make_shared<rpl::lifetime>();
+		manager.languageListChanged(
+		) | rpl::take(
+			1
+		) | rpl::start_with_next([=]() mutable {
 			const auto show = guard->alive();
-			*alive = nullptr;
+			if (lifetime) {
+				base::take(lifetime)->destroy();
+			}
 			if (show) {
 				Ui::show(Box<LanguageBox>());
 			}
-		});
+		}, *lifetime);
 	} else {
 		Ui::show(Box<LanguageBox>());
 	}

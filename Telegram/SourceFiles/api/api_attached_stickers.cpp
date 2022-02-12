@@ -8,7 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_attached_stickers.h"
 
 #include "apiwrap.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "boxes/sticker_set_box.h"
 #include "boxes/stickers_box.h"
 #include "data/data_document.h"
@@ -36,10 +36,12 @@ void AttachedStickers::request(
 			return;
 		}
 		if (result.v.isEmpty()) {
-			Ui::show(Box<InformBox>(tr::lng_stickers_not_found(tr::now)));
+			strongController->show(
+				Box<Ui::InformBox>(tr::lng_stickers_not_found(tr::now)));
 			return;
 		} else if (result.v.size() > 1) {
-			Ui::show(Box<StickersBox>(strongController, result));
+			strongController->show(
+				Box<StickersBox>(strongController, result));
 			return;
 		}
 		// Single attached sticker pack.
@@ -50,14 +52,19 @@ void AttachedStickers::request(
 		});
 
 		const auto setId = (setData->vid().v && setData->vaccess_hash().v)
-			? MTP_inputStickerSetID(setData->vid(), setData->vaccess_hash())
-			: MTP_inputStickerSetShortName(setData->vshort_name());
-		Ui::show(
+			? StickerSetIdentifier{
+				.id = setData->vid().v,
+				.accessHash = setData->vaccess_hash().v }
+			: StickerSetIdentifier{ .shortName = qs(setData->vshort_name()) };
+		strongController->show(
 			Box<StickerSetBox>(strongController, setId),
 			Ui::LayerOption::KeepOther);
-	}).fail([=](const RPCError &error) {
+	}).fail([=] {
 		_requestId = 0;
-		Ui::show(Box<InformBox>(tr::lng_stickers_not_found(tr::now)));
+		if (const auto strongController = weak.get()) {
+			strongController->show(
+				Box<Ui::InformBox>(tr::lng_stickers_not_found(tr::now)));
+		}
 	}).send();
 }
 

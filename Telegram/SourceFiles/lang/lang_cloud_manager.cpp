@@ -15,13 +15,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "main/main_account.h"
 #include "main/main_domain.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "ui/wrap/padding_wrap.h"
 #include "ui/widgets/labels.h"
 #include "ui/text/text_utilities.h"
 #include "core/file_utilities.h"
 #include "core/click_handler_types.h"
-#include "app.h"
 #include "styles/style_layers.h"
 
 namespace Lang {
@@ -164,7 +163,7 @@ CloudManager::CloudManager(Instance &langpack)
 			_api.reset();
 		}
 		return account
-			? account->mtpValue()
+			? account->mtpMainSessionValue()
 			: rpl::never<not_null<MTP::Instance*>>();
 	}) | rpl::flatten_latest(
 	) | rpl::start_with_next([=](not_null<MTP::Instance*> instance) {
@@ -180,6 +179,14 @@ Pack CloudManager::packTypeFromId(const QString &id) const {
 		return Pack::Base;
 	}
 	return Pack::None;
+}
+
+rpl::producer<> CloudManager::languageListChanged() const {
+	return _languageListChanged.events();
+}
+
+rpl::producer<> CloudManager::firstLanguageSuggestion() const {
+	return _firstLanguageSuggestion.events();
 }
 
 void CloudManager::requestLangPackDifference(const QString &langId) {
@@ -226,7 +233,7 @@ void CloudManager::requestLangPackDifference(Pack pack) {
 		)).done([=](const MTPLangPackDifference &result) {
 			packRequestId(pack) = 0;
 			applyLangPackDifference(result);
-		}).fail([=](const RPCError &error) {
+		}).fail([=] {
 			packRequestId(pack) = 0;
 		}).send();
 	} else {
@@ -236,7 +243,7 @@ void CloudManager::requestLangPackDifference(Pack pack) {
 		)).done([=](const MTPLangPackDifference &result) {
 			packRequestId(pack) = 0;
 			applyLangPackDifference(result);
-		}).fail([=](const RPCError &error) {
+		}).fail([=] {
 			packRequestId(pack) = 0;
 		}).send();
 	}
@@ -251,7 +258,7 @@ void CloudManager::setSuggestedLanguage(const QString &langCode) {
 
 	if (!_languageWasSuggested) {
 		_languageWasSuggested = true;
-		_firstLanguageSuggestion.notify();
+		_firstLanguageSuggestion.fire({});
 
 		if (Core::App().offerLegacyLangPackSwitch()
 			&& _langpack.id().isEmpty()
@@ -290,9 +297,9 @@ void CloudManager::applyLangPackDifference(
 		}
 	} else {
 		LOG(("Lang Warning: "
-			"Ignoring update for '%1' because our language is '%2'"
-			).arg(langpackId
-			).arg(_langpack.id()));
+			"Ignoring update for '%1' because our language is '%2'").arg(
+			langpackId,
+			_langpack.id()));
 	}
 }
 
@@ -311,10 +318,10 @@ void CloudManager::requestLanguageList() {
 		}
 		if (_languages != languages) {
 			_languages = languages;
-			_languagesChanged.notify();
+			_languageListChanged.fire({});
 		}
 		_languagesRequestId = 0;
-	}).fail([=](const RPCError &error) {
+	}).fail([=] {
 		_languagesRequestId = 0;
 	}).send();
 }
@@ -324,9 +331,10 @@ void CloudManager::offerSwitchLangPack() {
 	Expects(_offerSwitchToId != DefaultLanguageId());
 
 	if (!showOfferSwitchBox()) {
-		subscribe(languageListChanged(), [this] {
+		languageListChanged(
+		) | rpl::start_with_next([=] {
 			showOfferSwitchBox();
-		});
+		}, _lifetime);
 		requestLanguageList();
 	}
 }
@@ -359,7 +367,7 @@ bool CloudManager::showOfferSwitchBox() {
 		Local::writeLangPack();
 	};
 	Ui::show(
-		Box<ConfirmBox>(
+		Box<Ui::ConfirmBox>(
 			"Do you want to switch your language to "
 			+ language.nativeName
 			+ "? You can always change your language in Settings.",
@@ -411,7 +419,7 @@ void CloudManager::requestLanguageAndSwitch(
 	Expects(!id.isEmpty());
 
 	if (LanguageIdOrDefault(_langpack.id()) == id) {
-		Ui::show(Box<InformBox>(tr::lng_language_already(tr::now)));
+		Ui::show(Box<Ui::InformBox>(tr::lng_language_already(tr::now)));
 		return;
 	} else if (id == qstr("#custom")) {
 		performSwitchToCustom();
@@ -453,10 +461,10 @@ void CloudManager::sendSwitchingToLanguageRequest() {
 				Ui::show(Box<NotReadyBox>(data));
 			}
 		});
-	}).fail([=](const RPCError &error) {
+	}).fail([=](const MTP::Error &error) {
 		_switchingToLanguageRequest = 0;
 		if (error.type() == "LANG_CODE_NOT_SUPPORTED") {
-			Ui::show(Box<InformBox>(tr::lng_language_not_found(tr::now)));
+			Ui::show(Box<Ui::InformBox>(tr::lng_language_not_found(tr::now)));
 		}
 	}).send();
 }
@@ -494,13 +502,13 @@ void CloudManager::switchToLanguage(const Language &data) {
 				+ "\n\n"
 				+ getValue(tr::lng_sure_save_language.base);
 			Ui::show(
-				Box<ConfirmBox>(
+				Box<Ui::ConfirmBox>(
 					text,
 					tr::lng_box_ok(tr::now),
 					tr::lng_cancel(tr::now),
 					[=] { performSwitchAndRestart(data); }),
 				Ui::LayerOption::KeepOther);
-		}).fail([=](const RPCError &error) {
+		}).fail([=] {
 			_getKeysForSwitchRequestId = 0;
 		}).send();
 	}
@@ -539,10 +547,10 @@ void CloudManager::performSwitchToCustom() {
 					+ getValue(tr::lng_sure_save_language.base);
 				const auto change = [=] {
 					_langpack.switchToCustomFile(filePath);
-					App::restart();
+					Core::Restart();
 				};
 				Ui::show(
-					Box<ConfirmBox>(
+					Box<Ui::ConfirmBox>(
 						text,
 						tr::lng_box_ok(tr::now),
 						tr::lng_cancel(tr::now),
@@ -551,7 +559,8 @@ void CloudManager::performSwitchToCustom() {
 			}
 		} else {
 			Ui::show(
-				Box<InformBox>("Custom lang failed :(\n\nError: " + loader.errors()),
+				Box<Ui::InformBox>(
+					"Custom lang failed :(\n\nError: " + loader.errors()),
 				Ui::LayerOption::KeepOther);
 		}
 	});
@@ -585,7 +594,7 @@ void CloudManager::restartAfterSwitch() {
 	if (_langPackRequestId || _langPackBaseRequestId) {
 		_restartAfterSwitch = true;
 	} else {
-		App::restart();
+		Core::Restart();
 	}
 }
 

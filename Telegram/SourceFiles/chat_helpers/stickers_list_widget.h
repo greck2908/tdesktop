@@ -25,6 +25,7 @@ class LinkButton;
 class PopupMenu;
 class RippleAnimation;
 class BoxContent;
+class PathShiftGradient;
 } // namespace Ui
 
 namespace Lottie {
@@ -38,23 +39,28 @@ class DocumentMedia;
 class StickersSet;
 } // namespace Data
 
+namespace Media::Clip {
+class ReaderPointer;
+enum class Notification;
+} // namespace Media::Clip
+
 namespace ChatHelpers {
 
 struct StickerIcon;
 
-class StickersListWidget
-	: public TabbedSelector::Inner
-	, private base::Subscriber {
+class StickersListWidget final : public TabbedSelector::Inner {
 public:
 	StickersListWidget(
 		QWidget *parent,
-		not_null<Window::SessionController*> controller);
+		not_null<Window::SessionController*> controller,
+		bool masks = false);
 
 	Main::Session &session() const;
 
 	rpl::producer<TabbedSelector::FileChosen> chosen() const;
 	rpl::producer<> scrollUpdated() const;
 	rpl::producer<> checkForHide() const;
+	rpl::producer<TabbedSelector::Action> choosingUpdated() const;
 
 	void refreshRecent() override;
 	void preloadImages() override;
@@ -87,6 +93,8 @@ public:
 		not_null<Ui::PopupMenu*> menu,
 		SendMenu::Type type) override;
 
+	bool mySetsEmpty() const;
+
 	~StickersListWidget();
 
 protected:
@@ -110,6 +118,7 @@ protected:
 
 private:
 	class Footer;
+	struct Sticker;
 
 	enum class Section {
 		Featured,
@@ -175,20 +184,11 @@ private:
 		int rowsBottom = 0;
 	};
 
-	struct Sticker {
-		not_null<DocumentData*> document;
-		std::shared_ptr<Data::DocumentMedia> documentMedia;
-		Lottie::Animation *animated = nullptr;
-		QPixmap savedFrame;
-
-		void ensureMediaCreated();
-	};
-
 	struct Set {
 		Set(
 			uint64 id,
 			Data::StickersSet *set,
-			MTPDstickerSet::Flags flags,
+			Data::StickersSetFlags flags,
 			const QString &title,
 			const QString &shortName,
 			int count,
@@ -200,11 +200,12 @@ private:
 
 		uint64 id = 0;
 		Data::StickersSet *set = nullptr;
-		MTPDstickerSet::Flags flags = MTPDstickerSet::Flags();
+		Data::StickersSetFlags flags;
 		QString title;
 		QString shortName;
 		std::vector<Sticker> stickers;
 		std::unique_ptr<Ui::RippleAnimation> ripple;
+		crl::time lastUpdateTime = 0;
 
 		std::unique_ptr<Lottie::MultiPlayer> lottiePlayer;
 		rpl::lifetime lottieLifetime;
@@ -214,7 +215,7 @@ private:
 	};
 	struct FeaturedSet {
 		uint64 id = 0;
-		MTPDstickerSet::Flags flags = MTPDstickerSet::Flags();
+		Data::StickersSetFlags flags;
 		std::vector<Sticker> stickers;
 	};
 
@@ -276,11 +277,27 @@ private:
 
 	void paintStickers(Painter &p, QRect clip);
 	void paintMegagroupEmptySet(Painter &p, int y, bool buttonSelected);
-	void paintSticker(Painter &p, Set &set, int y, int section, int index, bool selected, bool deleteSelected);
+	void paintSticker(
+		Painter &p,
+		Set &set,
+		int y,
+		int section,
+		int index,
+		crl::time now,
+		bool paused,
+		bool selected,
+		bool deleteSelected);
 	void paintEmptySearchResults(Painter &p);
 
 	void ensureLottiePlayer(Set &set);
 	void setupLottie(Set &set, int section, int index);
+	void setupWebm(Set &set, int section, int index);
+	void clipCallback(
+		Media::Clip::Notification notification,
+		uint64 setId,
+		not_null<DocumentData*> document,
+		int indexHint);
+	[[nodiscard]] bool itemVisible(const SectionInfo &info, int index) const;
 	void markLottieFrameShown(Set &set);
 	void checkVisibleLottie();
 	void pauseInvisibleLottieIn(const SectionInfo &info);
@@ -289,6 +306,13 @@ private:
 	void takeHeavyData(Sticker &to, Sticker &from);
 	void clearHeavyIn(Set &set, bool clearSavedFrames = true);
 	void clearHeavyData();
+	void updateItems();
+	void updateSets();
+	void repaintItems(crl::time now = 0);
+	void updateSet(const SectionInfo &info);
+	void repaintItems(
+		const SectionInfo &info,
+		crl::time now);
 
 	int stickersRight() const;
 	bool featuredHasAddButton(int index) const;
@@ -298,6 +322,9 @@ private:
 	int megagroupSetInfoLeft() const;
 	void refreshMegagroupSetGeometry();
 	QRect megagroupSetButtonRectFinal() const;
+
+	[[nodiscard]] const Data::StickersSetsOrder &defaultSetsOrder() const;
+	[[nodiscard]] Data::StickersSetsOrder &defaultSetsOrderRef();
 
 	enum class AppendSkip {
 		None,
@@ -310,7 +337,6 @@ private:
 		bool externalLayout,
 		AppendSkip skip = AppendSkip::None);
 
-	void selectEmoji(EmojiPtr emoji);
 	int stickersLeft() const;
 	QRect stickerRect(int section, int sel);
 
@@ -344,10 +370,18 @@ private:
 	base::flat_set<not_null<DocumentData*>> _favedStickersMap;
 	std::weak_ptr<Lottie::FrameRenderer> _lottieRenderer;
 
+	crl::time _lastScrolledAt = 0;
+	crl::time _lastFullUpdatedAt = 0;
+
 	mtpRequestId _officialRequestId = 0;
 	int _officialOffset = 0;
 
 	Section _section = Section::Stickers;
+	const bool _isMasks;
+
+	base::Timer _updateItemsTimer;
+	base::Timer _updateSetsTimer;
+	base::flat_set<uint64> _repaintSetsIds;
 
 	bool _displayingSet = false;
 	uint64 _removingSetId = 0;
@@ -360,6 +394,8 @@ private:
 	OverState _selected;
 	OverState _pressed;
 	QPoint _lastMousePosition;
+
+	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
 
 	Ui::Text::String _megagroupSetAbout;
 	QString _megagroupSetButtonText;
@@ -384,6 +420,7 @@ private:
 	rpl::event_stream<TabbedSelector::FileChosen> _chosen;
 	rpl::event_stream<> _scrollUpdated;
 	rpl::event_stream<> _checkForHide;
+	rpl::event_stream<TabbedSelector::Action> _choosingUpdated;
 
 };
 

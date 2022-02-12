@@ -7,10 +7,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "calls/calls_box_controller.h"
 
-#include "styles/style_calls.h"
-#include "styles/style_boxes.h"
 #include "lang/lang_keys.h"
 #include "ui/effects/ripple_animation.h"
+#include "ui/widgets/labels.h"
+#include "ui/widgets/checkbox.h"
+#include "ui/widgets/popup_menu.h"
 #include "core/application.h"
 #include "calls/calls_instance.h"
 #include "history/history.h"
@@ -22,7 +23,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_changes.h"
 #include "data/data_media_types.h"
 #include "data/data_user.h"
-#include "app.h"
+#include "boxes/delete_messages_box.h"
+#include "base/unixtime.h"
+#include "api/api_updates.h"
+#include "apiwrap.h"
+#include "styles/style_layers.h" // st::boxLabel.
+#include "styles/style_calls.h"
+#include "styles/style_boxes.h"
+#include "styles/style_menu_icons.h"
 
 namespace Calls {
 namespace {
@@ -49,6 +57,7 @@ public:
 
 	bool canAddItem(not_null<const HistoryItem*> item) const {
 		return (ComputeType(item) == _type)
+			&& (!hasItems() || _items.front()->history() == item->history())
 			&& (ItemDateTime(item).date() == _date);
 	}
 	void addItem(not_null<HistoryItem*> item) {
@@ -66,18 +75,24 @@ public:
 			refreshStatus();
 		}
 	}
-	bool hasItems() const {
+	[[nodiscard]] bool hasItems() const {
 		return !_items.empty();
 	}
 
-	MsgId minItemId() const {
+	[[nodiscard]] MsgId minItemId() const {
 		Expects(hasItems());
+
 		return _items.back()->id;
 	}
 
-	MsgId maxItemId() const {
+	[[nodiscard]] MsgId maxItemId() const {
 		Expects(hasItems());
+
 		return _items.front()->id;
+	}
+
+	[[nodiscard]] const std::vector<not_null<HistoryItem*>> &items() const {
+		return _items;
 	}
 
 	void paintStatusText(
@@ -88,23 +103,25 @@ public:
 		int availableWidth,
 		int outerWidth,
 		bool selected) override;
-	void addActionRipple(QPoint point, Fn<void()> updateCallback) override;
-	void stopLastActionRipple() override;
+	void rightActionAddRipple(
+		QPoint point,
+		Fn<void()> updateCallback) override;
+	void rightActionStopLastRipple() override;
 
 	int nameIconWidth() const override {
 		return 0;
 	}
-	QSize actionSize() const override {
+	QSize rightActionSize() const override {
 		return peer()->isUser() ? QSize(_st->width, _st->height) : QSize();
 	}
-	QMargins actionMargins() const override {
+	QMargins rightActionMargins() const override {
 		return QMargins(
 			0,
 			0,
 			st::defaultPeerListItem.photoPosition.x(),
 			0);
 	}
-	void paintAction(
+	void rightActionPaint(
 		Painter &p,
 		int x,
 		int y,
@@ -127,7 +144,7 @@ private:
 };
 
 BoxController::Row::Row(not_null<HistoryItem*> item)
-: PeerListRow(item->history()->peer, item->id)
+: PeerListRow(item->history()->peer, item->id.bare)
 , _items(1, item)
 , _date(ItemDateTime(item).date())
 , _type(ComputeType(item))
@@ -154,14 +171,14 @@ void BoxController::Row::paintStatusText(Painter &p, const style::PeerListItem &
 	PeerListRow::paintStatusText(p, st, x, y, availableWidth, outerWidth, selected);
 }
 
-void BoxController::Row::paintAction(
+void BoxController::Row::rightActionPaint(
 		Painter &p,
 		int x,
 		int y,
 		int outerWidth,
 		bool selected,
 		bool actionSelected) {
-	auto size = actionSize();
+	auto size = rightActionSize();
 	if (_actionRipple) {
 		_actionRipple->paint(
 			p,
@@ -229,7 +246,7 @@ BoxController::Row::CallType BoxController::Row::ComputeCallType(
 	return CallType::Voice;
 }
 
-void BoxController::Row::addActionRipple(QPoint point, Fn<void()> updateCallback) {
+void BoxController::Row::rightActionAddRipple(QPoint point, Fn<void()> updateCallback) {
 	if (!_actionRipple) {
 		auto mask = Ui::RippleAnimation::ellipseMask(
 			QSize(_st->rippleAreaSize, _st->rippleAreaSize));
@@ -241,7 +258,7 @@ void BoxController::Row::addActionRipple(QPoint point, Fn<void()> updateCallback
 	_actionRipple->add(point - _st->rippleAreaPosition);
 }
 
-void BoxController::Row::stopLastActionRipple() {
+void BoxController::Row::rightActionStopLastRipple() {
 	if (_actionRipple) {
 		_actionRipple->lastStop();
 	}
@@ -295,18 +312,18 @@ void BoxController::loadMoreRows() {
 	_loadRequestId = _api.request(MTPmessages_Search(
 		MTP_flags(0),
 		MTP_inputPeerEmpty(),
-		MTP_string(),
+		MTP_string(), // q
 		MTP_inputPeerEmpty(),
 		MTPint(), // top_msg_id
 		MTP_inputMessagesFilterPhoneCalls(MTP_flags(0)),
-		MTP_int(0),
-		MTP_int(0),
+		MTP_int(0), // min_date
+		MTP_int(0), // max_date
 		MTP_int(_offsetId),
-		MTP_int(0),
+		MTP_int(0), // add_offset
 		MTP_int(_offsetId ? kFirstPageCount : kPerPageCount),
-		MTP_int(0),
-		MTP_int(0),
-		MTP_int(0)
+		MTP_int(0), // max_id
+		MTP_int(0), // min_id
+		MTP_long(0) // hash
 	)).done([this](const MTPmessages_Messages &result) {
 		_loadRequestId = 0;
 
@@ -328,9 +345,27 @@ void BoxController::loadMoreRows() {
 		} break;
 		default: Unexpected("Type of messages.Messages (Calls::BoxController::preloadRows)");
 		}
-	}).fail([this](const RPCError &error) {
+	}).fail([this] {
 		_loadRequestId = 0;
 	}).send();
+}
+
+base::unique_qptr<Ui::PopupMenu> BoxController::rowContextMenu(
+		QWidget *parent,
+		not_null<PeerListRow*> row) {
+	const auto &items = static_cast<Row*>(row.get())->items();
+	const auto session = &this->session();
+	const auto ids = session->data().itemsToIds(items);
+
+	auto result = base::make_unique_q<Ui::PopupMenu>(
+		parent,
+		st::popupMenuWithIcons);
+	result->addAction(tr::lng_context_delete_selected(tr::now), [=] {
+		_window->show(
+			Box<DeleteMessagesBox>(session, base::duplicate(ids)),
+			Ui::LayerOption::KeepOther);
+	}, &st::menuIconDelete);
+	return result;
 }
 
 void BoxController::refreshAbout() {
@@ -349,7 +384,7 @@ void BoxController::rowClicked(not_null<PeerListRow*> row) {
 	});
 }
 
-void BoxController::rowActionClicked(not_null<PeerListRow*> row) {
+void BoxController::rowRightActionClicked(not_null<PeerListRow*> row) {
 	auto user = row->peer()->asUser();
 	Assert(user != nullptr);
 
@@ -367,11 +402,12 @@ void BoxController::receivedCalls(const QVector<MTPMessage> &result) {
 		if (const auto peer = session().data().peerLoaded(peerId)) {
 			const auto item = session().data().addNewMessage(
 				message,
-				MTPDmessage_ClientFlags(),
+				MessageFlags(),
 				NewMessageType::Existing);
 			insertRow(item, InsertWay::Append);
 		} else {
-			LOG(("API Error: a search results with not loaded peer %1").arg(peerId));
+			LOG(("API Error: a search results with not loaded peer %1"
+				).arg(peerId.value));
 		}
 		_offsetId = msgId;
 	}
@@ -446,6 +482,66 @@ BoxController::Row *BoxController::rowForItem(not_null<const HistoryItem*> item)
 std::unique_ptr<PeerListRow> BoxController::createRow(
 		not_null<HistoryItem*> item) const {
 	return std::make_unique<Row>(item);
+}
+
+void ClearCallsBox(
+		not_null<Ui::GenericBox*> box,
+		not_null<Window::SessionController*> window) {
+	const auto weak = Ui::MakeWeak(box);
+	box->addRow(
+		object_ptr<Ui::FlatLabel>(
+			box,
+			tr::lng_call_box_clear_sure(),
+			st::boxLabel),
+		st::boxPadding);
+	const auto revokeCheckbox = box->addRow(
+		object_ptr<Ui::Checkbox>(
+			box,
+			tr::lng_delete_for_everyone_check(tr::now),
+			false,
+			st::defaultBoxCheckbox),
+		style::margins(
+			st::boxPadding.left(),
+			st::boxPadding.bottom(),
+			st::boxPadding.right(),
+			st::boxPadding.bottom()));
+
+	const auto api = &window->session().api();
+	const auto sendRequest = [=](bool revoke, auto self) -> void {
+		using Flag = MTPmessages_DeletePhoneCallHistory::Flag;
+		api->request(MTPmessages_DeletePhoneCallHistory(
+			MTP_flags(revoke ? Flag::f_revoke : Flag(0))
+		)).done([=](const MTPmessages_AffectedFoundMessages &result) {
+			result.match([&](
+					const MTPDmessages_affectedFoundMessages &data) {
+				api->applyUpdates(MTP_updates(
+					MTP_vector<MTPUpdate>(
+						1,
+						MTP_updateDeleteMessages(
+							data.vmessages(),
+							data.vpts(),
+							data.vpts_count())),
+					MTP_vector<MTPUser>(),
+					MTP_vector<MTPChat>(),
+					MTP_int(base::unixtime::now()),
+					MTP_int(0)));
+				const auto offset = data.voffset().v;
+				if (offset > 0) {
+					self(revoke, self);
+				} else {
+					api->session().data().destroyAllCallItems();
+					if (const auto strong = weak.data()) {
+						strong->closeBox();
+					}
+				}
+			});
+		}).send();
+	};
+
+	box->addButton(tr::lng_call_box_clear_button(), [=] {
+		sendRequest(revokeCheckbox->checked(), sendRequest);
+	});
+	box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
 }
 
 } // namespace Calls

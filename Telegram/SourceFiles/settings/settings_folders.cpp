@@ -25,9 +25,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/painter.h"
 #include "ui/filter_icons.h"
 #include "settings/settings_common.h"
+#include "core/application.h"
 #include "lang/lang_keys.h"
 #include "apiwrap.h"
-#include "app.h"
 #include "styles/style_settings.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
@@ -384,14 +384,13 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 						return;
 					}
 					const auto found = find(button);
-					const auto &real = *i;
 					const auto &now = found->filter;
-					if ((i->flags() != found->filter.flags())
-						|| (i->always() != found->filter.always())
-						|| (i->never() != found->filter.never())) {
+					if ((i->flags() != now.flags())
+						|| (i->always() != now.always())
+						|| (i->never() != now.never())) {
 						return;
 					}
-					button->updateCount(found->filter);
+					button->updateCount(now);
 					found->postponedCountUpdate = false;
 				});
 			}, button->lifetime());
@@ -441,7 +440,6 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 	AddSkip(aboutRows);
 	AddSubsectionTitle(aboutRows, tr::lng_filters_recommended());
 
-	const auto changed = lifetime.make_state<bool>();
 	const auto suggested = lifetime.make_state<rpl::variable<int>>();
 	rpl::single(
 		rpl::empty_value()
@@ -555,7 +553,7 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 				tl));
 		}
 		auto previousId = mtpRequestId(0);
-		auto &&requests = ranges::view::concat(removeRequests, addRequests);
+		auto &&requests = ranges::views::concat(removeRequests, addRequests);
 		for (auto &request : requests) {
 			previousId = session->api().request(
 				std::move(request)
@@ -577,7 +575,7 @@ Folders::Folders(
 }
 
 Folders::~Folders() {
-	if (!App::quitting()) {
+	if (!Core::Quitting()) {
 		_save();
 	}
 }

@@ -266,7 +266,7 @@ void FilterIconPanel::paintEvent(QPaintEvent *e) {
 	}
 }
 
-void FilterIconPanel::enterEventHook(QEvent *e) {
+void FilterIconPanel::enterEventHook(QEnterEvent *e) {
 	Core::App().registerLeaveSubscription(this);
 	showAnimated();
 }
@@ -389,7 +389,7 @@ QImage FilterIconPanel::grabForAnimation() {
 	_a_show = base::take(showAnimation);
 	_showAnimation = base::take(showAnimationData);
 	_a_opacity = base::take(opacityAnimation);
-	_cache = base::take(_cache);
+	_cache = base::take(cache);
 
 	return result;
 }

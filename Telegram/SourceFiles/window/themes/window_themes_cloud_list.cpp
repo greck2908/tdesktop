@@ -17,16 +17,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "data/data_session.h"
+#include "ui/chat/chat_theme.h"
 #include "ui/image/image_prepare.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/toast/toast.h"
-#include "boxes/confirm_box.h"
+#include "ui/style/style_palette_colorizer.h"
+#include "ui/boxes/confirm_box.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "core/application.h"
 #include "styles/style_settings.h"
 #include "styles/style_boxes.h"
 #include "styles/style_chat.h"
+#include "styles/style_menu_icons.h"
 
 #include <QtGui/QGuiApplication>
 #include <QtGui/QClipboard>
@@ -134,7 +137,7 @@ CloudListColors ColorsFromScheme(const EmbeddedScheme &scheme) {
 
 CloudListColors ColorsFromScheme(
 		const EmbeddedScheme &scheme,
-		const Colorizer &colorizer) {
+		const style::colorizer &colorizer) {
 	if (!colorizer) {
 		return ColorsFromScheme(scheme);
 	}
@@ -185,7 +188,7 @@ void CloudListCheck::ensureContrast() {
 		QImage::Format_ARGB32_Premultiplied);
 	const auto active = style::internal::EnsureContrast(
 		_colors->radiobuttonActive,
-		CountAverageColor(image));
+		Ui::CountAverageColor(image));
 	_colors->radiobuttonInactive = _colors->radiobuttonActive = QColor(
 		active.red(),
 		active.green(),
@@ -211,7 +214,9 @@ void CloudListCheck::validateBackgroundCache(int width) {
 			0,
 			imageWidth,
 			_backgroundFull.height());
-	Images::prepareRound(_backgroundCache, ImageRoundRadius::Large);
+	_backgroundCache = Images::Round(
+		std::move(_backgroundCache),
+		ImageRoundRadius::Large);
 	_backgroundCache.setDevicePixelRatio(cRetinaFactor());
 }
 
@@ -270,8 +275,6 @@ void CloudListCheck::paintWithColors(
 	p.drawRoundedRect(style::rtlrect(received, outerWidth), radius, radius);
 	p.setBrush(_colors->sent);
 	p.drawRoundedRect(style::rtlrect(sent, outerWidth), radius, radius);
-
-	const auto skip = st::settingsThemeRadioBottom / 2;
 
 	const auto radio = _radio.getSize();
 	_radio.paint(
@@ -342,9 +345,9 @@ void CloudList::setup() {
 	auto themeChanges = rpl::single(BackgroundUpdate(
 		BackgroundUpdate::Type::ApplyingTheme,
 		Background()->tile()
-	)) | rpl::then(base::ObservableViewer(
-		*Background()
-	)) | rpl::filter([](const BackgroundUpdate &update) {
+	)) | rpl::then(
+		Background()->updates()
+	) | rpl::filter([](const BackgroundUpdate &update) {
 		return (update.type == BackgroundUpdate::Type::ApplyingTheme);
 	});
 
@@ -475,12 +478,12 @@ bool CloudList::insertTillLimit(
 	}) - begin(_elements);
 	auto positionForBad = end(_elements) - begin(_elements);
 
-	auto insertElements = ranges::view::all(
+	auto insertElements = ranges::views::all(
 		list
-	) | ranges::view::filter([&](const Data::CloudTheme &theme) {
+	) | ranges::views::filter([&](const Data::CloudTheme &theme) {
 		const auto i = ranges::find(_elements, theme.id, &Element::id);
 		return (i == end(_elements));
-	}) | ranges::view::take(insertCount);
+	}) | ranges::views::take(insertCount);
 
 	for (const auto &theme : insertElements) {
 		const auto good = isGood(theme);
@@ -524,7 +527,9 @@ void CloudList::insert(int index, const Data::CloudTheme &theme) {
 		} else if (cloud.documentId) {
 			_window->session().data().cloudThemes().applyFromDocument(cloud);
 		} else {
-			_window->session().data().cloudThemes().showPreview(cloud);
+			_window->session().data().cloudThemes().showPreview(
+				&_window->window(),
+				cloud);
 		}
 	});
 	auto &element = *_elements.insert(
@@ -581,21 +586,23 @@ void CloudList::showMenu(Element &element) {
 		_contextMenu = nullptr;
 		return;
 	}
-	_contextMenu = base::make_unique_q<Ui::PopupMenu>(element.button.get());
+	_contextMenu = base::make_unique_q<Ui::PopupMenu>(
+		element.button.get(),
+		st::popupMenuWithIcons);
 	const auto cloud = element.theme;
 	if (const auto slug = element.theme.slug; !slug.isEmpty()) {
 		_contextMenu->addAction(tr::lng_theme_share(tr::now), [=] {
 			QGuiApplication::clipboard()->setText(
 				_window->session().createInternalLinkFull("addtheme/" + slug));
 			Ui::Toast::Show(tr::lng_background_link_copied(tr::now));
-		});
+		}, &st::menuIconShare);
 	}
 	if (cloud.documentId
 		&& cloud.createdBy == _window->session().userId()
 		&& Background()->themeObject().cloud.id == cloud.id) {
 		_contextMenu->addAction(tr::lng_theme_edit(tr::now), [=] {
 			StartEditor(&_window->window(), cloud);
-		});
+		}, &st::menuIconChangeColors);
 	}
 	const auto id = cloud.id;
 	_contextMenu->addAction(tr::lng_theme_delete(tr::now), [=] {
@@ -615,11 +622,11 @@ void CloudList::showMenu(Element &element) {
 				_window->session().data().cloudThemes().remove(id);
 			}
 		};
-		_window->window().show(Box<ConfirmBox>(
+		_window->window().show(Box<Ui::ConfirmBox>(
 			tr::lng_theme_delete_sure(tr::now),
 			tr::lng_theme_delete(tr::now),
 			remove));
-	});
+	}, &st::menuIconDelete);
 	_contextMenu->popup(QCursor::pos());
 }
 
@@ -665,7 +672,7 @@ void CloudList::subscribeToDownloadFinished() {
 	}
 	_window->session().downloaderTaskFinished(
 	) | rpl::start_with_next([=] {
-		auto &&waiting = _elements | ranges::view::filter(&Element::waiting);
+		auto &&waiting = _elements | ranges::views::filter(&Element::waiting);
 		const auto still = ranges::count_if(waiting, [&](Element &element) {
 			if (!element.media) {
 				element.waiting = false;
@@ -706,7 +713,6 @@ void CloudList::updateGeometry() {
 }
 
 int CloudList::resizeGetHeight(int newWidth) {
-	const auto desired = st::settingsThemePreviewSize.width();
 	const auto minSkip = st::settingsThemeMinSkip;
 	const auto single = std::min(
 		st::settingsThemePreviewSize.width(),
@@ -722,7 +728,7 @@ int CloudList::resizeGetHeight(int newWidth) {
 	for (const auto &element : _elements) {
 		const auto button = element.button.get();
 		button->resizeToWidth(single);
-		button->moveToLeft(int(std::round(x)), y);
+		button->moveToLeft(int(base::SafeRound(x)), y);
 		accumulate_max(rowHeight, button->height());
 		x += single + skip;
 		if (++index == kShowPerRow) {

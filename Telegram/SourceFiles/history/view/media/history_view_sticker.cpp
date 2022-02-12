@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/media/history_view_sticker.h"
 
-#include "layout.h"
 #include "boxes/sticker_set_box.h"
 #include "history/history.h"
 #include "history/history_item_components.h"
@@ -16,17 +15,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/media/history_view_media_common.h"
 #include "ui/image/image.h"
+#include "ui/chat/chat_style.h"
+#include "ui/effects/path_shift_gradient.h"
 #include "ui/emoji_config.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "core/click_handler_types.h"
 #include "main/main_session.h"
 #include "main/main_account.h"
 #include "main/main_app_config.h"
-#include "mainwindow.h" // App::wnd()->sessionController.
 #include "window/window_session_controller.h" // isGifPausedAtLeastFor.
 #include "data/data_session.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
+#include "data/data_file_click_handler.h"
 #include "data/data_file_origin.h"
 #include "lottie/lottie_single_player.h"
 #include "chat_helpers/stickers_lottie.h"
@@ -35,11 +37,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace HistoryView {
 namespace {
 
-[[nodiscard]] double GetEmojiStickerZoom(not_null<Main::Session*> session) {
-	return session->account().appConfig().get<double>(
-		"emojies_animated_zoom",
-		0.625);
-}
+constexpr auto kMaxSizeFixed = 512;
+constexpr auto kMaxEmojiSizeFixed = 256;
 
 [[nodiscard]] QImage CacheDiceImage(
 		const QString &emoji,
@@ -95,16 +94,13 @@ bool Sticker::isEmojiSticker() const {
 }
 
 void Sticker::initSize() {
-	_size = _data->dimensions;
 	if (isEmojiSticker() || _diceIndex >= 0) {
-		_size = GetAnimatedEmojiSize(&_data->session(), _size);
+		_size = Sticker::EmojiSize();
 		if (_diceIndex > 0) {
 			[[maybe_unused]] bool result = readyToDrawLottie();
 		}
 	} else {
-		_size = DownscaledSize(
-			_size,
-			{ st::maxStickerSize, st::maxStickerSize });
+		_size = DownscaledSize(_data->dimensions, Sticker::Size());
 	}
 }
 
@@ -127,41 +123,44 @@ bool Sticker::readyToDrawLottie() {
 	ensureDataMediaCreated();
 	_dataMedia->checkStickerLarge();
 	const auto loaded = _dataMedia->loaded();
-	if (sticker->animated && !_lottie && loaded) {
+	if (sticker->isLottie() && !_lottie && loaded) {
 		setupLottie();
 	}
 	return (_lottie && _lottie->ready());
 }
 
-QSize Sticker::GetAnimatedEmojiSize(not_null<Main::Session*> session) {
-	return GetAnimatedEmojiSize(session, { 512, 512 });
+QSize Sticker::Size() {
+	const auto side = std::min(st::maxStickerSize, kMaxSizeFixed);
+	return { side, side };
 }
 
-QSize Sticker::GetAnimatedEmojiSize(
-		not_null<Main::Session*> session,
-		QSize documentSize) {
-	const auto zoom = GetEmojiStickerZoom(session);
-	const auto convert = [&](int size) {
-		return int(size * st::maxStickerSize * zoom / kStickerSideSize);
-	};
-	return { convert(documentSize.width()), convert(documentSize.height()) };
+QSize Sticker::EmojiSize() {
+	const auto side = std::min(st::maxAnimatedEmojiSize, kMaxEmojiSizeFixed);
+	return { side, side };
 }
 
-void Sticker::draw(Painter &p, const QRect &r, bool selected) {
+void Sticker::draw(
+		Painter &p,
+		const PaintContext &context,
+		const QRect &r) {
 	ensureDataMediaCreated();
 	if (readyToDrawLottie()) {
-		paintLottie(p, r, selected);
-	} else if (_data->sticker()
-		&& (!_data->sticker()->animated || !_replacements)) {
-		paintPixmap(p, r, selected);
+		paintLottie(p, context, r);
+	} else if (!_data->sticker()
+		|| (_data->sticker()->isLottie() && _replacements)
+		|| !paintPixmap(p, context, r)) {
+		paintPath(p, context, r);
 	}
 }
 
-void Sticker::paintLottie(Painter &p, const QRect &r, bool selected) {
+void Sticker::paintLottie(
+		Painter &p,
+		const PaintContext &context,
+		const QRect &r) {
 	auto request = Lottie::FrameRequest();
 	request.box = _size * cIntRetinaFactor();
-	if (selected && !_nextLastDiceFrame) {
-		request.colored = st::msgStickerOverlay->c;
+	if (context.selected() && !_nextLastDiceFrame) {
+		request.colored = context.st->msgStickerOverlay()->c;
 	}
 	const auto frame = _lottie
 		? _lottie->frameInfo(request)
@@ -173,8 +172,10 @@ void Sticker::paintLottie(Painter &p, const QRect &r, bool selected) {
 	const auto &image = _lastDiceFrame.isNull()
 		? frame.image
 		: _lastDiceFrame;
-	const auto prepared = (!_lastDiceFrame.isNull() && selected)
-		? Images::prepareColored(st::msgStickerOverlay->c, image)
+	const auto prepared = (!_lastDiceFrame.isNull() && context.selected())
+		? Images::Colored(
+			base::duplicate(image),
+			context.st->msgStickerOverlay()->c)
 		: image;
 	const auto size = prepared.size() / cIntRetinaFactor();
 	p.drawImage(
@@ -214,43 +215,73 @@ void Sticker::paintLottie(Painter &p, const QRect &r, bool selected) {
 	}
 }
 
-void Sticker::paintPixmap(Painter &p, const QRect &r, bool selected) {
-	const auto pixmap = paintedPixmap(selected);
-	if (!pixmap.isNull()) {
-		p.drawPixmap(
-			QPoint(
-				r.x() + (r.width() - _size.width()) / 2,
-				r.y() + (r.height() - _size.height()) / 2),
-			pixmap);
+bool Sticker::paintPixmap(
+		Painter &p,
+		const PaintContext &context,
+		const QRect &r) {
+	const auto pixmap = paintedPixmap(context);
+	if (pixmap.isNull()) {
+		return false;
 	}
+	p.drawPixmap(
+		QPoint(
+			r.x() + (r.width() - _size.width()) / 2,
+			r.y() + (r.height() - _size.height()) / 2),
+		pixmap);
+	return true;
 }
 
-QPixmap Sticker::paintedPixmap(bool selected) const {
-	const auto w = _size.width();
-	const auto h = _size.height();
-	const auto &c = st::msgStickerOverlay;
+void Sticker::paintPath(
+		Painter &p,
+		const PaintContext &context,
+		const QRect &r) {
+	const auto pathGradient = _parent->delegate()->elementPathShiftGradient();
+	if (context.selected()) {
+		pathGradient->overrideColors(
+			context.st->msgServiceBgSelected(),
+			context.st->msgServiceBg());
+	} else {
+		pathGradient->clearOverridenColors();
+	}
+	p.setBrush(context.imageStyle()->msgServiceBg);
+	ChatHelpers::PaintStickerThumbnailPath(
+		p,
+		_dataMedia.get(),
+		r,
+		pathGradient);
+}
+
+QPixmap Sticker::paintedPixmap(const PaintContext &context) const {
+	const auto colored = context.selected()
+		? &context.st->msgStickerOverlay()
+		: nullptr;
 	const auto good = _dataMedia->goodThumbnail();
 	if (const auto image = _dataMedia->getStickerLarge()) {
-		return selected
-			? image->pixColored(c, w, h)
-			: image->pix(w, h);
+		return image->pix(_size, { .colored = colored });
 	//
 	// Inline thumbnails can't have alpha channel.
 	//
 	//} else if (const auto blurred = _data->thumbnailInline()) {
-	//	return selected
-	//		? blurred->pixBlurredColored(c, w, h)
-	//		: blurred->pixBlurred(w, h);
+	//	return blurred->pix(
+	//		_size,
+	//		{ .colored = colored, .options = Images::Option::Blur });
 	} else if (good) {
-		return selected
-			? good->pixColored(c, w, h)
-			: good->pix(w, h);
+		return good->pix(_size, { .colored = colored });
 	} else if (const auto thumbnail = _dataMedia->thumbnail()) {
-		return selected
-			? thumbnail->pixBlurredColored(c, w, h)
-			: thumbnail->pixBlurred(w, h);
+		return thumbnail->pix(
+			_size,
+			{ .colored = colored, .options = Images::Option::Blur });
 	}
 	return QPixmap();
+}
+
+ClickHandlerPtr Sticker::ShowSetHandler(not_null<DocumentData*> document) {
+	return std::make_shared<LambdaClickHandler>([=](ClickContext context) {
+		const auto my = context.other.value<ClickHandlerContext>();
+		if (const auto window = my.sessionWindow.get()) {
+			StickerSetBox::Show(window, document);
+		}
+	});
 }
 
 void Sticker::refreshLink() {
@@ -261,19 +292,35 @@ void Sticker::refreshLink() {
 	if (isEmojiSticker()) {
 		const auto weak = base::make_weak(this);
 		_link = std::make_shared<LambdaClickHandler>([weak] {
-			const auto that = weak.get();
-			if (!that) {
-				return;
+			if (const auto that = weak.get()) {
+				that->emojiStickerClicked();
 			}
-			that->_lottieOncePlayed = false;
-			that->_parent->history()->owner().requestViewRepaint(
-				that->_parent);
 		});
-	} else if (sticker && sticker->set.type() != mtpc_inputStickerSetEmpty) {
-		_link = std::make_shared<LambdaClickHandler>([document = _data] {
-			StickerSetBox::Show(App::wnd()->sessionController(), document);
-		});
+	} else if (sticker && sticker->set) {
+		_link = ShowSetHandler(_data);
+	} else if (sticker
+		&& (_data->dimensions.width() > kStickerSideSize
+			|| _data->dimensions.height() > kStickerSideSize)
+		&& !_parent->data()->isSending()
+		&& !_parent->data()->hasFailed()) {
+		// In case we have a .webp file that is displayed as a sticker, but
+		// that doesn't fit in 512x512, we assume it may be a regular large
+		// .webp image and we allow to open it in media viewer.
+		_link = std::make_shared<DocumentOpenClickHandler>(
+			_data,
+			crl::guard(this, [=](FullMsgId id) {
+				_parent->delegate()->elementOpenDocument(_data, id);
+			}),
+			_parent->data()->fullId());
 	}
+}
+
+void Sticker::emojiStickerClicked() {
+	if (_lottie) {
+		_parent->delegate()->elementStartInteraction(_parent);
+	}
+	_lottieOncePlayed = false;
+	_parent->history()->owner().requestViewRepaint(_parent);
 }
 
 void Sticker::ensureDataMediaCreated() const {
@@ -288,7 +335,9 @@ void Sticker::dataMediaCreated() const {
 	Expects(_dataMedia != nullptr);
 
 	_dataMedia->goodThumbnailWanted();
-	_dataMedia->thumbnailWanted(_parent->data()->fullId());
+	if (_dataMedia->thumbnailPath().isEmpty()) {
+		_dataMedia->thumbnailWanted(_parent->data()->fullId());
+	}
 	_parent->history()->owner().registerHeavyViewPart(_parent);
 }
 

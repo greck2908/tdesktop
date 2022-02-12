@@ -21,11 +21,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/fade_wrap.h"
 #include "ui/layers/generic_box.h"
 #include "ui/text/text_utilities.h"
+#include "ui/boxes/calendar_box.h"
 #include "platform/platform_specific.h"
 #include "core/file_utilities.h"
-#include "boxes/calendar_box.h"
 #include "base/unixtime.h"
-#include "base/qt_adapters.h"
 #include "main/main_session.h"
 #include "styles/style_widgets.h"
 #include "styles/style_export.h"
@@ -64,7 +63,7 @@ void ChooseFormatBox(
 	using Format = Output::Format;
 	const auto group = std::make_shared<Ui::RadioenumGroup<Format>>(format);
 	const auto addFormatOption = [&](QString label, Format format) {
-		const auto radio = box->addRow(
+		box->addRow(
 			object_ptr<Ui::Radioenum<Format>>(
 				box,
 				group,
@@ -261,7 +260,7 @@ void SettingsWidget::setupPathAndFormat(
 		});
 	});
 	const auto addFormatOption = [&](QString label, Format format) {
-		const auto radio = container->add(
+		container->add(
 			object_ptr<Ui::Radioenum<Format>>(
 				container,
 				formatGroup,
@@ -463,14 +462,8 @@ void SettingsWidget::editDateLimit(
 		? base::unixtime::parse(min).date()
 		: QDate::currentDate();
 	const auto month = highlighted;
-	const auto shared = std::make_shared<QPointer<CalendarBox>>();
-	const auto finalize = [=](not_null<CalendarBox*> box) {
-		box->setMaxDate(max
-			? base::unixtime::parse(max).date()
-			: QDate::currentDate());
-		box->setMinDate(min
-			? base::unixtime::parse(min).date()
-			: QDate(2013, 8, 1)); // Telegram was launched in August 2013 :)
+	const auto shared = std::make_shared<QPointer<Ui::CalendarBox>>();
+	const auto finalize = [=](not_null<Ui::CalendarBox*> box) {
 		box->addLeftButton(std::move(resetLabel), crl::guard(this, [=] {
 			done(0);
 			if (const auto weak = shared->data()) {
@@ -479,17 +472,24 @@ void SettingsWidget::editDateLimit(
 		}));
 	};
 	const auto callback = crl::guard(this, [=](const QDate &date) {
-		done(base::unixtime::serialize(base::QDateToDateTime(date)));
+		done(base::unixtime::serialize(date.startOfDay()));
 		if (const auto weak = shared->data()) {
 			weak->closeBox();
 		}
 	});
-	auto box = Box<CalendarBox>(
-		month,
-		highlighted,
-		callback,
-		finalize,
-		st::exportCalendarSizes);
+	auto box = Box<Ui::CalendarBox>(Ui::CalendarBoxArgs{
+		.month = month,
+		.highlighted = highlighted,
+		.callback = callback,
+		.finalize = finalize,
+		.st = st::exportCalendarSizes,
+		.minDate = (min
+			? base::unixtime::parse(min).date()
+			: QDate(2013, 8, 1)), // Telegram was launched in August 2013 :)
+		.maxDate = (max
+			? base::unixtime::parse(max).date()
+			: QDate::currentDate()),
+	});
 	*shared = Ui::MakeWeak(box.data());
 	_showBoxCallback(std::move(box));
 }
@@ -582,7 +582,7 @@ not_null<Ui::Checkbox*> SettingsWidget::addOptionWithAbout(
 		Types types,
 		const QString &about) {
 	const auto result = addOption(container, text, types);
-	const auto label = container->add(
+	container->add(
 		object_ptr<Ui::FlatLabel>(
 			container,
 			about,

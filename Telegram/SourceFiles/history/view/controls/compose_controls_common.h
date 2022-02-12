@@ -30,6 +30,7 @@ struct VoiceToSend {
 struct SendActionUpdate {
 	Api::SendProgressType type = Api::SendProgressType();
 	int progress = 0;
+	bool cancel = false;
 };
 
 struct SetHistoryArgs {
@@ -38,6 +39,15 @@ struct SetHistoryArgs {
 	rpl::producer<int> slowmodeSecondsLeft;
 	rpl::producer<bool> sendDisabledBySlowmode;
 	rpl::producer<std::optional<QString>> writeRestriction;
+};
+
+struct ReplyNextRequest {
+	enum class Direction {
+		Next,
+		Previous,
+	};
+	const FullMsgId replyId;
+	const Direction direction;
 };
 
 } // namespace HistoryView::Controls

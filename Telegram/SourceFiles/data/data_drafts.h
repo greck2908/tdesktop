@@ -26,25 +26,31 @@ void ClearPeerCloudDraft(
 	PeerId peerId,
 	TimeId date);
 
+enum class PreviewState : char {
+	Allowed,
+	Cancelled,
+	EmptyOnEdit,
+};
+
 struct Draft {
 	Draft() = default;
 	Draft(
 		const TextWithTags &textWithTags,
 		MsgId msgId,
 		const MessageCursor &cursor,
-		bool previewCancelled,
+		PreviewState previewState,
 		mtpRequestId saveRequestId = 0);
 	Draft(
 		not_null<const Ui::InputField*> field,
 		MsgId msgId,
-		bool previewCancelled,
+		PreviewState previewState,
 		mtpRequestId saveRequestId = 0);
 
 	TimeId date = 0;
 	TextWithTags textWithTags;
 	MsgId msgId = 0; // replyToId for message draft, editMsgId for edit draft
 	MessageCursor cursor;
-	bool previewCancelled = false;
+	PreviewState previewState = PreviewState::Allowed;
 	mtpRequestId saveRequestId = 0;
 };
 
@@ -69,18 +75,20 @@ public:
 		return kScheduledDraftIndex + kEditDraftShift;
 	}
 	[[nodiscard]] static DraftKey Replies(MsgId rootId) {
-		return rootId;
+		return rootId.bare;
 	}
 	[[nodiscard]] static DraftKey RepliesEdit(MsgId rootId) {
-		return rootId + kEditDraftShift;
+		return rootId.bare + kEditDraftShift;
 	}
 
-	[[nodiscard]] static DraftKey FromSerialized(int32 value) {
+	[[nodiscard]] static DraftKey FromSerialized(qint64 value) {
 		return value;
 	}
-	[[nodiscard]] int32 serialize() const {
+	[[nodiscard]] qint64 serialize() const {
 		return _value;
 	}
+
+	[[nodiscard]] static DraftKey FromSerializedOld(int32 value);
 
 	inline bool operator<(const DraftKey &other) const {
 		return _value < other._value;
@@ -105,22 +113,23 @@ public:
 	}
 
 private:
-	DraftKey(int value) : _value(value) {
+	DraftKey(int64 value) : _value(value) {
 	}
 
 	static constexpr auto kLocalDraftIndex = -1;
 	static constexpr auto kCloudDraftIndex = -2;
 	static constexpr auto kScheduledDraftIndex = -3;
-	static constexpr auto kEditDraftShift = ServerMaxMsgId;
+	static constexpr auto kEditDraftShift = ServerMaxMsgId.bare;
+	static constexpr auto kEditDraftShiftOld = 0x3FFF'FFFF;
 
-	int _value = 0;
+	int64 _value = 0;
 
 };
 
 using HistoryDrafts = base::flat_map<DraftKey, std::unique_ptr<Draft>>;
 
 inline bool draftStringIsEmpty(const QString &text) {
-	for_const (auto ch, text) {
+	for (const auto &ch : text) {
 		if (!ch.isSpace()) {
 			return false;
 		}
@@ -144,7 +153,7 @@ inline bool draftsAreEqual(const Draft *a, const Draft *b) {
 
 	return (a->textWithTags == b->textWithTags)
 		&& (a->msgId == b->msgId)
-		&& (a->previewCancelled == b->previewCancelled);
+		&& (a->previewState == b->previewState);
 }
 
 } // namespace Data

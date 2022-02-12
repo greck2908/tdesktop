@@ -19,16 +19,18 @@ constexpr auto kRefreshTimeout = 3600 * crl::time(1000);
 } // namespace
 
 AppConfig::AppConfig(not_null<Account*> account) : _account(account) {
-	account->mtpValue(
-	) | rpl::start_with_next([=](not_null<MTP::Instance*> instance) {
-		_api.emplace(instance);
-		refresh();
-	}, _lifetime);
-
 	account->sessionChanges(
 	) | rpl::filter([=](Session *session) {
 		return (session != nullptr);
 	}) | rpl::start_with_next([=] {
+		refresh();
+	}, _lifetime);
+}
+
+void AppConfig::start() {
+	_account->mtpMainSessionValue(
+	) | rpl::start_with_next([=](not_null<MTP::Instance*> instance) {
+		_api.emplace(instance);
 		refresh();
 	}, _lifetime);
 }
@@ -51,7 +53,7 @@ void AppConfig::refresh() {
 			DEBUG_LOG(("getAppConfig result handled."));
 		}
 		_refreshed.fire({});
-	}).fail([=](const RPCError &error) {
+	}).fail([=] {
 		_requestId = 0;
 		refreshDelayed();
 	}).send();
@@ -178,10 +180,13 @@ rpl::producer<> AppConfig::suggestionRequested(const QString &key) const {
 }
 
 void AppConfig::dismissSuggestion(const QString &key) {
+	Expects(_api.has_value());
+
 	if (!_dismissedSuggestions.emplace(key).second) {
 		return;
 	}
 	_api->request(MTPhelp_DismissSuggestion(
+		MTP_inputPeerEmpty(),
 		MTP_string(key)
 	)).send();
 }

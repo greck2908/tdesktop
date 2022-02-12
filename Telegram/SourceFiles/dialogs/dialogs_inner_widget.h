@@ -14,7 +14,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/flags.h"
 #include "base/object_ptr.h"
 
-class RPCError;
+namespace MTP {
+class Error;
+} // namespace MTP
 
 namespace Main {
 class Session;
@@ -44,6 +46,7 @@ struct ChosenRow {
 	Key key;
 	Data::MessagePosition message;
 	bool filteredRow = false;
+	bool newWindow = false;
 };
 
 enum class SearchRequestType {
@@ -60,7 +63,7 @@ enum class WidgetState {
 	Filtered,
 };
 
-class InnerWidget final : public Ui::RpWidget, private base::Subscriber {
+class InnerWidget final : public Ui::RpWidget {
 	Q_OBJECT
 
 public:
@@ -93,7 +96,7 @@ public:
 	void refreshEmptyLabel();
 	void resizeEmptyLabel();
 
-	bool chooseRow();
+	bool chooseRow(Qt::KeyboardModifiers modifiers = {});
 
 	void scrollToEntry(const RowDescriptor &entry);
 
@@ -112,24 +115,25 @@ public:
 	void searchInChat(Key key, PeerData *from);
 
 	void applyFilterUpdate(QString newFilter, bool force = false);
-	void onHashtagFilterUpdate(QStringRef newFilter);
+	void onHashtagFilterUpdate(QStringView newFilter);
 
 	PeerData *updateFromParentDrag(QPoint globalPosition);
 
 	void setLoadMoreCallback(Fn<void()> callback);
 	[[nodiscard]] rpl::producer<> listBottomReached() const;
-
-	base::Observable<PeerData*> searchFromUserChanged;
-
+	[[nodiscard]] rpl::producer<> cancelSearchFromUserRequests() const;
 	[[nodiscard]] rpl::producer<ChosenRow> chosenRow() const;
 	[[nodiscard]] rpl::producer<> updated() const;
 
+	[[nodiscard]] RowDescriptor resolveChatNext(RowDescriptor from = {}) const;
+	[[nodiscard]] RowDescriptor resolveChatPrevious(RowDescriptor from = {}) const;
+
 	~InnerWidget();
 
-public slots:
+public Q_SLOTS:
 	void onParentGeometryChanged();
 
-signals:
+Q_SIGNALS:
 	void draggingScrollDelta(int delta);
 	void mustScrollTo(int scrollToTop, int scrollToBottom);
 	void dialogMoved(int movedFrom, int movedTo);
@@ -148,7 +152,7 @@ protected:
 	void mousePressEvent(QMouseEvent *e) override;
 	void mouseReleaseEvent(QMouseEvent *e) override;
 	void resizeEvent(QResizeEvent *e) override;
-	void enterEventHook(QEvent *e) override;
+	void enterEventHook(QEnterEvent *e) override;
 	void leaveEventHook(QEvent *e) override;
 	void contextMenuEvent(QContextMenuEvent *e) override;
 
@@ -192,7 +196,10 @@ private:
 	void refreshDialogRow(RowDescriptor row);
 
 	void clearMouseSelection(bool clearSelection = false);
-	void mousePressReleased(QPoint globalPosition, Qt::MouseButton button);
+	void mousePressReleased(
+		QPoint globalPosition,
+		Qt::MouseButton button,
+		Qt::KeyboardModifiers modifiers);
 	void clearIrrelevantState();
 	void selectByMouse(QPoint globalPosition);
 	void loadPeerPhotos();
@@ -234,7 +241,7 @@ private:
 	void setupShortcuts();
 	RowDescriptor computeJump(
 		const RowDescriptor &to,
-		JumpSkip skip);
+		JumpSkip skip) const;
 	bool jumpToDialogRow(RowDescriptor to);
 
 	RowDescriptor chatListEntryBefore(const RowDescriptor &which) const;
@@ -297,11 +304,6 @@ private:
 		Painter &p,
 		int top,
 		const Ui::Text::String &text) const;
-	//void paintSearchInFeed( // #feed
-	//	Painter &p,
-	//	not_null<Data::Feed*> feed,
-	//	int top,
-	//	const Ui::Text::String &text) const;
 	template <typename PaintUserpic>
 	void paintSearchInFilter(
 		Painter &p,

@@ -14,7 +14,7 @@ class FileLoader;
 
 namespace Media {
 namespace Clip {
-enum Notification : int;
+enum class Notification;
 class ReaderPointer;
 } // namespace Clip
 } // namespace Media
@@ -52,6 +52,7 @@ public:
 	void setGoodThumbnail(QImage thumbnail);
 
 	[[nodiscard]] Image *thumbnailInline() const;
+	[[nodiscard]] const QPainterPath &thumbnailPath() const;
 
 	[[nodiscard]] Image *thumbnail() const;
 	[[nodiscard]] QSize thumbnailSize() const;
@@ -73,7 +74,7 @@ public:
 	[[nodiscard]] QByteArray bytes() const;
 	[[nodiscard]] bool loaded(bool check = false) const;
 	[[nodiscard]] float64 progress() const;
-	[[nodiscard]] bool canBePlayed() const;
+	[[nodiscard]] bool canBePlayed(HistoryItem *item) const;
 
 	void automaticLoad(Data::FileOrigin origin, const HistoryItem *item);
 
@@ -102,6 +103,7 @@ private:
 	const not_null<DocumentData*> _owner;
 	std::unique_ptr<Image> _goodThumbnail;
 	mutable std::unique_ptr<Image> _inlineThumbnail;
+	mutable QPainterPath _pathThumbnail;
 	std::unique_ptr<Image> _thumbnail;
 	std::unique_ptr<Image> _sticker;
 	QByteArray _bytes;

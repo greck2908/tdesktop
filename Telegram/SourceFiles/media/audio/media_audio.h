@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/animation_value.h"
 #include "ui/chat/attach/attach_prepare.h"
 #include "core/file_location.h"
+#include "data/data_audio_msg_id.h"
 #include "base/bytes.h"
 #include "base/timer.h"
 
@@ -178,13 +179,13 @@ public:
 
 	~Mixer();
 
-private slots:
+private Q_SLOTS:
 	void onError(const AudioMsgId &audio);
 	void onStopped(const AudioMsgId &audio);
 
 	void onUpdated(const AudioMsgId &audio);
 
-signals:
+Q_SIGNALS:
 	void updated(const AudioMsgId &audio);
 	void stoppedOnError(const AudioMsgId &audio);
 	void loaderOnStart(const AudioMsgId &audio, qint64 positionMs);
@@ -325,13 +326,13 @@ class Fader : public QObject {
 public:
 	Fader(QThread *thread);
 
-signals:
+Q_SIGNALS:
 	void error(const AudioMsgId &audio);
 	void playPositionUpdated(const AudioMsgId &audio);
 	void audioStopped(const AudioMsgId &audio);
 	void needToPreload(const AudioMsgId &audio);
 
-public slots:
+public Q_SLOTS:
 	void onInit();
 	void onTimer();
 

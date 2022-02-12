@@ -41,6 +41,7 @@ public:
 
 	// For cloud-stored recent stickers.
 	static constexpr auto CloudRecentSetId = 0xFFFFFFFFFFFFFFFCULL;
+	static constexpr auto CloudRecentAttachedSetId = 0xFFFFFFFFFFFFFFF9ULL;
 
 	// For cloud-stored faved stickers.
 	static constexpr auto FavedSetId = 0xFFFFFFFFFFFFFFFAULL;
@@ -48,12 +49,19 @@ public:
 	// For setting up megagroup sticker set.
 	static constexpr auto MegagroupSetId = 0xFFFFFFFFFFFFFFEFULL;
 
+	enum Recent {
+		Regular,
+		Attached,
+	};
+
 	void notifyUpdated();
 	[[nodiscard]] rpl::producer<> updated() const;
-	void notifyRecentUpdated();
-	[[nodiscard]] rpl::producer<> recentUpdated() const;
+	void notifyRecentUpdated(Recent recent = Recent::Regular);
+	[[nodiscard]] rpl::producer<Recent> recentUpdated() const;
 	void notifySavedGifsUpdated();
 	[[nodiscard]] rpl::producer<> savedGifsUpdated() const;
+	void notifyStickerSetInstalled(uint64 setId);
+	[[nodiscard]] rpl::producer<uint64> stickerSetInstalled() const;
 
 	void incrementSticker(not_null<DocumentData*> document);
 
@@ -71,6 +79,21 @@ public:
 			notifyRecentUpdated();
 		}
 		_lastRecentUpdate = update;
+	}
+	bool masksUpdateNeeded(crl::time now) const {
+		return updateNeeded(_lastMasksUpdate, now);
+	}
+	void setLastMasksUpdate(crl::time update) {
+		_lastMasksUpdate = update;
+	}
+	bool recentAttachedUpdateNeeded(crl::time now) const {
+		return updateNeeded(_lastRecentAttachedUpdate, now);
+	}
+	void setLastRecentAttachedUpdate(crl::time update) {
+		if (update) {
+			notifyRecentUpdated(Recent::Attached);
+		}
+		_lastRecentAttachedUpdate = update;
 	}
 	bool favedUpdateNeeded(crl::time now) const {
 		return updateNeeded(_lastFavedUpdate, now);
@@ -111,6 +134,12 @@ public:
 	StickersSetsOrder &setsOrderRef() {
 		return _setsOrder;
 	}
+	const StickersSetsOrder &maskSetsOrder() const {
+		return _maskSetsOrder;
+	}
+	StickersSetsOrder &maskSetsOrderRef() {
+		return _maskSetsOrder;
+	}
 	const StickersSetsOrder &featuredSetsOrder() const {
 		return _featuredSetsOrder;
 	}
@@ -122,6 +151,12 @@ public:
 	}
 	StickersSetsOrder &archivedSetsOrderRef() {
 		return _archivedSetsOrder;
+	}
+	const StickersSetsOrder &archivedMaskSetsOrder() const {
+		return _archivedMaskSetsOrder;
+	}
+	StickersSetsOrder &archivedMaskSetsOrderRef() {
+		return _archivedMaskSetsOrder;
 	}
 	const SavedGifs &savedGifs() const {
 		return _savedGifs;
@@ -136,25 +171,25 @@ public:
 
 	void applyArchivedResult(
 		const MTPDmessages_stickerSetInstallResultArchive &d);
-	bool applyArchivedResultFake(); // For testing.
 	void installLocally(uint64 setId);
 	void undoInstallLocally(uint64 setId);
 	bool isFaved(not_null<const DocumentData*> document);
 	void setFaved(not_null<DocumentData*> document, bool faved);
 
-	void setsReceived(const QVector<MTPStickerSet> &data, int32 hash);
+	void setsReceived(const QVector<MTPStickerSet> &data, uint64 hash);
+	void masksReceived(const QVector<MTPStickerSet> &data, uint64 hash);
 	void specialSetReceived(
 		uint64 setId,
 		const QString &setTitle,
 		const QVector<MTPDocument> &items,
-		int32 hash,
+		uint64 hash,
 		const QVector<MTPStickerPack> &packs = QVector<MTPStickerPack>(),
 		const QVector<MTPint> &usageDates = QVector<MTPint>());
 	void featuredSetsReceived(
 		const QVector<MTPStickerSetCovered> &list,
 		const QVector<MTPlong> &unread,
-		int32 hash);
-	void gifsReceived(const QVector<MTPDocument> &items, int32 hash);
+		uint64 hash);
+	void gifsReceived(const QVector<MTPDocument> &items, uint64 hash);
 
 	std::vector<not_null<DocumentData*>> getListByEmoji(
 		not_null<EmojiPtr> emoji,
@@ -163,8 +198,8 @@ public:
 		not_null<DocumentData*> document);
 
 	StickersSet *feedSet(const MTPDstickerSet &data);
-	StickersSet *feedSetFull(const MTPmessages_StickerSet &data);
-	void newSetReceived(const MTPmessages_StickerSet &data);
+	StickersSet *feedSetFull(const MTPDmessages_stickerSet &d);
+	void newSetReceived(const MTPDmessages_stickerSet &set);
 
 	QString getSetTitle(const MTPDstickerSet &s);
 
@@ -193,21 +228,30 @@ private:
 		StickersPack &&pack,
 		const std::vector<TimeId> &&dates,
 		const QVector<MTPStickerPack> &packs);
+	void setsOrMasksReceived(
+		const QVector<MTPStickerSet> &data,
+		uint64 hash,
+		bool masks);
 
 	const not_null<Session*> _owner;
 	rpl::event_stream<> _updated;
-	rpl::event_stream<> _recentUpdated;
+	rpl::event_stream<Recent> _recentUpdated;
 	rpl::event_stream<> _savedGifsUpdated;
+	rpl::event_stream<uint64> _stickerSetInstalled;
 	crl::time _lastUpdate = 0;
 	crl::time _lastRecentUpdate = 0;
 	crl::time _lastFavedUpdate = 0;
 	crl::time _lastFeaturedUpdate = 0;
 	crl::time _lastSavedGifsUpdate = 0;
+	crl::time _lastMasksUpdate = 0;
+	crl::time _lastRecentAttachedUpdate = 0;
 	rpl::variable<int> _featuredSetsUnreadCount = 0;
 	StickersSets _sets;
 	StickersSetsOrder _setsOrder;
+	StickersSetsOrder _maskSetsOrder;
 	StickersSetsOrder _featuredSetsOrder;
 	StickersSetsOrder _archivedSetsOrder;
+	StickersSetsOrder _archivedMaskSetsOrder;
 	SavedGifs _savedGifs;
 
 };

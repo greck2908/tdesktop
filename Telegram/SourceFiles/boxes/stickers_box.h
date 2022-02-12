@@ -14,13 +14,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/animations.h"
 #include "ui/special_fields.h"
 
-class ConfirmBox;
-
 namespace style {
 struct RippleAnimation;
 } // namespace style
 
 namespace Ui {
+class ConfirmBox;
 class PlainShadow;
 class RippleAnimation;
 class SettingsSlider;
@@ -49,19 +48,21 @@ namespace Stickers {
 class Set;
 } // namespace Stickers
 
-class StickersBox final : public Ui::BoxContent, private base::Subscriber {
+class StickersBox final : public Ui::BoxContent {
 public:
 	enum class Section {
 		Installed,
 		Featured,
 		Archived,
 		Attached,
+		Masks,
 	};
 
 	StickersBox(
 		QWidget*,
 		not_null<Window::SessionController*> controller,
-		Section section);
+		Section section,
+		bool masks = false);
 	StickersBox(
 		QWidget*,
 		not_null<Window::SessionController*> controller,
@@ -94,7 +95,7 @@ private:
 		object_ptr<Inner> takeWidget();
 		void returnWidget(object_ptr<Inner> widget);
 
-		[[nodiscard]] Inner *widget();
+		[[nodiscard]] Inner *widget() const;
 		[[nodiscard]] int index() const;
 
 		void saveScrollTop();
@@ -103,7 +104,7 @@ private:
 		}
 
 	private:
-		int _index = 0;
+		const int _index = 0;
 		object_ptr<Inner> _widget = { nullptr };
 		QPointer<Inner> _weak;
 		int _scrollTop = 0;
@@ -122,7 +123,7 @@ private:
 	QPixmap grabContentCache();
 
 	void installDone(const MTPmessages_StickerSetInstallResult &result);
-	void installFail(const RPCError &error, uint64 setId);
+	void installFail(const MTP::Error &error, uint64 setId);
 
 	void preloadArchivedSets();
 	void requestArchivedSets();
@@ -132,18 +133,26 @@ private:
 		uint64 offsetId);
 	void showAttachedStickers();
 
+	const Data::StickersSetsOrder &archivedSetsOrder() const;
+	Data::StickersSetsOrder &archivedSetsOrderRef();
+
+	std::array<Inner*, 5> widgets() const;
+
 	const not_null<Window::SessionController*> _controller;
 	MTP::Sender _api;
 
 	object_ptr<Ui::SettingsSlider> _tabs = { nullptr };
 	QList<Section> _tabIndices;
+	bool _ignoreTabActivation = false;
 
 	class CounterWidget;
 	object_ptr<CounterWidget> _unreadBadge = { nullptr };
 
 	Section _section;
+	const bool _isMasks;
 
 	Tab _installed;
+	Tab _masks;
 	Tab _featured;
 	Tab _archived;
 	Tab _attached;

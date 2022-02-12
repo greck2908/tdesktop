@@ -20,7 +20,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "boxes/abstract_box.h"
 #include "core/application.h"
-#include "app.h" // App::quitting.
 #include "styles/style_info.h"
 #include "styles/style_window.h"
 #include "styles/style_layers.h"
@@ -71,6 +70,11 @@ void LayerWidget::floatPlayerEnumerateSections(Fn<void(
 
 bool LayerWidget::floatPlayerIsVisible(not_null<HistoryItem*> item) {
 	return false;
+}
+
+void LayerWidget::floatPlayerDoubleClickEvent(
+		not_null<const HistoryItem*> item) {
+	_controller->showPeerHistoryAtItem(item);
 }
 
 void LayerWidget::setupHeightConsumers() {
@@ -207,7 +211,7 @@ int LayerWidget::resizeGetHeight(int newWidth) {
 	auto windowWidth = parentSize.width();
 	auto windowHeight = parentSize.height();
 	auto newLeft = (windowWidth - newWidth) / 2;
-	auto newTop = snap(
+	auto newTop = std::clamp(
 		windowHeight / 24,
 		st::infoLayerTopMinimal,
 		st::infoLayerTopMaximal);
@@ -292,7 +296,7 @@ void LayerWidget::closeHook() {
 }
 
 LayerWidget::~LayerWidget() {
-	if (!App::quitting()) {
+	if (!Core::Quitting()) {
 		restoreFloatPlayerDelegate();
 	}
 }

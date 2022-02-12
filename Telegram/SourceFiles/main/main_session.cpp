@@ -10,10 +10,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "api/api_updates.h"
 #include "api/api_send_progress.h"
-#include "core/application.h"
+#include "api/api_user_privacy.h"
 #include "main/main_account.h"
 #include "main/main_domain.h"
 #include "main/main_session_settings.h"
+#include "main/session/send_as_peers.h"
 #include "mtproto/mtproto_config.h"
 #include "chat_helpers/stickers_emoji_pack.h"
 #include "chat_helpers/stickers_dice_pack.h"
@@ -28,12 +29,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user.h"
 #include "data/stickers/data_stickers.h"
 #include "window/window_session_controller.h"
+#include "window/window_controller.h"
 #include "window/window_lock_widgets.h"
-#include "window/themes/window_theme.h"
-//#include "platform/platform_specific.h"
+#include "base/unixtime.h"
 #include "calls/calls_instance.h"
 #include "support/support_helper.h"
-#include "facades.h"
+#include "lang/lang_keys.h"
+#include "core/application.h"
+#include "ui/text/text_utilities.h"
+#include "ui/layers/generic_box.h"
+#include "styles/style_layers.h"
 
 #ifndef TDESKTOP_DISABLE_SPELLCHECK
 #include "chat_helpers/spellchecker_common.h"
@@ -42,7 +47,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Main {
 namespace {
 
-constexpr auto kLegacyCallsPeerToPeerNobody = 4;
+constexpr auto kTmpPasswordReserveTime = TimeId(10);
 
 [[nodiscard]] QString ValidatedInternalLinksDomain(
 		not_null<const Session*> session) {
@@ -71,25 +76,23 @@ Session::Session(
 	std::unique_ptr<SessionSettings> settings)
 : _account(account)
 , _settings(std::move(settings))
+, _changes(std::make_unique<Data::Changes>(this))
 , _api(std::make_unique<ApiWrap>(this))
 , _updates(std::make_unique<Api::Updates>(this))
 , _sendProgressManager(std::make_unique<Api::SendProgressManager>(this))
 , _downloader(std::make_unique<Storage::DownloadManagerMtproto>(_api.get()))
 , _uploader(std::make_unique<Storage::Uploader>(_api.get()))
 , _storage(std::make_unique<Storage::Facade>())
-, _changes(std::make_unique<Data::Changes>(this))
 , _data(std::make_unique<Data::Session>(this))
+, _userId(user.c_user().vid())
 , _user(_data->processUser(user))
 , _emojiStickersPack(std::make_unique<Stickers::EmojiPack>(this))
 , _diceStickersPacks(std::make_unique<Stickers::DicePacks>(this))
+, _sendAsPeers(std::make_unique<SendAsPeers>(this))
 , _supportHelper(Support::Helper::Create(this))
 , _saveSettingsTimer([=] { saveSettings(); }) {
 	Expects(_settings != nullptr);
 
-	subscribe(Global::RefConnectionTypeChanged(), [=] {
-		_api->refreshTopPromotion();
-	});
-	_api->refreshTopPromotion();
 	_api->requestTermsUpdate();
 	_api->requestFullPeer(_user);
 
@@ -127,19 +130,21 @@ Session::Session(
 		}, _lifetime);
 
 		if (_settings->hadLegacyCallsPeerToPeerNobody()) {
-			api().savePrivacy(
-				MTP_inputPrivacyKeyPhoneP2P(),
-				QVector<MTPInputPrivacyRule>(
-					1,
-					MTP_inputPrivacyValueDisallowAll()));
+			api().userPrivacy().save(
+				Api::UserPrivacy::Key::CallsPeer2Peer,
+				Api::UserPrivacy::Rule{
+					.option = Api::UserPrivacy::Option::Nobody
+				});
 			saveSettingsDelayed();
 		}
 
 		// Storage::Account uses Main::Account::session() in those methods.
 		// So they can't be called during Main::Session construction.
 		local().readInstalledStickers();
+		local().readInstalledMasks();
 		local().readFeaturedStickers();
 		local().readRecentStickers();
+		local().readRecentMasks();
 		local().readFavedStickers();
 		local().readSavedGifs();
 		data().stickers().notifyUpdated();
@@ -153,6 +158,20 @@ Session::Session(
 	_api->requestNotifySettings(MTP_inputNotifyUsers());
 	_api->requestNotifySettings(MTP_inputNotifyChats());
 	_api->requestNotifySettings(MTP_inputNotifyBroadcasts());
+}
+
+void Session::setTmpPassword(const QByteArray &password, TimeId validUntil) {
+	if (_tmpPassword.isEmpty() || validUntil > _tmpPasswordValidUntil) {
+		_tmpPassword = password;
+		_tmpPasswordValidUntil = validUntil;
+	}
+}
+
+QByteArray Session::validTmpPassword() const {
+	return (_tmpPasswordValidUntil
+		>= base::unixtime::now() + kTmpPasswordReserveTime)
+		? _tmpPassword
+		: QByteArray();
 }
 
 // Can be called only right before ~Session.
@@ -196,23 +215,20 @@ rpl::producer<> Session::downloaderTaskFinished() const {
 
 uint64 Session::uniqueId() const {
 	// See also Account::willHaveSessionUniqueId.
-	return uint64(uint32(userId()))
+	return userId().bare
 		| (mtp().isTestMode() ? 0x0100'0000'0000'0000ULL : 0ULL);
 }
 
 UserId Session::userId() const {
-	return _user->bareId();
+	return _userId;
 }
 
 PeerId Session::userPeerId() const {
-	return _user->id;
+	return _userId;
 }
 
-bool Session::validateSelf(const MTPUser &user) {
-	if (user.type() != mtpc_user || !user.c_user().is_self()) {
-		LOG(("API Error: bad self user received."));
-		return false;
-	} else if (user.c_user().vid().v != userId()) {
+bool Session::validateSelf(UserId id) {
+	if (id != userId()) {
 		LOG(("Auth Error: wrong self user received."));
 		crl::on_main(this, [=] { _account->logOut(); });
 		return false;
@@ -282,22 +298,33 @@ rpl::producer<bool> Session::termsLockValue() const {
 }
 
 QString Session::createInternalLink(const QString &query) const {
-	auto result = createInternalLinkFull(query);
-	auto prefixes = {
+	return createInternalLink(TextWithEntities{ .text = query }).text;
+}
+
+QString Session::createInternalLinkFull(const QString &query) const {
+	return createInternalLinkFull(TextWithEntities{ .text = query }).text;
+}
+
+TextWithEntities Session::createInternalLink(
+		const TextWithEntities &query) const {
+	const auto result = createInternalLinkFull(query);
+	const auto prefixes = {
 		qstr("https://"),
 		qstr("http://"),
 	};
 	for (auto &prefix : prefixes) {
-		if (result.startsWith(prefix, Qt::CaseInsensitive)) {
-			return result.mid(prefix.size());
+		if (result.text.startsWith(prefix, Qt::CaseInsensitive)) {
+			return Ui::Text::Mid(result, prefix.size());
 		}
 	}
-	LOG(("Warning: bad internal url '%1'").arg(result));
+	LOG(("Warning: bad internal url '%1'").arg(result.text));
 	return result;
 }
 
-QString Session::createInternalLinkFull(const QString &query) const {
-	return ValidatedInternalLinksDomain(this) + query;
+TextWithEntities Session::createInternalLinkFull(
+		TextWithEntities query) const {
+	return TextWithEntities::Simple(ValidatedInternalLinksDomain(this))
+		.append(std::move(query));
 }
 
 bool Session::supportMode() const {
@@ -325,9 +352,67 @@ void Session::addWindow(not_null<Window::SessionController*> controller) {
 	}) | rpl::distinct_until_changed());
 }
 
+bool Session::uploadsInProgress() const {
+	return !!_uploader->currentUploadId();
+}
+
+void Session::uploadsStopWithConfirmation(Fn<void()> done) {
+	const auto window = Core::App().primaryWindow();
+	if (!window) {
+		return;
+	}
+	const auto id = _uploader->currentUploadId();
+	const auto exists = !!data().message(id);
+	auto box = Box([=](not_null<Ui::GenericBox*> box) {
+		box->addRow(
+			object_ptr<Ui::FlatLabel>(
+				box.get(),
+				tr::lng_upload_sure_stop(),
+				st::boxLabel),
+			st::boxPadding + QMargins(0, 0, 0, st::boxPadding.bottom()));
+		box->setStyle(st::defaultBox);
+		box->addButton(tr::lng_selected_upload_stop(), [=] {
+			box->closeBox();
+
+			uploadsStop();
+			if (done) {
+				done();
+			}
+		}, st::attentionBoxButton);
+		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+		if (exists) {
+			box->addLeftButton(tr::lng_upload_show_file(), [=] {
+				box->closeBox();
+
+				if (const auto item = data().message(id)) {
+					if (const auto window = tryResolveWindow()) {
+						window->showPeerHistoryAtItem(item);
+					}
+				}
+			});
+		}
+	});
+	window->show(std::move(box));
+	window->activate();
+}
+
+void Session::uploadsStop() {
+	_uploader->cancelAll();
+}
+
 auto Session::windows() const
 -> const base::flat_set<not_null<Window::SessionController*>> & {
 	return _windows;
+}
+
+Window::SessionController *Session::tryResolveWindow() const {
+	if (_windows.empty()) {
+		domain().activate(_account);
+		if (_windows.empty()) {
+			return nullptr;
+		}
+	}
+	return _windows.front();
 }
 
 } // namespace Main

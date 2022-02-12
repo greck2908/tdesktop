@@ -11,31 +11,36 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/format_values.h"
 #include "history/history_item.h"
 #include "history/history.h"
+#include "history/view/history_view_element.h"
 #include "data/data_document.h"
+#include "data/data_file_click_handler.h"
 #include "data/data_session.h"
 #include "styles/style_chat.h"
 
 namespace HistoryView {
 
+bool File::toggleSelectionByHandlerClick(const ClickHandlerPtr &p) const {
+	return p == _openl || p == _savel || p == _cancell;
+}
+bool File::dragItemByHandler(const ClickHandlerPtr &p) const {
+	return p == _openl || p == _savel || p == _cancell;
+}
+
 void File::clickHandlerActiveChanged(const ClickHandlerPtr &p, bool active) {
 	if (p == _savel || p == _cancell) {
 		if (active && !dataLoaded()) {
 			ensureAnimation();
-			_animation->a_thumbOver.start([this] { thumbAnimationCallback(); }, 0., 1., st::msgFileOverDuration);
+			_animation->a_thumbOver.start([=] { repaint(); }, 0., 1., st::msgFileOverDuration);
 		} else if (!active && _animation && !dataLoaded()) {
-			_animation->a_thumbOver.start([this] { thumbAnimationCallback(); }, 1., 0., st::msgFileOverDuration);
+			_animation->a_thumbOver.start([=] { repaint(); }, 1., 0., st::msgFileOverDuration);
 		}
 	}
-}
-
-void File::thumbAnimationCallback() {
-	history()->owner().requestViewRepaint(_parent);
 }
 
 void File::clickHandlerPressedChanged(
 		const ClickHandlerPtr &handler,
 		bool pressed) {
-	history()->owner().requestViewRepaint(_parent);
+	repaint();
 }
 
 void File::setLinks(
@@ -49,9 +54,15 @@ void File::setLinks(
 
 void File::refreshParentId(not_null<HistoryItem*> realParent) {
 	const auto contextId = realParent->fullId();
-	_openl->setMessageId(contextId);
-	_savel->setMessageId(contextId);
-	_cancell->setMessageId(contextId);
+	if (_openl) {
+		_openl->setMessageId(contextId);
+	}
+	if (_savel) {
+		_savel->setMessageId(contextId);
+	}
+	if (_cancell) {
+		_cancell->setMessageId(contextId);
+	}
 }
 
 void File::setStatusSize(int newSize, int fullSize, int duration, qint64 realDuration) const {
@@ -77,7 +88,7 @@ void File::radialAnimationCallback(crl::time now) const {
 			now);
 	}();
 	if (!anim::Disabled() || updated) {
-		history()->owner().requestViewRepaint(_parent);
+		repaint();
 	}
 	if (!_animation->radial.animating()) {
 		checkAnimationFinished();
@@ -104,9 +115,19 @@ void File::setDocumentLinks(
 		not_null<HistoryItem*> realParent) {
 	const auto context = realParent->fullId();
 	setLinks(
-		std::make_shared<DocumentOpenClickHandler>(document, context),
+		std::make_shared<DocumentOpenClickHandler>(
+			document,
+			crl::guard(this, [=](FullMsgId id) {
+				_parent->delegate()->elementOpenDocument(document, id);
+			}),
+			context),
 		std::make_shared<DocumentSaveClickHandler>(document, context),
-		std::make_shared<DocumentCancelClickHandler>(document, context));
+		std::make_shared<DocumentCancelClickHandler>(
+			document,
+			crl::guard(this, [=](FullMsgId id) {
+				_parent->delegate()->elementCancelUpload(id);
+			}),
+			context));
 }
 
 File::~File() = default;

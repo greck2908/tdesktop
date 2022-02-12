@@ -56,13 +56,10 @@ void UnPremultiplyLine(uchar *dst, const uchar *src, int intsCount) {
 	for (auto i = 0; i != intsCount; ++i) {
 		udst[i] = qUnpremultiply(usrc[i]);
 	}
-#elif QT_VERSION < QT_VERSION_CHECK(5, 12, 0)
-	static const auto layout = &qPixelLayouts[QImage::Format_ARGB32];
-	layout->convertFromARGB32PM(udst, usrc, intsCount, layout, nullptr);
-#else // Qt >= 5.12
+#else // !LIB_FFMPEG_USE_QT_PRIVATE_API
 	static const auto layout = &qPixelLayouts[QImage::Format_ARGB32];
 	layout->storeFromARGB32PM(dst, usrc, 0, intsCount, nullptr, nullptr);
-#endif // Qt >= 5.12
+#endif // LIB_FFMPEG_USE_QT_PRIVATE_API
 }
 
 void PremultiplyLine(uchar *dst, const uchar *src, int intsCount) {
@@ -73,13 +70,10 @@ void PremultiplyLine(uchar *dst, const uchar *src, int intsCount) {
 	for (auto i = 0; i != intsCount; ++i) {
 		udst[i] = qPremultiply(usrc[i]);
 	}
-#elif QT_VERSION < QT_VERSION_CHECK(5, 12, 0)
-	static const auto layout = &qPixelLayouts[QImage::Format_ARGB32];
-	layout->convertToARGB32PM(udst, usrc, intsCount, layout, nullptr);
-#else // Qt >= 5.12
+#else // !LIB_FFMPEG_USE_QT_PRIVATE_API
 	static const auto layout = &qPixelLayouts[QImage::Format_ARGB32];
 	layout->fetchToARGB32PM(udst, src, 0, intsCount, nullptr, nullptr);
-#endif // Qt >= 5.12
+#endif // LIB_FFMPEG_USE_QT_PRIVATE_API
 }
 
 } // namespace
@@ -160,6 +154,13 @@ void FormatDeleter::operator()(AVFormatContext *value) {
 	}
 }
 
+AVCodec *FindDecoder(not_null<AVCodecContext*> context) {
+	// Force libvpx-vp9, because we need alpha channel support.
+	return (context->codec_id == AV_CODEC_ID_VP9)
+		? avcodec_find_decoder_by_name("libvpx-vp9")
+		: avcodec_find_decoder(context->codec_id);
+}
+
 CodecPointer MakeCodecPointer(not_null<AVStream*> stream) {
 	auto error = AvErrorWrap();
 
@@ -178,7 +179,7 @@ CodecPointer MakeCodecPointer(not_null<AVStream*> stream) {
 	av_opt_set(context, "threads", "auto", 0);
 	av_opt_set_int(context, "refcounted_frames", 1, 0);
 
-	const auto codec = avcodec_find_decoder(context->codec_id);
+	const auto codec = FindDecoder(context);
 	if (!codec) {
 		LogError(qstr("avcodec_find_decoder"), context->codec_id);
 		return {};

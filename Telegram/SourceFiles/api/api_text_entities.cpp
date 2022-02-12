@@ -27,7 +27,7 @@ EntitiesInText EntitiesFromMTP(
 		for (const auto &entity : entities) {
 			switch (entity.type()) {
 			case mtpc_messageEntityUrl: { auto &d = entity.c_messageEntityUrl(); result.push_back({ EntityType::Url, d.voffset().v, d.vlength().v }); } break;
-			case mtpc_messageEntityTextUrl: { auto &d = entity.c_messageEntityTextUrl(); result.push_back({ EntityType::CustomUrl, d.voffset().v, d.vlength().v, Clean(qs(d.vurl())) }); } break;
+			case mtpc_messageEntityTextUrl: { auto &d = entity.c_messageEntityTextUrl(); result.push_back({ EntityType::CustomUrl, d.voffset().v, d.vlength().v, qs(d.vurl()) }); } break;
 			case mtpc_messageEntityEmail: { auto &d = entity.c_messageEntityEmail(); result.push_back({ EntityType::Email, d.voffset().v, d.vlength().v }); } break;
 			case mtpc_messageEntityHashtag: { auto &d = entity.c_messageEntityHashtag(); result.push_back({ EntityType::Hashtag, d.voffset().v, d.vlength().v }); } break;
 			case mtpc_messageEntityCashtag: { auto &d = entity.c_messageEntityCashtag(); result.push_back({ EntityType::Cashtag, d.voffset().v, d.vlength().v }); } break;
@@ -35,15 +35,17 @@ EntitiesInText EntitiesFromMTP(
 			case mtpc_messageEntityMention: { auto &d = entity.c_messageEntityMention(); result.push_back({ EntityType::Mention, d.voffset().v, d.vlength().v }); } break;
 			case mtpc_messageEntityMentionName: {
 				const auto &d = entity.c_messageEntityMentionName();
+				const auto userId = UserId(d.vuser_id());
 				const auto data = [&] {
 					if (session) {
-						if (const auto user = session->data().userLoaded(d.vuser_id().v)) {
+						if (const auto user = session->data().userLoaded(userId)) {
 							return MentionNameDataFromFields({
-								d.vuser_id().v,
-								user->accessHash() });
+								userId.bare,
+								user->accessHash()
+							});
 						}
 					}
-					return MentionNameDataFromFields(d.vuser_id().v);
+					return MentionNameDataFromFields(userId.bare);
 				}();
 				result.push_back({ EntityType::MentionName, d.voffset().v, d.vlength().v, data });
 			} break;
@@ -51,10 +53,11 @@ EntitiesInText EntitiesFromMTP(
 				const auto &d = entity.c_inputMessageEntityMentionName();
 				const auto data = [&] {
 					if (session && d.vuser_id().type() == mtpc_inputUserSelf) {
-						return MentionNameDataFromFields(session->userId());
+						return MentionNameDataFromFields(session->userId().bare);
 					} else if (d.vuser_id().type() == mtpc_inputUser) {
 						auto &user = d.vuser_id().c_inputUser();
-						return MentionNameDataFromFields({ user.vuser_id().v, user.vaccess_hash().v });
+						const auto userId = UserId(user.vuser_id());
+						return MentionNameDataFromFields({ userId.bare, user.vaccess_hash().v });
 					}
 					return QString();
 				}();
@@ -68,8 +71,9 @@ EntitiesInText EntitiesFromMTP(
 			case mtpc_messageEntityUnderline: { auto &d = entity.c_messageEntityUnderline(); result.push_back({ EntityType::Underline, d.voffset().v, d.vlength().v }); } break;
 			case mtpc_messageEntityStrike: { auto &d = entity.c_messageEntityStrike(); result.push_back({ EntityType::StrikeOut, d.voffset().v, d.vlength().v }); } break;
 			case mtpc_messageEntityCode: { auto &d = entity.c_messageEntityCode(); result.push_back({ EntityType::Code, d.voffset().v, d.vlength().v }); } break;
-			case mtpc_messageEntityPre: { auto &d = entity.c_messageEntityPre(); result.push_back({ EntityType::Pre, d.voffset().v, d.vlength().v, Clean(qs(d.vlanguage())) }); } break;
+			case mtpc_messageEntityPre: { auto &d = entity.c_messageEntityPre(); result.push_back({ EntityType::Pre, d.voffset().v, d.vlength().v, qs(d.vlanguage()) }); } break;
 			case mtpc_messageEntityBankCard: break; // Skipping cards.
+			case mtpc_messageEntitySpoiler: { auto &d = entity.c_messageEntitySpoiler(); result.push_back({ EntityType::Spoiler, d.voffset().v, d.vlength().v }); } break;
 				// #TODO entities
 			}
 		}
@@ -93,6 +97,7 @@ MTPVector<MTPMessageEntity> EntitiesToMTP(
 			&& entity.type() != EntityType::StrikeOut
 			&& entity.type() != EntityType::Code // #TODO entities
 			&& entity.type() != EntityType::Pre
+			&& entity.type() != EntityType::Spoiler
 			&& entity.type() != EntityType::MentionName
 			&& entity.type() != EntityType::CustomUrl) {
 			continue;
@@ -110,10 +115,10 @@ MTPVector<MTPMessageEntity> EntitiesToMTP(
 		case EntityType::MentionName: {
 			auto inputUser = [&](const QString &data) -> MTPInputUser {
 				auto fields = MentionNameDataToFields(data);
-				if (session && fields.userId == session->userId()) {
+				if (session && fields.userId == session->userId().bare) {
 					return MTP_inputUserSelf();
 				} else if (fields.userId) {
-					return MTP_inputUser(MTP_int(fields.userId), MTP_long(fields.accessHash));
+					return MTP_inputUser(MTP_long(fields.userId), MTP_long(fields.accessHash));
 				}
 				return MTP_inputUserEmpty();
 			}(entity.data());
@@ -128,6 +133,7 @@ MTPVector<MTPMessageEntity> EntitiesToMTP(
 		case EntityType::StrikeOut: v.push_back(MTP_messageEntityStrike(offset, length)); break;
 		case EntityType::Code: v.push_back(MTP_messageEntityCode(offset, length)); break; // #TODO entities
 		case EntityType::Pre: v.push_back(MTP_messageEntityPre(offset, length, MTP_string(entity.data()))); break;
+		case EntityType::Spoiler: v.push_back(MTP_messageEntitySpoiler(offset, length)); break;
 		}
 	}
 	return MTP_vector<MTPMessageEntity>(std::move(v));

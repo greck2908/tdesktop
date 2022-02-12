@@ -100,7 +100,7 @@ QByteArray ParseRemoteConfigResponse(const QByteArray &bytes) {
 	return document.object().value(
 		"entries"
 	).toObject().value(
-		qsl("%1%2").arg(kConfigKey).arg(kConfigSubKey)
+		qsl("%1%2").arg(kConfigKey, kConfigSubKey)
 	).toString().toLatin1();
 }
 
@@ -143,7 +143,7 @@ QByteArray ParseRealtimeResponse(const QByteArray &bytes) {
 	}
 
 	const auto number = [&](int index) {
-		return match.capturedRef(index).toInt();
+		return match.capturedView(index).toInt();
 	};
 	const auto day = number(1);
 	const auto month = [&] {
@@ -161,9 +161,9 @@ QByteArray ParseRealtimeResponse(const QByteArray &bytes) {
 			"Nov",
 			"Dec"
 		};
-		const auto captured = match.capturedRef(2);
+		const auto captured = match.capturedView(2);
 		for (auto i = begin(months); i != end(months); ++i) {
-			if (captured == (*i)) {
+			if (captured == QString(*i)) {
 				return 1 + int(i - begin(months));
 			}
 		}
@@ -290,17 +290,17 @@ void SpecialConfigRequest::performRequest(const Attempt &attempt) {
 	case Type::Mozilla: {
 		url.setHost(attempt.data);
 		url.setPath(qsl("/dns-query"));
-		url.setQuery(qsl("name=%1&type=16&random_padding=%2"
-		).arg(_domainString
-		).arg(GenerateDnsRandomPadding()));
+		url.setQuery(qsl("name=%1&type=16&random_padding=%2").arg(
+			_domainString,
+			GenerateDnsRandomPadding()));
 		request.setRawHeader("accept", "application/dns-json");
 	} break;
 	case Type::Google: {
 		url.setHost(attempt.data);
 		url.setPath(qsl("/resolve"));
-		url.setQuery(qsl("name=%1&type=ANY&random_padding=%2"
-		).arg(_domainString
-		).arg(GenerateDnsRandomPadding()));
+		url.setQuery(qsl("name=%1&type=ANY&random_padding=%2").arg(
+			_domainString,
+			GenerateDnsRandomPadding()));
 		if (!attempt.host.isEmpty()) {
 			const auto host = attempt.host + ".google.com";
 			request.setRawHeader("Host", host.toLatin1());
@@ -311,23 +311,24 @@ void SpecialConfigRequest::performRequest(const Attempt &attempt) {
 		url.setPath(qsl("/v1/projects/%1/namespaces/firebase:fetch"
 		).arg(kRemoteProject));
 		url.setQuery(qsl("key=%1").arg(kApiKey));
-		payload = qsl("{\"app_id\":\"%1\",\"app_instance_id\":\"%2\"}"
-		).arg(kAppId
-		).arg(InstanceId()).toLatin1();
+		payload = qsl("{\"app_id\":\"%1\",\"app_instance_id\":\"%2\"}").arg(
+			kAppId,
+			InstanceId()).toLatin1();
 		request.setRawHeader("Content-Type", "application/json");
 	} break;
 	case Type::Realtime: {
 		url.setHost(kFireProject + qsl(".%1").arg(attempt.data));
-		url.setPath(qsl("/%1%2.json").arg(kConfigKey).arg(kConfigSubKey));
+		url.setPath(qsl("/%1%2.json").arg(kConfigKey, kConfigSubKey));
 	} break;
 	case Type::FireStore: {
 		url.setHost(attempt.host.isEmpty()
 			? ApiDomain(attempt.data)
 			: attempt.data);
 		url.setPath(qsl("/v1/projects/%1/databases/(default)/documents/%2/%3"
-		).arg(kFireProject
-		).arg(kConfigKey
-		).arg(kConfigSubKey));
+		).arg(
+			kFireProject,
+			kConfigKey,
+			kConfigSubKey));
 		if (!attempt.host.isEmpty()) {
 			const auto host = ApiDomain(attempt.host);
 			request.setRawHeader("Host", host.toLatin1());
@@ -368,7 +369,7 @@ void SpecialConfigRequest::handleHeaderUnixtime(
 		LOG(("Config Error: Bad 'Date' header received: %1").arg(date));
 		return;
 	}
-	base::unixtime::http_update(parsed.toTime_t());
+	base::unixtime::http_update(parsed.toSecsSinceEpoch());
 	if (_timeDoneCallback) {
 		_timeDoneCallback();
 	}
@@ -379,7 +380,7 @@ void SpecialConfigRequest::requestFinished(
 		not_null<QNetworkReply*> reply) {
 	handleHeaderUnixtime(reply);
 	const auto result = finalizeRequest(reply);
-	if (!_callback) {
+	if (!_callback || result.isEmpty()) {
 		return;
 	}
 
@@ -406,7 +407,7 @@ void SpecialConfigRequest::requestFinished(
 QByteArray SpecialConfigRequest::finalizeRequest(
 		not_null<QNetworkReply*> reply) {
 	if (reply->error() != QNetworkReply::NoError) {
-		LOG(("Config Error: Failed to get response, error: %2 (%3)"
+		DEBUG_LOG(("Config Error: Failed to get response, error: %2 (%3)"
 			).arg(reply->errorString()
 			).arg(reply->error()));
 	}

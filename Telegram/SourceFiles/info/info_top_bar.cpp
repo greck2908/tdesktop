@@ -15,7 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_controller.h"
 #include "info/profile/info_profile_values.h"
 #include "storage/storage_shared_media.h"
-#include "boxes/confirm_box.h"
+#include "boxes/delete_messages_box.h"
 #include "boxes/peer_list_controllers.h"
 #include "mainwidget.h"
 #include "main/main_session.h"
@@ -341,8 +341,10 @@ void TopBar::updateSelectionControlsGeometry(int newWidth) {
 		_delete->moveToRight(right, 0, newWidth);
 		right += _delete->width();
 	}
-	_forward->moveToRight(right, 0, newWidth);
-	right += _forward->width();
+	if (_canForward) {
+		_forward->moveToRight(right, 0, newWidth);
+		right += _forward->width();
+	}
 
 	auto left = 0;
 	_cancelSelection->moveToLeft(left, 0);
@@ -411,6 +413,7 @@ void TopBar::setSelectedItems(SelectedItems &&items) {
 
 SelectedItems TopBar::takeSelectedItems() {
 	_canDelete = false;
+	_canForward = false;
 	return std::move(_selectedItems);
 }
 
@@ -419,11 +422,13 @@ rpl::producer<> TopBar::cancelSelectionRequests() const {
 }
 
 void TopBar::updateSelectionState() {
-	Expects(_selectionText && _delete);
+	Expects(_selectionText && _delete && _forward);
 
 	_canDelete = computeCanDelete();
+	_canForward = computeCanForward();
 	_selectionText->entity()->setValue(generateSelectedText());
 	_delete->toggle(_canDelete, anim::type::instant);
+	_forward->toggle(_canForward, anim::type::instant);
 
 	updateSelectionControlsGeometry(width());
 }
@@ -437,6 +442,7 @@ void TopBar::createSelectionControls() {
 		return created;
 	};
 	_canDelete = computeCanDelete();
+	_canForward = computeCanForward();
 	_cancelSelection = wrap(Ui::CreateChild<Ui::FadeWrap<Ui::IconButton>>(
 		this,
 		object_ptr<Ui::IconButton>(this, _st.mediaCancel),
@@ -461,8 +467,12 @@ void TopBar::createSelectionControls() {
 		this,
 		object_ptr<Ui::IconButton>(this, _st.mediaForward),
 		st::infoTopBarScale));
+	registerToggleControlCallback(
+		_forward.data(),
+		[this] { return selectionMode() && _canForward; });
 	_forward->setDuration(st::infoTopBarDuration);
 	_forward->entity()->addClickHandler([this] { performForward(); });
+	_forward->entity()->setVisible(_canForward);
 	_delete = wrap(Ui::CreateChild<Ui::FadeWrap<Ui::IconButton>>(
 		this,
 		object_ptr<Ui::IconButton>(this, _st.mediaDelete),
@@ -481,11 +491,16 @@ bool TopBar::computeCanDelete() const {
 	return ranges::all_of(_selectedItems.list, &SelectedItem::canDelete);
 }
 
+bool TopBar::computeCanForward() const {
+	return ranges::all_of(_selectedItems.list, &SelectedItem::canForward);
+}
+
 Ui::StringWithNumbers TopBar::generateSelectedText() const {
 	using Type = Storage::SharedMediaType;
 	const auto phrase = [&] {
 		switch (_selectedItems.type) {
 		case Type::Photo: return tr::lng_media_selected_photo;
+		case Type::GIF: return tr::lng_media_selected_gif;
 		case Type::Video: return tr::lng_media_selected_video;
 		case Type::File: return tr::lng_media_selected_file;
 		case Type::MusicFile: return tr::lng_media_selected_song;
@@ -510,11 +525,11 @@ bool TopBar::searchMode() const {
 }
 
 MessageIdsList TopBar::collectItems() const {
-	return ranges::view::all(
+	return ranges::views::all(
 		_selectedItems.list
-	) | ranges::view::transform([](auto &&item) {
+	) | ranges::views::transform([](auto &&item) {
 		return item.msgId;
-	}) | ranges::view::filter([&](FullMsgId msgId) {
+	}) | ranges::views::filter([&](FullMsgId msgId) {
 		return _navigation->session().data().message(msgId) != nullptr;
 	}) | ranges::to_vector;
 }
@@ -540,14 +555,13 @@ void TopBar::performDelete() {
 	if (items.empty()) {
 		_cancelSelectionClicks.fire({});
 	} else {
-		const auto box = Ui::show(Box<DeleteMessagesBox>(
+		auto box = Box<DeleteMessagesBox>(
 			&_navigation->session(),
-			std::move(items)));
-		box->setDeleteConfirmedCallback([weak = Ui::MakeWeak(this)] {
-			if (weak) {
-				weak->_cancelSelectionClicks.fire({});
-			}
-		});
+			std::move(items));
+		box->setDeleteConfirmedCallback(crl::guard(this, [=] {
+			_cancelSelectionClicks.fire({});
+		}));
+		_navigation->parentController()->show(std::move(box));
 	}
 }
 
@@ -559,9 +573,7 @@ rpl::producer<QString> TitleValue(
 
 	switch (section.type()) {
 	case Section::Type::Profile:
-		/*if (const auto feed = key.feed()) {
-			return tr::lng_info_feed_title();
-		} else */if (const auto user = peer->asUser()) {
+		if (const auto user = peer->asUser()) {
 			return (user->isBot() && !user->isSupport())
 				? tr::lng_info_bot_title()
 				: tr::lng_info_user_title();
@@ -581,6 +593,8 @@ rpl::producer<QString> TitleValue(
 		switch (section.mediaType()) {
 		case Section::MediaType::Photo:
 			return tr::lng_media_type_photos();
+		case Section::MediaType::GIF:
+			return tr::lng_media_type_gifs();
 		case Section::MediaType::Video:
 			return tr::lng_media_type_videos();
 		case Section::MediaType::MusicFile:
@@ -607,9 +621,6 @@ rpl::producer<QString> TitleValue(
 		}
 		return tr::lng_profile_participants_section();
 
-	//case Section::Type::Channels: // #feed
-	//	return tr::lng_info_feed_channels();
-
 	case Section::Type::Settings:
 		switch (section.settingsType()) {
 		case Section::SettingsType::Main:
@@ -620,6 +631,8 @@ rpl::producer<QString> TitleValue(
 			return tr::lng_settings_section_notify();
 		case Section::SettingsType::PrivacySecurity:
 			return tr::lng_settings_section_privacy();
+		case Section::SettingsType::Sessions:
+			return tr::lng_settings_sessions_title();
 		case Section::SettingsType::Advanced:
 			return tr::lng_settings_advanced();
 		case Section::SettingsType::Chat:
@@ -628,6 +641,8 @@ rpl::producer<QString> TitleValue(
 			return tr::lng_filters_title();
 		case Section::SettingsType::Calls:
 			return tr::lng_settings_section_call_settings();
+		case Section::SettingsType::Experimental:
+			return tr::lng_settings_experimental();
 		}
 		Unexpected("Bad settings type in Info::TitleValue()");
 

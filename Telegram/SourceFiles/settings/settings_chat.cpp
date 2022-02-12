@@ -11,7 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/connection_box.h"
 #include "boxes/auto_download_box.h"
 #include "boxes/stickers_box.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "boxes/background_box.h"
 #include "boxes/background_preview_box.h"
 #include "boxes/download_path_box.h"
@@ -24,16 +24,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
 #include "ui/chat/attach/attach_extensions.h"
+#include "ui/chat/chat_theme.h"
 #include "ui/layers/generic_box.h"
 #include "ui/effects/radial_animation.h"
+#include "ui/style/style_palette_colorizer.h"
 #include "ui/toast/toast.h"
 #include "ui/image/image.h"
+#include "ui/ui_utility.h"
 #include "lang/lang_keys.h"
 #include "export/export_manager.h"
 #include "window/themes/window_theme.h"
 #include "window/themes/window_themes_embedded.h"
 #include "window/themes/window_theme_editor_box.h"
 #include "window/themes/window_themes_cloud_list.h"
+#include "window/window_adaptive.h"
 #include "window/window_session_controller.h"
 #include "window/window_controller.h"
 #include "storage/localstorage.h"
@@ -44,6 +48,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_file_origin.h"
 #include "chat_helpers/emoji_sets_manager.h"
 #include "base/platform/base_platform_info.h"
+#include "platform/platform_specific.h"
 #include "base/call_delayed.h"
 #include "support/support_common.h"
 #include "support/support_templates.h"
@@ -52,9 +57,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwidget.h"
 #include "mainwindow.h"
 #include "facades.h"
-#include "app.h"
 #include "styles/style_settings.h"
 #include "styles/style_layers.h"
+#include "styles/style_window.h"
 
 namespace Settings {
 namespace {
@@ -358,7 +363,7 @@ void ColorsPalette::updateInnerGeometry() {
 	const auto y = st::settingsSectionSkip * 2;
 	auto x = float64(padding.left());
 	for (const auto &button : _buttons) {
-		button->moveToLeft(int(std::round(x)), y);
+		button->moveToLeft(int(base::SafeRound(x)), y);
 		x += size + skip;
 	}
 	inner->resize(inner->width(), y + size);
@@ -414,15 +419,14 @@ BackgroundRow::BackgroundRow(
 	updateImage();
 
 	_chooseFromGallery->addClickHandler([=] {
-		Ui::show(Box<BackgroundBox>(controller));
+		controller->show(Box<BackgroundBox>(controller));
 	});
 	_chooseFromFile->addClickHandler([=] {
 		ChooseFromFile(controller, this);
 	});
 
 	using Update = const Window::Theme::BackgroundUpdate;
-	base::ObservableViewer(
-		*Window::Theme::Background()
+	Window::Theme::Background()->updates(
 	) | rpl::filter([](const Update &update) {
 		return (update.type == Update::Type::New
 			|| update.type == Update::Type::Start
@@ -442,8 +446,9 @@ void BackgroundRow::paintEvent(QPaintEvent *e) {
 		if (!backThumb) {
 			p.drawPixmap(0, 0, _background);
 		} else {
-			const auto &pix = backThumb->pixBlurred(
-				st::settingsBackgroundThumb);
+			const auto &pix = backThumb->pix(
+				st::settingsBackgroundThumb,
+				{ .options = Images::Option::Blur });
 			const auto factor = cIntRetinaFactor();
 			p.drawPixmap(
 				0,
@@ -550,45 +555,66 @@ void BackgroundRow::radialAnimationCallback(crl::time now) {
 }
 
 void BackgroundRow::updateImage() {
-	int32 size = st::settingsBackgroundThumb * cIntRetinaFactor();
-	QImage back(size, size, QImage::Format_ARGB32_Premultiplied);
-	back.setDevicePixelRatio(cRetinaFactor());
-	{
-		Painter p(&back);
-		PainterHighQualityEnabler hq(p);
+	const auto size = st::settingsBackgroundThumb;
+	const auto fullsize = size * cIntRetinaFactor();
 
-		if (const auto color = Window::Theme::Background()->colorForFill()) {
-			p.fillRect(
-				0,
-				0,
-				st::settingsBackgroundThumb,
-				st::settingsBackgroundThumb,
-				*color);
-		} else {
-			const auto &pix = Window::Theme::Background()->pixmap();
-			const auto sx = (pix.width() > pix.height())
-				? ((pix.width() - pix.height()) / 2)
-				: 0;
-			const auto sy = (pix.height() > pix.width())
-				? ((pix.height() - pix.width()) / 2)
-				: 0;
-			const auto s = (pix.width() > pix.height())
-				? pix.height()
-				: pix.width();
-			p.drawPixmap(
-				0,
-				0,
-				st::settingsBackgroundThumb,
-				st::settingsBackgroundThumb,
-				pix,
-				sx,
-				sy,
-				s,
-				s);
+	const auto &background = *Window::Theme::Background();
+	const auto &paper = background.paper();
+	const auto &prepared = background.prepared();
+	const auto preparePattern = [&] {
+		const auto paintPattern = [&](QPainter &p, bool inverted) {
+			if (prepared.isNull()) {
+				return;
+			}
+			const auto w = prepared.width();
+			const auto h = prepared.height();
+			const auto s = [&] {
+				const auto scaledw = w * st::windowMinHeight / h;
+				const auto result = (w * size) / scaledw;
+				return std::min({ result, w, h });
+			}();
+			auto small = prepared.copy((w - s) / 2, (h - s) / 2, s, s);
+			if (inverted) {
+				small = Ui::InvertPatternImage(std::move(small));
+			}
+			p.drawImage(QRect(0, 0, fullsize, fullsize), small);
+		};
+		return Ui::GenerateBackgroundImage(
+			{ fullsize, fullsize },
+			paper.backgroundColors(),
+			paper.gradientRotation(),
+			paper.patternOpacity(),
+			paintPattern);
+	};
+	const auto prepareNormal = [&] {
+		auto result = QImage(
+			QSize{ fullsize, fullsize },
+			QImage::Format_ARGB32_Premultiplied);
+		result.setDevicePixelRatio(cRetinaFactor());
+		if (const auto color = background.colorForFill()) {
+			result.fill(*color);
+			return result;
+		} else if (prepared.isNull()) {
+			result.fill(Qt::transparent);
+			return result;
 		}
-	}
-	Images::prepareRound(back, ImageRoundRadius::Small);
-	_background = App::pixmapFromImageInPlace(std::move(back));
+		Painter p(&result);
+		PainterHighQualityEnabler hq(p);
+		const auto w = prepared.width();
+		const auto h = prepared.height();
+		const auto s = std::min(w, h);
+		p.drawImage(
+			QRect(0, 0, size, size),
+			prepared,
+			QRect((w - s) / 2, (h - s) / 2, s, s));
+		p.end();
+		return result;
+	};
+	auto back = (paper.isPattern() || !background.gradientForFill().isNull())
+		? preparePattern()
+		: prepareNormal();
+	_background = Ui::PixmapFromImage(
+		Images::Round(std::move(back), ImageRoundRadius::Small));
 	_background.setDevicePixelRatio(cRetinaFactor());
 
 	rtlupdate(radialRect());
@@ -624,16 +650,18 @@ void ChooseFromFile(
 			}
 		}
 
-		auto image = result.remoteContent.isEmpty()
-			? App::readImage(result.paths.front())
-			: App::readImage(result.remoteContent);
+		auto image = Images::Read({
+			.path = result.paths.isEmpty() ? QString() : result.paths.front(),
+			.content = result.remoteContent,
+			.forceOpaque = true,
+		}).image;
 		if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
 			return;
 		}
 		auto local = Data::CustomWallPaper();
 		local.setLocalImageAsThumbnail(std::make_shared<Image>(
 			std::move(image)));
-		Ui::show(Box<BackgroundPreviewBox>(controller, local));
+		controller->show(Box<BackgroundPreviewBox>(controller, local));
 	});
 	FileDialog::GetOpenPath(
 		parent.get(),
@@ -723,7 +751,7 @@ void SetupStickersEmoji(
 		&st::settingsIconStickers,
 		st::settingsChatIconLeft
 	)->addClickHandler([=] {
-		Ui::show(
+		controller->show(
 			Box<StickersBox>(controller, StickersBox::Section::Installed));
 	});
 
@@ -734,7 +762,7 @@ void SetupStickersEmoji(
 		&st::settingsIconEmoji,
 		st::settingsChatIconLeft
 	)->addClickHandler([=] {
-		Ui::show(Box<Ui::Emoji::ManageSetsBox>(session));
+		controller->show(Box<Ui::Emoji::ManageSetsBox>(session));
 	});
 
 	AddSkip(container, st::settingsCheckboxesSkip);
@@ -773,8 +801,6 @@ void SetupMessages(
 				st::settingsSendType),
 			st::settingsSendTypePadding);
 	};
-	const auto small = st::settingsSendTypePadding;
-	const auto top = skip;
 	add(SendByType::Enter, tr::lng_settings_send_enter(tr::now));
 	add(
 		SendByType::CtrlEnter,
@@ -860,7 +886,7 @@ void SetupDataStorage(
 		st::settingsButton,
 		tr::lng_download_path());
 	path->entity()->addClickHandler([=] {
-		Ui::show(Box<DownloadPathBox>(controller));
+		controller->show(Box<DownloadPathBox>(controller));
 	});
 	path->toggleOn(ask->toggledValue() | rpl::map(!_1));
 #endif // OS_WIN_STORE
@@ -899,7 +925,8 @@ void SetupAutoDownload(
 			std::move(label),
 			st::settingsButton
 		)->addClickHandler([=] {
-			Ui::show(Box<AutoDownloadBox>(&controller->session(), source));
+			controller->show(
+				Box<AutoDownloadBox>(&controller->session(), source));
 		});
 	};
 	add(tr::lng_media_auto_in_private(), Source::User);
@@ -933,13 +960,16 @@ void SetupChatBackground(
 
 	AddSkip(container, st::settingsTileSkip);
 
+	const auto background = Window::Theme::Background();
 	const auto tile = inner->add(
-		object_ptr<Ui::Checkbox>(
+		object_ptr<Ui::SlideWrap<Ui::Checkbox>>(
 			inner,
-			tr::lng_settings_bg_tile(tr::now),
-			Window::Theme::Background()->tile(),
-			st::settingsCheckbox),
-		st::settingsSendTypePadding);
+			object_ptr<Ui::Checkbox>(
+				inner,
+				tr::lng_settings_bg_tile(tr::now),
+				background->tile(),
+				st::settingsCheckbox),
+			st::settingsSendTypePadding));
 	const auto adaptive = inner->add(
 		object_ptr<Ui::SlideWrap<Ui::Checkbox>>(
 			inner,
@@ -950,35 +980,36 @@ void SetupChatBackground(
 				st::settingsCheckbox),
 			st::settingsSendTypePadding));
 
-	tile->checkedChanges(
-	) | rpl::start_with_next([](bool checked) {
-		Window::Theme::Background()->setTile(checked);
+	tile->entity()->checkedChanges(
+	) | rpl::start_with_next([=](bool checked) {
+		background->setTile(checked);
 	}, tile->lifetime());
+
+	const auto shown = [=] {
+		return !background->paper().isPattern()
+			&& !background->colorForFill();
+	};
+	tile->toggle(shown(), anim::type::instant);
 
 	using Update = const Window::Theme::BackgroundUpdate;
-	base::ObservableViewer(
-		*Window::Theme::Background()
+	background->updates(
 	) | rpl::filter([](const Update &update) {
-		return (update.type == Update::Type::Changed);
-	}) | rpl::map([] {
-		return Window::Theme::Background()->tile();
-	}) | rpl::start_with_next([=](bool tiled) {
-		tile->setChecked(tiled);
+		return (update.type == Update::Type::Changed)
+			|| (update.type == Update::Type::New);
+	}) | rpl::start_with_next([=] {
+		tile->entity()->setChecked(background->tile());
+		tile->toggle(shown(), anim::type::instant);
 	}, tile->lifetime());
 
-	adaptive->toggleOn(rpl::single(
-		rpl::empty_value()
-	) | rpl::then(base::ObservableViewer(
-		Adaptive::Changed()
-	)) | rpl::map([] {
-		return (Global::AdaptiveChatLayout() == Adaptive::ChatLayout::Wide);
+	adaptive->toggleOn(controller->adaptive().chatLayoutValue(
+	) | rpl::map([](Window::Adaptive::ChatLayout layout) {
+		return (layout == Window::Adaptive::ChatLayout::Wide);
 	}));
 
 	adaptive->entity()->checkedChanges(
 	) | rpl::start_with_next([=](bool checked) {
 		Core::App().settings().setAdaptiveForWide(checked);
 		Core::App().saveSettingsDelayed();
-		Adaptive::Changed().notify();
 	}, adaptive->lifetime());
 }
 
@@ -1038,9 +1069,9 @@ void SetupDefaultThemes(
 	};
 
 	auto checks = base::flat_map<Type,not_null<Check*>>();
-	auto buttons = ranges::view::all(
+	auto buttons = ranges::views::all(
 		kSchemesList
-	) | ranges::view::transform([&](const Scheme &scheme) {
+	) | ranges::views::transform([&](const Scheme &scheme) {
 		auto check = std::make_unique<Check>(
 			ColorsFromScheme(scheme),
 			false);
@@ -1091,8 +1122,7 @@ void SetupDefaultThemes(
 		refreshColorizer(scheme.type);
 	}
 
-	base::ObservableViewer(
-		*Background()
+	Background()->updates(
 	) | rpl::filter([](const BackgroundUpdate &update) {
 		return (update.type == BackgroundUpdate::Type::ApplyingTheme);
 	}) | rpl::map([=] {
@@ -1129,10 +1159,9 @@ void SetupDefaultThemes(
 		const auto fullSkips = width - count * single;
 		const auto skip = fullSkips / float64(skips);
 		auto left = padding.left() + 0.;
-		auto index = 0;
 		for (const auto button : buttons) {
 			button->resizeToWidth(single);
-			button->moveToLeft(int(std::round(left)), 0);
+			button->moveToLeft(int(base::SafeRound(left)), 0);
 			left += button->width() + skip;
 		}
 	}, block->lifetime());
@@ -1144,7 +1173,7 @@ void SetupDefaultThemes(
 			// in Window::Theme::Revert which is called by Editor.
 			//
 			// So we check here, before we change the saved accent color.
-			Ui::show(Box<InformBox>(
+			window->show(Box<Ui::InformBox>(
 				tr::lng_theme_editor_cant_change_theme(tr::now)));
 			return;
 		}
@@ -1257,9 +1286,9 @@ void SetupCloudThemes(
 	editWrap->toggleOn(rpl::single(BackgroundUpdate(
 		BackgroundUpdate::Type::ApplyingTheme,
 		Background()->tile()
-	)) | rpl::then(base::ObservableViewer(
-		*Background()
-	)) | rpl::filter([](const BackgroundUpdate &update) {
+	)) | rpl::then(
+		Background()->updates()
+	) | rpl::filter([](const BackgroundUpdate &update) {
 		return (update.type == BackgroundUpdate::Type::ApplyingTheme);
 	}) | rpl::map([=] {
 		const auto userId = controller->session().userId();
@@ -1271,7 +1300,9 @@ void SetupCloudThemes(
 	wrap->setDuration(0)->toggleOn(list->empty() | rpl::map(!_1));
 }
 
-void SetupAutoNightMode(not_null<Ui::VerticalLayout*> container) {
+void SetupAutoNightMode(
+		not_null<Window::SessionController*> controller,
+		not_null<Ui::VerticalLayout*> container) {
 	if (!Platform::IsDarkModeSupported()) {
 		return;
 	}
@@ -1296,7 +1327,7 @@ void SetupAutoNightMode(not_null<Ui::VerticalLayout*> container) {
 	}) | rpl::start_with_next([=](bool checked) {
 		if (checked && Window::Theme::Background()->editingTheme()) {
 			autoNight->setChecked(false);
-			Ui::show(Box<InformBox>(
+			controller->show(Box<Ui::InformBox>(
 				tr::lng_theme_editor_cant_change_theme(tr::now)));
 		} else {
 			Core::App().settings().setSystemDarkModeEnabled(checked);
@@ -1453,7 +1484,7 @@ void Chat::setupContent(not_null<Window::SessionController*> controller) {
 	const auto content = Ui::CreateChild<Ui::VerticalLayout>(this);
 
 	SetupThemeOptions(controller, content);
-	SetupAutoNightMode(content);
+	SetupAutoNightMode(controller, content);
 	SetupCloudThemes(controller, content);
 	SetupChatBackground(controller, content);
 	SetupStickersEmoji(controller, content);

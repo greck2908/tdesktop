@@ -18,6 +18,20 @@ namespace {
 constexpr auto kMaxSingleReadAmount = 8 * 1024 * 1024;
 constexpr auto kMaxQueuedPackets = 1024;
 
+[[nodiscard]] bool UnreliableFormatDuration(
+		not_null<AVFormatContext*> format,
+		not_null<AVStream*> stream,
+		Mode mode) {
+	return (mode == Mode::Video || mode == Mode::Inspection)
+		&& stream->codec
+		&& (stream->codec->codec_id == AV_CODEC_ID_VP9)
+		&& format->iformat
+		&& format->iformat->name
+		&& QString::fromLatin1(
+			format->iformat->name
+		).split(QChar(',')).contains(u"webm");
+}
+
 } // namespace
 
 File::Context::Context(
@@ -133,7 +147,8 @@ void File::Context::logFatal(
 
 Stream File::Context::initStream(
 		not_null<AVFormatContext*> format,
-		AVMediaType type) {
+		AVMediaType type,
+		Mode mode) {
 	auto result = Stream();
 	const auto index = result.index = av_find_best_stream(
 		format,
@@ -148,6 +163,10 @@ Stream File::Context::initStream(
 
 	const auto info = format->streams[index];
 	if (type == AVMEDIA_TYPE_VIDEO) {
+		if (info->disposition & AV_DISPOSITION_ATTACHED_PIC) {
+			// ignore cover streams
+			return Stream();
+		}
 		result.rotation = FFmpeg::ReadRotationFromMetadata(info);
 		result.aspect = FFmpeg::ValidateAspectRatio(info->sample_aspect_ratio);
 	} else if (type == AVMEDIA_TYPE_AUDIO) {
@@ -159,10 +178,6 @@ Stream File::Context::initStream(
 
 	result.codec = FFmpeg::MakeCodecPointer(info);
 	if (!result.codec) {
-		if (info->codecpar->codec_id == AV_CODEC_ID_MJPEG) {
-			// mp3 files contain such "video stream", just ignore it.
-			return Stream();
-		}
 		return result;
 	}
 
@@ -174,6 +189,8 @@ Stream File::Context::initStream(
 	result.timeBase = info->time_base;
 	result.duration = (info->duration != AV_NOPTS_VALUE)
 		? FFmpeg::PtsToTime(info->duration, result.timeBase)
+		: UnreliableFormatDuration(format, info, mode)
+		? kTimeUnknown
 		: FFmpeg::PtsToTime(format->duration, FFmpeg::kUniversalTimeBase);
 	if (result.duration == kTimeUnknown) {
 		result.duration = kDurationUnavailable;
@@ -262,12 +279,13 @@ void File::Context::start(crl::time position) {
 		return logFatal(qstr("avformat_find_stream_info"), error);
 	}
 
-	auto video = initStream(format.get(), AVMEDIA_TYPE_VIDEO);
+	const auto mode = _delegate->fileOpenMode();
+	auto video = initStream(format.get(), AVMEDIA_TYPE_VIDEO, mode);
 	if (unroll()) {
 		return;
 	}
 
-	auto audio = initStream(format.get(), AVMEDIA_TYPE_AUDIO);
+	auto audio = initStream(format.get(), AVMEDIA_TYPE_AUDIO, mode);
 	if (unroll()) {
 		return;
 	}
@@ -412,7 +430,9 @@ void File::start(not_null<FileDelegate*> delegate, crl::time position) {
 
 	_reader->startStreaming();
 	_context.emplace(delegate, _reader.get());
+
 	_thread = std::thread([=, context = &*_context] {
+		crl::toggle_fp_exceptions(true);
 		context->start(position);
 		while (!context->finished()) {
 			context->readNextPacket();

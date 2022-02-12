@@ -29,8 +29,8 @@ AlbumThumbnail::AlbumThumbnail(
 : _layout(layout)
 , _fullPreview(file.preview)
 , _shrinkSize(int(std::ceil(st::historyMessageRadius / 1.4)))
-, _isVideo(file.type == PreparedFile::Type::Video)
-, _buttonsRect(st::sendBoxAlbumGroupRadius, st::callFingerprintBg) {
+, _isPhoto(file.type == PreparedFile::Type::Photo)
+, _isVideo(file.type == PreparedFile::Type::Video) {
 	Expects(!_fullPreview.isNull());
 
 	moveToLayout(layout);
@@ -44,27 +44,26 @@ AlbumThumbnail::AlbumThumbnail(
 	const auto imageHeight = std::max(
 		previewHeight / style::DevicePixelRatio(),
 		st::minPhotoSize);
-	_photo = PixmapFromImage(Images::prepare(
+	_photo = PixmapFromImage(Images::Prepare(
 		_fullPreview,
-		previewWidth,
-		previewHeight,
-		Option::RoundedLarge | Option::RoundedAll,
-		imageWidth,
-		imageHeight));
+		QSize(previewWidth, previewHeight),
+		{
+			.options = Option::RoundLarge,
+			.outer = { imageWidth, imageHeight },
+		}));
 
 	const auto &st = st::attachPreviewThumbLayout;
 	const auto idealSize = st.thumbSize * style::DevicePixelRatio();
 	const auto fileThumbSize = (previewWidth > previewHeight)
 		? QSize(previewWidth * idealSize / previewHeight, idealSize)
 		: QSize(idealSize, previewHeight * idealSize / previewWidth);
-	_fileThumb = PixmapFromImage(Images::prepare(
+	_fileThumb = PixmapFromImage(Images::Prepare(
 		_fullPreview,
-		fileThumbSize.width(),
-		fileThumbSize.height(),
-		Option::RoundedSmall | Option::RoundedAll,
-		st.thumbSize,
-		st.thumbSize
-	));
+		fileThumbSize,
+		{
+			.options = Option::RoundSmall,
+			.outer = { st.thumbSize, st.thumbSize },
+		}));
 
 	const auto availableFileWidth = st::sendMediaPreviewSize
 		- st.thumbSize
@@ -76,11 +75,8 @@ AlbumThumbnail::AlbumThumbnail(
 	const auto filepath = file.path;
 	if (filepath.isEmpty()) {
 		_name = "image.png";
-		_status = u"%1x%2"_q.arg(
-			_fullPreview.width()
-		).arg(
-			_fullPreview.height()
-		);
+		_status = FormatImageSizeText(_fullPreview.size()
+			/ _fullPreview.devicePixelRatio());
 	} else {
 		auto fileinfo = QFileInfo(filepath);
 		_name = fileinfo.fileName();
@@ -122,13 +118,11 @@ void AlbumThumbnail::updateFileRow(int row) {
 
 	const auto fileHeight = st::attachPreviewThumbLayout.thumbSize
 		+ st::sendMediaRowSkip;
-
 	const auto top = row * fileHeight + st::sendBoxFileGroupSkipTop;
-	const auto size = st::editMediaButtonSize;
 
-	auto right = st::sendBoxFileGroupSkipRight + size;
+	auto right = st::sendBoxFileGroupSkipRight + st::boxPhotoPadding.right();
 	_deleteMedia->moveToRight(right, top);
-	right += st::sendBoxFileGroupEditInternalSkip + size;
+	right += st::sendBoxFileGroupEditInternalSkip + _deleteMedia->width();
 	_editMedia->moveToRight(right, top);
 }
 
@@ -143,40 +137,35 @@ void AlbumThumbnail::animateLayoutToInitial() {
 }
 
 void AlbumThumbnail::moveToLayout(const GroupMediaLayout &layout) {
+	using Option = Images::Option;
+
 	animateLayoutToInitial();
 	_layout = layout;
 
 	const auto width = _layout.geometry.width();
 	const auto height = _layout.geometry.height();
 	_albumCorners = GetCornersFromSides(_layout.sides);
-	using Option = Images::Option;
-	const auto options = Option::Smooth
-		| Option::RoundedLarge
-		| ((_albumCorners & RectPart::TopLeft)
-			? Option::RoundedTopLeft
-			: Option::None)
-		| ((_albumCorners & RectPart::TopRight)
-			? Option::RoundedTopRight
-			: Option::None)
-		| ((_albumCorners & RectPart::BottomLeft)
-			? Option::RoundedBottomLeft
-			: Option::None)
-		| ((_albumCorners & RectPart::BottomRight)
-			? Option::RoundedBottomRight
-			: Option::None);
+	const auto corner = [&](RectPart part, Option skip) {
+		return !(_albumCorners & part) ? skip : Option();
+	};
+	const auto options = Option::RoundLarge
+		| corner(RectPart::TopLeft, Option::RoundSkipTopLeft)
+		| corner(RectPart::TopRight, Option::RoundSkipTopRight)
+		| corner(RectPart::BottomLeft, Option::RoundSkipBottomLeft)
+		| corner(RectPart::BottomRight, Option::RoundSkipBottomRight);
 	const auto pixSize = GetImageScaleSizeForGeometry(
 		{ _fullPreview.width(), _fullPreview.height() },
 		{ width, height });
 	const auto pixWidth = pixSize.width() * style::DevicePixelRatio();
 	const auto pixHeight = pixSize.height() * style::DevicePixelRatio();
 
-	_albumImage = PixmapFromImage(Images::prepare(
+	_albumImage = PixmapFromImage(Images::Prepare(
 		_fullPreview,
-		pixWidth,
-		pixHeight,
-		options,
-		width,
-		height));
+		QSize(pixWidth, pixHeight),
+		{
+			.options = options,
+			.outer = { width, height },
+		}));
 }
 
 int AlbumThumbnail::photoHeight() const {
@@ -229,6 +218,8 @@ void AlbumThumbnail::paintInAlbum(
 		{ x, y },
 		geometry.width(),
 		shrinkProgress);
+
+	_lastRectOfModify = QRect(QPoint(x, y), geometry.size());
 }
 
 void AlbumThumbnail::prepareCache(QSize size, int shrink) {
@@ -243,6 +234,7 @@ void AlbumThumbnail::prepareCache(QSize size, int shrink) {
 	if (_albumCache.width() < cacheSize.width()
 		|| _albumCache.height() < cacheSize.height()) {
 		_albumCache = QImage(cacheSize, QImage::Format_ARGB32_Premultiplied);
+		_albumCache.setDevicePixelRatio(style::DevicePixelRatio());
 	}
 	_albumCache.fill(Qt::transparent);
 	{
@@ -252,12 +244,11 @@ void AlbumThumbnail::prepareCache(QSize size, int shrink) {
 		);
 		drawSimpleFrame(p, to, size);
 	}
-	Images::prepareRound(
-		_albumCache,
+	_albumCache = Images::Round(
+		std::move(_albumCache),
 		ImageRoundRadius::Large,
 		_albumCorners,
 		QRect(QPoint(), size * style::DevicePixelRatio()));
-	_albumCache.setDevicePixelRatio(style::DevicePixelRatio());
 }
 
 void AlbumThumbnail::drawSimpleFrame(Painter &p, QRect to, QSize size) const {
@@ -273,7 +264,7 @@ void AlbumThumbnail::drawSimpleFrame(Painter &p, QRect to, QSize size) const {
 	const auto scaleWidth = to.width() / float64(width);
 	const auto scaleHeight = to.height() / float64(height);
 	const auto Round = [](float64 value) {
-		return int(std::round(value));
+		return int(base::SafeRound(value));
 	};
 	const auto [from, fillBlack] = [&] {
 		if (previewWidth < width && previewHeight < height) {
@@ -376,21 +367,29 @@ void AlbumThumbnail::drawSimpleFrame(Painter &p, QRect to, QSize size) const {
 }
 
 void AlbumThumbnail::paintPhoto(Painter &p, int left, int top, int outerWidth) {
-	const auto width = _photo.width() / style::DevicePixelRatio();
+	const auto size = _photo.size() / style::DevicePixelRatio();
 	p.drawPixmapLeft(
-		left + (st::sendMediaPreviewSize - width) / 2,
+		left + (st::sendMediaPreviewSize - size.width()) / 2,
 		top,
 		outerWidth,
 		_photo);
 
+	const auto topLeft = QPoint{ left, top };
+
 	_lastRectOfButtons = paintButtons(
 		p,
-		{ left, top },
+		topLeft,
 		st::sendMediaPreviewSize,
 		0);
+
+	_lastRectOfModify = QRect(topLeft, size);
 }
 
-void AlbumThumbnail::paintFile(Painter &p, int left, int top, int outerWidth) {
+void AlbumThumbnail::paintFile(
+		Painter &p,
+		int left,
+		int top,
+		int outerWidth) {
 	const auto &st = st::attachPreviewThumbLayout;
 	const auto textLeft = left + st.thumbSize + st.padding.right();
 
@@ -411,6 +410,10 @@ void AlbumThumbnail::paintFile(Painter &p, int left, int top, int outerWidth) {
 		outerWidth,
 		_status,
 		_statusWidth);
+
+	_lastRectOfModify = QRect(
+		QPoint(left, top),
+		_fileThumb.size() / style::DevicePixelRatio());
 }
 
 bool AlbumThumbnail::containsPoint(QPoint position) const {
@@ -418,14 +421,18 @@ bool AlbumThumbnail::containsPoint(QPoint position) const {
 }
 
 bool AlbumThumbnail::buttonsContainPoint(QPoint position) const {
-	return _lastRectOfButtons.contains(position);
+	return (_isPhoto
+		? _lastRectOfModify
+		: _lastRectOfButtons).contains(position);
 }
 
 AttachButtonType AlbumThumbnail::buttonTypeFromPoint(QPoint position) const {
 	if (!buttonsContainPoint(position)) {
 		return AttachButtonType::None;
 	}
-	return (position.x() < _lastRectOfButtons.center().x())
+	return !_lastRectOfButtons.contains(position)
+		? AttachButtonType::Modify
+		: (position.x() < _lastRectOfButtons.center().x())
 		? AttachButtonType::Edit
 		: AttachButtonType::Delete;
 }
@@ -461,7 +468,7 @@ void AlbumThumbnail::suggestMove(float64 delta, Fn<void()> callback) {
 }
 
 QRect AlbumThumbnail::countRealGeometry() const {
-	const auto addLeft = int(std::round(
+	const auto addLeft = int(base::SafeRound(
 		_suggestedMoveAnimation.value(_suggestedMove) * _lastShrinkValue));
 	const auto current = _layout.geometry;
 	const auto realTopLeft = current.topLeft()
@@ -492,11 +499,9 @@ QRect AlbumThumbnail::paintButtons(
 		QPoint point,
 		int outerWidth,
 		float64 shrinkProgress) {
-	const auto skipInternal = st::sendBoxAlbumGroupEditInternalSkip;
-	const auto size = st::sendBoxAlbumGroupHeight;
-	const auto skipRight = st::sendBoxAlbumGroupSkipRight;
-	const auto skipTop = st::sendBoxAlbumGroupSkipTop;
-	const auto groupWidth = size * 2 + skipInternal;
+	const auto &skipRight = st::sendBoxAlbumGroupSkipRight;
+	const auto &skipTop = st::sendBoxAlbumGroupSkipTop;
+	const auto groupWidth = _buttons.width();
 
 	// If the width is tiny, it would be better to not display the buttons.
 	if (groupWidth > outerWidth) {
@@ -509,26 +514,13 @@ QRect AlbumThumbnail::paintButtons(
 		? (outerWidth - groupWidth) / 2
 		: outerWidth - skipRight - groupWidth);
 	const auto groupY = point.y() + skipTop;
-	const auto deleteLeft = skipInternal + size;
 
+	const auto opacity = p.opacity();
 	p.setOpacity(1.0 - shrinkProgress);
+	_buttons.paint(p, groupX, groupY);
+	p.setOpacity(opacity);
 
-	QRect groupRect(groupX, groupY, groupWidth, size);
-	_buttonsRect.paint(p, groupRect);
-
-	st::sendBoxAlbumGroupButtonMediaEdit.paint(
-		p,
-		groupX,
-		groupY,
-		outerWidth);
-	st::sendBoxAlbumGroupButtonMediaDelete.paint(
-		p,
-		groupX + size + skipInternal,
-		groupY,
-		outerWidth);
-	p.setOpacity(1);
-
-	return groupRect;
+	return QRect(groupX, groupY, groupWidth, _buttons.height());
 }
 
 } // namespace Ui

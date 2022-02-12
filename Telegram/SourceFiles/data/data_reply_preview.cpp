@@ -41,21 +41,18 @@ void ReplyPreview::prepare(not_null<Image*> image, Images::Options options) {
 			st::msgReplyBarSize.height(),
 			h * st::msgReplyBarSize.height() / w);
 	thumbSize *= cIntRetinaFactor();
-	const auto prepareOptions = Images::Option::Smooth
-		| Images::Option::TransparentBackground
-		| options;
+	options |= Images::Option::TransparentBackground;
 	auto outerSize = st::msgReplyBarSize.height();
 	auto bitmap = image->pixNoCache(
-		thumbSize.width(),
-		thumbSize.height(),
-		prepareOptions,
-		outerSize,
-		outerSize);
+		thumbSize,
+		{ .options = options, .outer = { outerSize, outerSize } });
 	_image = std::make_unique<Image>(bitmap.toImage());
-	_good = ((options & Images::Option::Blurred) == 0);
+	_good = ((options & Images::Option::Blur) == 0);
 }
 
-Image *ReplyPreview::image(Data::FileOrigin origin) {
+Image *ReplyPreview::image(
+		Data::FileOrigin origin,
+		not_null<PeerData*> context) {
 	if (_checked) {
 		return _image.get();
 	}
@@ -67,13 +64,13 @@ Image *ReplyPreview::image(Data::FileOrigin origin) {
 			}
 			const auto thumbnail = _documentMedia->thumbnail();
 			const auto option = _document->isVideoMessage()
-				? Images::Option::Circled
+				? Images::Option::RoundCircle
 				: Images::Option::None;
 			if (thumbnail) {
 				prepare(thumbnail, option);
 			} else if (!_image) {
 				if (const auto image = _documentMedia->thumbnailInline()) {
-					prepare(image, option | Images::Option::Blurred);
+					prepare(image, option | Images::Option::Blur);
 				}
 			}
 			if (_good || !_document->hasThumbnail()) {
@@ -84,8 +81,13 @@ Image *ReplyPreview::image(Data::FileOrigin origin) {
 	} else {
 		Assert(_photo != nullptr);
 		if (!_image || !_good) {
+			const auto inlineThumbnailBytes = _photo->inlineThumbnailBytes();
 			if (!_photoMedia) {
 				_photoMedia = _photo->createMediaView();
+			}
+			const auto loadThumbnail = inlineThumbnailBytes.isEmpty()
+				|| _photoMedia->autoLoadThumbnailAllowed(context);
+			if (loadThumbnail) {
 				_photoMedia->wanted(PhotoSize::Small, origin);
 			}
 			if (const auto small = _photoMedia->image(PhotoSize::Small)) {
@@ -95,7 +97,7 @@ Image *ReplyPreview::image(Data::FileOrigin origin) {
 				prepare(large, Images::Option(0));
 			} else if (!_image) {
 				if (const auto blurred = _photoMedia->thumbnailInline()) {
-					prepare(blurred, Images::Option::Blurred);
+					prepare(blurred, Images::Option::Blur);
 				}
 			}
 			if (_good) {

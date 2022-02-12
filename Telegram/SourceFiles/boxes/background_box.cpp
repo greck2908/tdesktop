@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "ui/effects/round_checkbox.h"
 #include "ui/image/image.h"
+#include "ui/chat/chat_theme.h"
 #include "ui/ui_utility.h"
 #include "main/main_session.h"
 #include "apiwrap.h"
@@ -19,9 +20,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "boxes/background_preview_box.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "window/window_session_controller.h"
-#include "app.h"
+#include "window/themes/window_theme.h"
 #include "styles/style_overview.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
@@ -56,9 +57,7 @@ QImage TakeMiddleSample(QImage original, QSize size) {
 
 } // namespace
 
-class BackgroundBox::Inner final
-	: public Ui::RpWidget
-	, private base::Subscriber {
+class BackgroundBox::Inner final : public Ui::RpWidget {
 public:
 	Inner(
 		QWidget *parent,
@@ -151,7 +150,7 @@ void BackgroundBox::prepare() {
 
 	_inner->chooseEvents(
 	) | rpl::start_with_next([=](const Data::WallPaper &paper) {
-		Ui::show(
+		_controller->show(
 			Box<BackgroundPreviewBox>(_controller, paper),
 			Ui::LayerOption::KeepOther);
 	}, _inner->lifetime());
@@ -176,8 +175,8 @@ void BackgroundBox::removePaper(const Data::WallPaper &paper) {
 			paper.mtpSettings()
 		)).send();
 	};
-	Ui::show(
-		Box<ConfirmBox>(
+	_controller->show(
+		Box<Ui::ConfirmBox>(
 			tr::lng_background_sure_delete(tr::now),
 			tr::lng_selected_delete(tr::now),
 			tr::lng_cancel(tr::now),
@@ -204,22 +203,28 @@ BackgroundBox::Inner::Inner(
 	) | rpl::start_with_next([=] {
 		update();
 	}, lifetime());
+
+	style::PaletteChanged(
+	) | rpl::start_with_next([=] {
+		_check->invalidateCache();
+	}, lifetime());
+
 	using Update = Window::Theme::BackgroundUpdate;
-	subscribe(Window::Theme::Background(), [=](const Update &update) {
-		if (update.paletteChanged()) {
-			_check->invalidateCache();
-		} else if (update.type == Update::Type::New) {
+	Window::Theme::Background()->updates(
+	) | rpl::start_with_next([=](const Update &update) {
+		if (update.type == Update::Type::New) {
 			sortPapers();
 			requestPapers();
 			this->update();
 		}
-	});
+	}, lifetime());
+
 	setMouseTracking(true);
 }
 
 void BackgroundBox::Inner::requestPapers() {
 	_api.request(MTPaccount_GetWallPapers(
-		MTP_int(_session->data().wallpapersHash())
+		MTP_long(_session->data().wallpapersHash())
 	)).done([=](const MTPaccount_WallPapers &result) {
 		if (_session->data().updateWallpapers(result)) {
 			updatePapers();
@@ -235,8 +240,11 @@ void BackgroundBox::Inner::sortPapers() {
 		return std::make_tuple(
 			data.id() == current,
 			night ? data.isDark() : !data.isDark(),
-			!data.isDefault() && !data.isLocal(),
-			!data.isDefault() && data.isLocal());
+			Data::IsDefaultWallPaper(data),
+			!data.isDefault() && !Data::IsLegacy1DefaultWallPaper(data),
+			Data::IsLegacy3DefaultWallPaper(data),
+			Data::IsLegacy2DefaultWallPaper(data),
+			Data::IsLegacy1DefaultWallPaper(data));
 	});
 	if (!_papers.empty() && _papers.front().data.id() == current) {
 		_papers.front().data = _papers.front().data.withParamsFrom(
@@ -248,9 +256,9 @@ void BackgroundBox::Inner::updatePapers() {
 	_over = _overDown = Selection();
 
 	_papers = _session->data().wallpapers(
-	) | ranges::view::filter([](const Data::WallPaper &paper) {
-		return !paper.isPattern() || paper.backgroundColor().has_value();
-	}) | ranges::view::transform([](const Data::WallPaper &paper) {
+	) | ranges::views::filter([](const Data::WallPaper &paper) {
+		return !paper.isPattern() || !paper.backgroundColors().empty();
+	}) | ranges::views::transform([](const Data::WallPaper &paper) {
 		return Paper{ paper };
 	}) | ranges::to_vector;
 	sortPapers();
@@ -268,7 +276,7 @@ void BackgroundBox::Inner::resizeToContentAndPreload() {
 			+ st::backgroundPadding));
 
 	const auto preload = kBackgroundsInRow * 3;
-	for (const auto &paper : _papers | ranges::view::take(preload)) {
+	for (const auto &paper : _papers | ranges::views::take(preload)) {
 		if (!paper.data.localThumbnail() && !paper.dataMedia) {
 			if (const auto document = paper.data.document()) {
 				paper.dataMedia = document->createMediaView();
@@ -320,8 +328,18 @@ void BackgroundBox::Inner::validatePaperThumbnail(
 				paper.dataMedia = document->createMediaView();
 				paper.dataMedia->thumbnailWanted(paper.data.fileOrigin());
 			}
-		}
-		if (!paper.dataMedia || !paper.dataMedia->thumbnail()) {
+			if (!paper.dataMedia->thumbnail()) {
+				return;
+			}
+		} else if (!paper.data.backgroundColors().empty()) {
+			paper.thumbnail = Ui::PixmapFromImage(
+				Ui::GenerateBackgroundImage(
+					st::backgroundSize * cIntRetinaFactor(),
+					paper.data.backgroundColors(),
+					paper.data.gradientRotation()));
+			paper.thumbnail.setDevicePixelRatio(cRetinaFactor());
+			return;
+		} else {
 			return;
 		}
 	}
@@ -330,14 +348,13 @@ void BackgroundBox::Inner::validatePaperThumbnail(
 		: paper.dataMedia->thumbnail();
 	auto original = thumbnail->original();
 	if (paper.data.isPattern()) {
-		const auto color = *paper.data.backgroundColor();
-		original = Data::PreparePatternImage(
+		original = Ui::PreparePatternImage(
 			std::move(original),
-			color,
-			Data::PatternColor(color),
-			paper.data.patternIntensity());
+			paper.data.backgroundColors(),
+			paper.data.gradientRotation(),
+			paper.data.patternOpacity());
 	}
-	paper.thumbnail = App::pixmapFromImageInPlace(TakeMiddleSample(
+	paper.thumbnail = Ui::PixmapFromImage(TakeMiddleSample(
 		original,
 		st::backgroundSize));
 	paper.thumbnail.setDevicePixelRatio(cRetinaFactor());
@@ -362,6 +379,8 @@ void BackgroundBox::Inner::paintPaper(
 		_check->paint(p, checkLeft, checkTop, width());
 	} else if (Data::IsCloudWallPaper(paper.data)
 		&& !Data::IsDefaultWallPaper(paper.data)
+		&& !Data::IsLegacy2DefaultWallPaper(paper.data)
+		&& !Data::IsLegacy3DefaultWallPaper(paper.data)
 		&& !v::is_null(over)
 		&& (&paper == &_papers[getSelectionIndex(over)])) {
 		const auto deleteSelected = v::is<DeleteSelected>(over);
@@ -391,6 +410,7 @@ void BackgroundBox::Inner::mouseMoveEvent(QMouseEvent *e) {
 		} else if (result >= _papers.size()) {
 			return Selection();
 		}
+		auto &data = _papers[result].data;
 		const auto deleteLeft = (column + 1) * (width + skip)
 			- st::stickerPanDeleteIconBg.width();
 		const auto deleteBottom = row * (height + skip) + skip
@@ -398,9 +418,11 @@ void BackgroundBox::Inner::mouseMoveEvent(QMouseEvent *e) {
 		const auto currentId = Window::Theme::Background()->id();
 		const auto inDelete = (x >= deleteLeft)
 			&& (y < deleteBottom)
-			&& Data::IsCloudWallPaper(_papers[result].data)
-			&& !Data::IsDefaultWallPaper(_papers[result].data)
-			&& (currentId != _papers[result].data.id());
+			&& Data::IsCloudWallPaper(data)
+			&& !Data::IsDefaultWallPaper(data)
+			&& !Data::IsLegacy2DefaultWallPaper(data)
+			&& !Data::IsLegacy3DefaultWallPaper(data)
+			&& (currentId != data.id());
 		return (result >= _papers.size())
 			? Selection()
 			: inDelete

@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/timer.h"
+#include "base/flags.h"
 #include "storage/cache/storage_cache_database.h"
 #include "data/stickers/data_stickers_set.h"
 #include "data/data_drafts.h"
@@ -52,7 +53,12 @@ enum class StartResult : uchar;
 struct MessageDraft {
 	MsgId msgId = 0;
 	TextWithTags textWithTags;
-	bool previewCancelled = false;
+	Data::PreviewState previewState = Data::PreviewState::Allowed;
+};
+
+struct MessageDraftSource {
+	Fn<MessageDraft()> draft;
+	Fn<MessageCursor()> cursor;
 };
 
 class Account final {
@@ -61,7 +67,7 @@ public:
 	~Account();
 
 	[[nodiscard]] StartResult legacyStart(const QByteArray &passcode);
-	[[nodiscartd]] std::unique_ptr<MTP::Config> start(
+	[[nodiscard]] std::unique_ptr<MTP::Config> start(
 		MTP::AuthKeyPtr localKey);
 	void startAdded(MTP::AuthKeyPtr localKey);
 	[[nodiscard]] int oldMapVersion() const {
@@ -78,15 +84,16 @@ public:
 	void writeMtpData();
 	void writeMtpConfig();
 
-	void writeDrafts(
+	void registerDraftSource(
 		not_null<History*> history,
-		Data::DraftKey replaceKey = Data::DraftKey::None(),
-		MessageDraft replaceDraft = MessageDraft());
+		Data::DraftKey key,
+		MessageDraftSource source);
+	void unregisterDraftSource(
+		not_null<History*> history,
+		Data::DraftKey key);
+	void writeDrafts(not_null<History*> history);
 	void readDraftsWithCursors(not_null<History*> history);
-	void writeDraftCursors(
-		not_null<History*> history,
-		Data::DraftKey replaceKey = Data::DraftKey::None(),
-		MessageCursor replaceCursor = MessageCursor());
+	void writeDraftCursors(not_null<History*> history);
 	[[nodiscard]] bool hasDraftCursors(PeerId peerId);
 	[[nodiscard]] bool hasDraft(PeerId peerId);
 
@@ -110,13 +117,19 @@ public:
 	void writeRecentStickers();
 	void writeFavedStickers();
 	void writeArchivedStickers();
+	void writeArchivedMasks();
 	void readInstalledStickers();
 	void readFeaturedStickers();
 	void readRecentStickers();
 	void readFavedStickers();
 	void readArchivedStickers();
+	void readArchivedMasks();
 	void writeSavedGifs();
 	void readSavedGifs();
+	void writeInstalledMasks();
+	void writeRecentMasks();
+	void readInstalledMasks();
+	void readRecentMasks();
 
 	void writeRecentHashtagsAndBots();
 	void readRecentHashtagsAndBots();
@@ -135,8 +148,10 @@ public:
 		const QByteArray& serialized,
 		int32 streamVersion);
 
-	void markBotTrusted(not_null<UserData*> bot);
-	[[nodiscard]] bool isBotTrusted(not_null<UserData*> bot);
+	void markBotTrustedOpenGame(PeerId botId);
+	[[nodiscard]] bool isBotTrustedOpenGame(PeerId botId);
+	void markBotTrustedPayment(PeerId botId);
+	[[nodiscard]] bool isBotTrustedPayment(PeerId botId);
 
 	[[nodiscard]] bool encrypt(
 		const void *src,
@@ -157,6 +172,11 @@ private:
 		IncorrectPasscode,
 		Failed,
 	};
+	enum class BotTrustFlag : uchar {
+		NoOpenGame = (1 << 0),
+		Payment    = (1 << 1),
+	};
+	friend inline constexpr bool is_flag_type(BotTrustFlag) { return true; };
 
 	[[nodiscard]] base::flat_set<QString> collectGoodNames() const;
 	[[nodiscard]] auto prepareReadSettingsContext() const
@@ -187,13 +207,13 @@ private:
 	void readDraftCursorsLegacy(
 		PeerId peerId,
 		details::FileReadDescriptor &draft,
-		quint64 draftPeer,
+		quint64 draftPeerSerialized,
 		Data::HistoryDrafts &map);
 	void clearDraftCursors(PeerId peerId);
 	void readDraftsWithCursorsLegacy(
 		not_null<History*> history,
 		details::FileReadDescriptor &draft,
-		quint64 draftPeer);
+		quint64 draftPeerSerialized);
 
 	void writeStickerSet(
 		QDataStream &stream,
@@ -206,7 +226,7 @@ private:
 	void readStickerSets(
 		FileKey &stickersKey,
 		Data::StickersSetsOrder *outOrder = nullptr,
-		MTPDstickerSet::Flags readingFlags = 0);
+		Data::StickersSetFlags readingFlags = 0);
 	void importOldRecentStickers();
 
 	void readTrustedBots();
@@ -228,6 +248,9 @@ private:
 	base::flat_map<PeerId, FileKey> _draftsMap;
 	base::flat_map<PeerId, FileKey> _draftCursorsMap;
 	base::flat_map<PeerId, bool> _draftsNotReadMap;
+	base::flat_map<
+		not_null<History*>,
+		base::flat_map<Data::DraftKey, MessageDraftSource>> _draftSources;
 
 	QMultiMap<MediaKey, Core::FileLocation> _fileLocations;
 	QMap<QString, QPair<MediaKey, Core::FileLocation>> _fileLocationPairs;
@@ -240,6 +263,7 @@ private:
 	FileKey _recentStickersKey = 0;
 	FileKey _favedStickersKey = 0;
 	FileKey _archivedStickersKey = 0;
+	FileKey _archivedMasksKey = 0;
 	FileKey _savedGifsKey = 0;
 	FileKey _recentStickersKeyOld = 0;
 	FileKey _legacyBackgroundKeyDay = 0;
@@ -247,13 +271,15 @@ private:
 	FileKey _settingsKey = 0;
 	FileKey _recentHashtagsAndBotsKey = 0;
 	FileKey _exportSettingsKey = 0;
+	FileKey _installedMasksKey = 0;
+	FileKey _recentMasksKey = 0;
 
 	qint64 _cacheTotalSizeLimit = 0;
 	qint64 _cacheBigFileTotalSizeLimit = 0;
 	qint32 _cacheTotalTimeLimit = 0;
 	qint32 _cacheBigFileTotalTimeLimit = 0;
 
-	base::flat_set<uint64> _trustedBots;
+	base::flat_map<PeerId, base::flags<BotTrustFlag>> _trustedBots;
 	bool _trustedBotsRead = false;
 	bool _readingUserSettings = false;
 	bool _recentHashtagsAndBotsWereRead = false;

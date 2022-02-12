@@ -89,9 +89,14 @@ FFmpeg::AvErrorWrap ReadNextFrame(Stream &stream) {
 
 bool GoodForRequest(
 		const QImage &image,
+		bool hasAlpha,
 		int rotation,
 		const FrameRequest &request) {
-	if (request.resize.isEmpty()) {
+	if (image.isNull()
+		|| (hasAlpha && !request.keepAlpha)
+		|| request.colored.alpha() != 0) {
+		return false;
+	} else if (request.resize.isEmpty()) {
 		return true;
 	} else if (rotation != 0) {
 		return false;
@@ -139,8 +144,8 @@ QImage ConvertFrame(
 			- storage.width();
 		const auto deltaFrom = (frame->linesize[0] / sizeof(uint32))
 			- frame->width;
-		for (const auto y : ranges::view::ints(0, frame->height)) {
-			for (const auto x : ranges::view::ints(0, frame->width)) {
+		for ([[maybe_unused]] const auto y : ranges::views::ints(0, frame->height)) {
+			for ([[maybe_unused]] const auto x : ranges::views::ints(0, frame->width)) {
 				// Wipe out possible alpha values.
 				*to++ = 0xFF000000U | *from++;
 			}
@@ -158,7 +163,7 @@ QImage ConvertFrame(
 
 		// AV_NUM_DATA_POINTERS defined in AVFrame struct
 		uint8_t *data[AV_NUM_DATA_POINTERS] = { storage.bits(), nullptr };
-		int linesize[AV_NUM_DATA_POINTERS] = { storage.bytesPerLine(), 0 };
+		int linesize[AV_NUM_DATA_POINTERS] = { int(storage.bytesPerLine()), 0 };
 
 		sws_scale(
 			stream.swscale.get(),
@@ -168,10 +173,27 @@ QImage ConvertFrame(
 			frame->height,
 			data,
 			linesize);
+
+		if (frame->format == AV_PIX_FMT_YUVA420P) {
+			FFmpeg::PremultiplyInplace(storage);
+		}
 	}
 
 	FFmpeg::ClearFrameMemory(frame);
 	return storage;
+}
+
+FrameYUV420 ExtractYUV420(Stream &stream, AVFrame *frame) {
+	return {
+		.size = { frame->width, frame->height },
+		.chromaSize = {
+			AV_CEIL_RSHIFT(frame->width, 1), // SWScale does that.
+			AV_CEIL_RSHIFT(frame->height, 1)
+		},
+		.y = { .data = frame->data[0], .stride = frame->linesize[0] },
+		.u = { .data = frame->data[1], .stride = frame->linesize[1] },
+		.v = { .data = frame->data[2], .stride = frame->linesize[2] },
+	};
 }
 
 void PaintFrameOuter(QPainter &p, const QRect &inner, QSize outer) {
@@ -259,8 +281,11 @@ void PaintFrameContent(
 		(full.height() - size.height()) / 2,
 		size.width(),
 		size.height());
-	PaintFrameOuter(p, to, full);
-	PaintFrameInner(p, to, original, alpha, rotation);
+	if (!alpha || !request.keepAlpha) {
+		PaintFrameOuter(p, to, full);
+	}
+	const auto deAlpha = alpha && !request.keepAlpha;
+	PaintFrameInner(p, to, original, deAlpha, rotation);
 }
 
 void ApplyFrameRounding(QImage &storage, const FrameRequest &request) {
@@ -268,7 +293,10 @@ void ApplyFrameRounding(QImage &storage, const FrameRequest &request) {
 		|| (request.radius == ImageRoundRadius::None)) {
 		return;
 	}
-	Images::prepareRound(storage, request.radius, request.corners);
+	storage = Images::Round(
+		std::move(storage),
+		request.radius,
+		request.corners);
 }
 
 QImage PrepareByRequest(
@@ -286,11 +314,18 @@ QImage PrepareByRequest(
 		storage = FFmpeg::CreateFrameStorage(outer);
 	}
 
+	if (alpha && request.keepAlpha) {
+		storage.fill(Qt::transparent);
+	}
+
 	QPainter p(&storage);
 	PaintFrameContent(p, original, alpha, rotation, request);
 	p.end();
 
 	ApplyFrameRounding(storage, request);
+	if (request.colored.alpha() != 0) {
+		storage = Images::Colored(std::move(storage), request.colored);
+	}
 	return storage;
 }
 

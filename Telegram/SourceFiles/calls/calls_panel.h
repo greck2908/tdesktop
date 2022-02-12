@@ -10,11 +10,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/weak_ptr.h"
 #include "base/timer.h"
 #include "base/object_ptr.h"
+#include "base/unique_qptr.h"
 #include "calls/calls_call.h"
+#include "calls/group/ui/desktop_capture_choose_source.h"
 #include "ui/effects/animations.h"
+#include "ui/gl/gl_window.h"
 #include "ui/rp_widget.h"
 
 class Image;
+
+namespace base {
+class PowerSaveBlocker;
+} // namespace base
 
 namespace Data {
 class PhotoMedia;
@@ -24,14 +31,18 @@ class CloudImageView;
 namespace Ui {
 class IconButton;
 class CallButton;
+class LayerManager;
 class FlatLabel;
 template <typename Widget>
 class FadeWrap;
 template <typename Widget>
 class PaddingWrap;
-class Window;
+class RpWindow;
+namespace GL {
+enum class Backend;
+} // namespace GL
 namespace Platform {
-class TitleControls;
+struct SeparateTitleControls;
 } // namespace Platform
 } // namespace Ui
 
@@ -46,15 +57,28 @@ class Userpic;
 class SignalBars;
 class VideoBubble;
 
-class Panel final {
+class Panel final : private Group::Ui::DesktopCapture::ChooseSourceDelegate {
 public:
 	Panel(not_null<Call*> call);
 	~Panel();
 
 	[[nodiscard]] bool isActive() const;
 	void showAndActivate();
+	void minimize();
 	void replaceCall(not_null<Call*> call);
 	void closeBeforeDestroy();
+
+	QWidget *chooseSourceParent() override;
+	QString chooseSourceActiveDeviceId() override;
+	bool chooseSourceActiveWithAudio() override;
+	bool chooseSourceWithAudioSupported() override;
+	rpl::lifetime &chooseSourceInstanceLifetime() override;
+	void chooseSourceAccepted(
+		const QString &deviceId,
+		bool withAudio) override;
+	void chooseSourceStop() override;
+
+	[[nodiscard]] rpl::lifetime &lifetime();
 
 private:
 	class Incoming;
@@ -66,6 +90,7 @@ private:
 		Redial,
 	};
 
+	[[nodiscard]] not_null<Ui::RpWindow*> window() const;
 	[[nodiscard]] not_null<Ui::RpWidget*> widget() const;
 
 	void paint(QRect clip);
@@ -78,9 +103,6 @@ private:
 	void initGeometry();
 
 	void handleClose();
-
-	QRect signalBarsRect() const;
-	void paintSignalBarsBg(Painter &p);
 
 	void updateControlsGeometry();
 	void updateHangupGeometry();
@@ -104,12 +126,15 @@ private:
 	Call *_call = nullptr;
 	not_null<UserData*> _user;
 
-	const std::unique_ptr<Ui::Window> _window;
+	Ui::GL::Window _window;
+	const std::unique_ptr<Ui::LayerManager> _layerBg;
 	std::unique_ptr<Incoming> _incoming;
 
-#ifdef Q_OS_WIN
-	std::unique_ptr<Ui::Platform::TitleControls> _controls;
-#endif // Q_OS_WIN
+#ifndef Q_OS_MAC
+	std::unique_ptr<Ui::Platform::SeparateTitleControls> _controls;
+#endif // !Q_OS_MAC
+
+	std::unique_ptr<base::PowerSaveBlocker> _powerSaveBlocker;
 
 	QSize _incomingFrameSize;
 
@@ -123,6 +148,7 @@ private:
 	bool _outgoingPreviewInBody = false;
 	std::optional<AnswerHangupRedialState> _answerHangupRedialState;
 	Ui::Animations::Simple _hangupShownProgress;
+	object_ptr<Ui::CallButton> _screencast;
 	object_ptr<Ui::CallButton> _camera;
 	object_ptr<Ui::CallButton> _mute;
 	object_ptr<Ui::FlatLabel> _name;

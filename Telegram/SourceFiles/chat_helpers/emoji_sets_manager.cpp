@@ -15,10 +15,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/animations.h"
 #include "ui/effects/radial_animation.h"
 #include "ui/emoji_config.h"
+#include "ui/ui_utility.h"
 #include "core/application.h"
 #include "main/main_account.h"
 #include "mainwidget.h"
-#include "app.h"
 #include "storage/storage_cloud_blob.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
@@ -39,10 +39,10 @@ inline auto PreviewPath(int i) {
 }
 
 const auto kSets = {
-	Set{ {0,   0,         0, "Mac"},       PreviewPath(0) },
-	Set{ {1, 713, 7'313'166, "Android"},   PreviewPath(1) },
-	Set{ {2, 714, 4'690'333, "Twemoji"},   PreviewPath(2) },
-	Set{ {3, 716, 5'968'021, "JoyPixels"}, PreviewPath(3) },
+	Set{ { 0,    0,         0, "Mac" },       PreviewPath(0) },
+	Set{ { 1, 1112, 7'914'459, "Android" },   PreviewPath(1) },
+	Set{ { 2, 1113, 5'287'724, "Twemoji" },   PreviewPath(2) },
+	Set{ { 3, 1114, 6'687'347, "JoyPixels" }, PreviewPath(3) },
 };
 
 using Loading = MTP::DedicatedLoader::Progress;
@@ -246,8 +246,8 @@ void Row::paintPreview(Painter &p) const {
 	const auto y = st::manageEmojiPreviewPadding.top();
 	const auto width = st::manageEmojiPreviewWidth;
 	const auto height = st::manageEmojiPreviewWidth;
-	auto &&preview = ranges::view::zip(_preview, ranges::view::ints(0, int(_preview.size())));
-	for (const auto &[pixmap, index] : preview) {
+	auto &&preview = ranges::views::zip(_preview, ranges::views::ints(0, int(_preview.size())));
+	for (const auto [pixmap, index] : preview) {
 		const auto row = (index / 2);
 		const auto column = (index % 2);
 		const auto left = x + (column ? width - st::manageEmojiPreview : 0);
@@ -454,9 +454,9 @@ void Row::setupPreview(const Set &set) {
 	const auto size = st::manageEmojiPreview * cIntRetinaFactor();
 	const auto original = QImage(set.previewPath);
 	const auto full = original.height();
-	auto &&preview = ranges::view::zip(_preview, ranges::view::ints(0, int(_preview.size())));
+	auto &&preview = ranges::views::zip(_preview, ranges::views::ints(0, int(_preview.size())));
 	for (auto &&[pixmap, index] : preview) {
-		pixmap = App::pixmapFromImageInPlace(original.copy(
+		pixmap = Ui::PixmapFromImage(original.copy(
 			{ full * index, 0, full, full }
 		).scaledToWidth(size, Qt::SmoothTransformation));
 		pixmap.setDevicePixelRatio(cRetinaFactor());

@@ -33,47 +33,41 @@ namespace {
 class PrivacyExceptionsBoxController : public ChatsListBoxController {
 public:
 	PrivacyExceptionsBoxController(
-		not_null<Window::SessionNavigation*> navigation,
+		not_null<Main::Session*> session,
 		rpl::producer<QString> title,
 		const std::vector<not_null<PeerData*>> &selected);
 
 	Main::Session &session() const override;
 	void rowClicked(not_null<PeerListRow*> row) override;
 
-	std::vector<not_null<PeerData*>> getResult() const;
-
 protected:
 	void prepareViewHook() override;
 	std::unique_ptr<Row> createRow(not_null<History*> history) override;
 
 private:
-	not_null<Window::SessionNavigation*> _navigation;
+	const not_null<Main::Session*> _session;
 	rpl::producer<QString> _title;
 	std::vector<not_null<PeerData*>> _selected;
 
 };
 
 PrivacyExceptionsBoxController::PrivacyExceptionsBoxController(
-	not_null<Window::SessionNavigation*> navigation,
+	not_null<Main::Session*> session,
 	rpl::producer<QString> title,
 	const std::vector<not_null<PeerData*>> &selected)
-: ChatsListBoxController(navigation)
-, _navigation(navigation)
+: ChatsListBoxController(session)
+, _session(session)
 , _title(std::move(title))
 , _selected(selected) {
 }
 
 Main::Session &PrivacyExceptionsBoxController::session() const {
-	return _navigation->session();
+	return *_session;
 }
 
 void PrivacyExceptionsBoxController::prepareViewHook() {
 	delegate()->peerListSetTitle(std::move(_title));
 	delegate()->peerListAddSelectedPeers(_selected);
-}
-
-std::vector<not_null<PeerData*>> PrivacyExceptionsBoxController::getResult() const {
-	return delegate()->peerListCollectSelectedRows();
 }
 
 void PrivacyExceptionsBoxController::rowClicked(not_null<PeerListRow*> row) {
@@ -146,13 +140,13 @@ void EditPrivacyBox::editExceptions(
 		Exception exception,
 		Fn<void()> done) {
 	auto controller = std::make_unique<PrivacyExceptionsBoxController>(
-		_window,
+		&_window->session(),
 		_controller->exceptionBoxTitle(exception),
 		exceptions(exception));
 	auto initBox = [=, controller = controller.get()](
 			not_null<PeerListBox*> box) {
 		box->addButton(tr::lng_settings_save(), crl::guard(this, [=] {
-			exceptions(exception) = controller->getResult();
+			exceptions(exception) = box->collectSelectedRows();
 			const auto type = [&] {
 				switch (exception) {
 				case Exception::Always: return Exception::Never;
@@ -171,66 +165,9 @@ void EditPrivacyBox::editExceptions(
 		}));
 		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
 	};
-	Ui::show(
+	_window->show(
 		Box<PeerListBox>(std::move(controller), std::move(initBox)),
 		Ui::LayerOption::KeepOther);
-}
-
-QVector<MTPInputPrivacyRule> EditPrivacyBox::collectResult() {
-	const auto collectInputUsers = [](const auto &peers) {
-		auto result = QVector<MTPInputUser>();
-		result.reserve(peers.size());
-		for (const auto peer : peers) {
-			if (const auto user = peer->asUser()) {
-				result.push_back(user->inputUser);
-			}
-		}
-		return result;
-	};
-	const auto collectInputChats = [](const auto &peers) {
-		auto result = QVector<MTPint>();
-		result.reserve(peers.size());
-		for (const auto peer : peers) {
-			if (!peer->isUser()) {
-				result.push_back(MTP_int(peer->bareId()));
-			}
-		}
-		return result;
-	};
-
-	constexpr auto kMaxRules = 3; // allow users, disallow users, option
-	auto result = QVector<MTPInputPrivacyRule>();
-	result.reserve(kMaxRules);
-	if (showExceptionLink(Exception::Always)) {
-		const auto users = collectInputUsers(_value.always);
-		const auto chats = collectInputChats(_value.always);
-		if (!users.empty()) {
-			result.push_back(MTP_inputPrivacyValueAllowUsers(MTP_vector<MTPInputUser>(users)));
-		}
-		if (!chats.empty()) {
-			result.push_back(MTP_inputPrivacyValueAllowChatParticipants(MTP_vector<MTPint>(chats)));
-		}
-	}
-	if (showExceptionLink(Exception::Never)) {
-		const auto users = collectInputUsers(_value.never);
-		const auto chats = collectInputChats(_value.never);
-		if (!users.empty()) {
-			result.push_back(MTP_inputPrivacyValueDisallowUsers(MTP_vector<MTPInputUser>(users)));
-		}
-		if (!chats.empty()) {
-			result.push_back(MTP_inputPrivacyValueDisallowChatParticipants(MTP_vector<MTPint>(chats)));
-		}
-	}
-	result.push_back([&] {
-		switch (_value.option) {
-		case Option::Everyone: return MTP_inputPrivacyValueAllowAll();
-		case Option::Contacts: return MTP_inputPrivacyValueAllowContacts();
-		case Option::Nobody: return MTP_inputPrivacyValueDisallowAll();
-		}
-		Unexpected("Option value in EditPrivacyBox::collectResult.");
-	}());
-
-	return result;
 }
 
 std::vector<not_null<PeerData*>> &EditPrivacyBox::exceptions(Exception exception) {
@@ -385,10 +322,13 @@ void EditPrivacyBox::setupContent() {
 		const auto someAreDisallowed = (_value.option != Option::Everyone)
 			|| !_value.never.empty();
 		_controller->confirmSave(someAreDisallowed, crl::guard(this, [=] {
+			_value.ignoreAlways = !showExceptionLink(Exception::Always);
+			_value.ignoreNever = !showExceptionLink(Exception::Never);
+
 			_controller->saveAdditional();
-			_window->session().api().savePrivacy(
-				_controller->apiKey(),
-				collectResult());
+			_window->session().api().userPrivacy().save(
+				_controller->key(),
+				_value);
 			closeBox();
 		}));
 	});

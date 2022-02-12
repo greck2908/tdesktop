@@ -30,6 +30,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
 #include "styles/style_chat.h"
+#include "base/qt/qt_common_adapters.h"
 
 #include <QtCore/QMimeData>
 #include <QtCore/QStack>
@@ -93,7 +94,7 @@ QString FieldTagMimeProcessor::tagFromMimeTag(const QString &mimeTag) {
 		const auto userId = _controller->session().userId();
 		auto match = QRegularExpression(":(\\d+)$").match(mimeTag);
 		if (!match.hasMatch()
-			|| match.capturedRef(1).toInt() != userId) {
+			|| match.capturedView(1).toULongLong() != userId.bare) {
 			return QString();
 		}
 		return mimeTag.mid(0, mimeTag.size() - match.capturedLength());
@@ -249,7 +250,7 @@ TextWithEntities StripSupportHashtag(TextWithEntities &&text) {
 
 QString PrepareMentionTag(not_null<UserData*> user) {
 	return TextUtilities::kMentionTagStart
-		+ QString::number(user->bareId())
+		+ QString::number(user->id.value)
 		+ '.'
 		+ QString::number(user->accessHash());
 }
@@ -281,7 +282,7 @@ Fn<bool(
 			return Ui::InputField::IsValidMarkdownLink(link)
 				&& !TextUtilities::IsMentionLink(link);
 		}
-		Ui::show(Box<EditLinkBox>(controller, text, link, [=](
+		controller->show(Box<EditLinkBox>(controller, text, link, [=](
 				const QString &text,
 				const QString &link) {
 			if (const auto strong = weak.data()) {
@@ -321,7 +322,9 @@ void InitSpellchecker(
 		Core::App().settings().spellcheckerEnabledValue(),
 		Spellchecker::SpellingHighlighter::CustomContextMenuItem{
 			tr::lng_settings_manage_dictionaries(tr::now),
-			[=] { Ui::show(Box<Ui::ManageDictionariesBox>(controller)); }
+			[=] {
+				controller->show(Box<Ui::ManageDictionariesBox>(controller));
+			}
 		});
 	field->setExtendedContextMenu(s->contextMenuCreated());
 #endif // TDESKTOP_DISABLE_SPELLCHECK
@@ -329,7 +332,7 @@ void InitSpellchecker(
 
 bool HasSendText(not_null<const Ui::InputField*> field) {
 	const auto &text = field->getTextWithTags().text;
-	for (const auto ch : text) {
+	for (const auto &ch : text) {
 		const auto code = ch.unicode();
 		if (code != ' '
 			&& code != '\n'
@@ -378,7 +381,7 @@ InlineBotQuery ParseInlineBotQuery(
 					< inlineUsernameStart + inlineUsernameLength)) {
 				return InlineBotQuery();
 			}
-			auto username = text.midRef(inlineUsernameStart, inlineUsernameLength);
+			auto username = base::StringViewMid(text, inlineUsernameStart, inlineUsernameLength);
 			if (username != result.username) {
 				result.username = username.toString();
 				if (const auto peer = session->data().peerByUsername(result.username)) {
@@ -501,6 +504,11 @@ MessageLinksParser::MessageLinksParser(not_null<Ui::InputField*> field)
 	_field->installEventFilter(this);
 }
 
+void MessageLinksParser::parseNow() {
+	_timer.cancel();
+	parse();
+}
+
 bool MessageLinksParser::eventFilter(QObject *object, QEvent *event) {
 	if (object == _field) {
 		if (event->type() == QEvent::KeyPress) {
@@ -539,7 +547,8 @@ void MessageLinksParser::parse() {
 		return (tag == Ui::InputField::kTagBold)
 			|| (tag == Ui::InputField::kTagItalic)
 			|| (tag == Ui::InputField::kTagUnderline)
-			|| (tag == Ui::InputField::kTagStrikeOut);
+			|| (tag == Ui::InputField::kTagStrikeOut)
+			|| (tag == Ui::InputField::kTagSpoiler);
 	};
 
 	auto ranges = QVector<LinkRange>();
@@ -654,7 +663,7 @@ void MessageLinksParser::parse() {
 			}
 		}
 		const auto range = LinkRange {
-			domainOffset,
+			int(domainOffset),
 			static_cast<int>(p - start - domainOffset),
 			QString()
 		};
@@ -678,8 +687,8 @@ void MessageLinksParser::apply(
 	const auto current = _list.current();
 	const auto computeLink = [&](const LinkRange &range) {
 		return range.custom.isEmpty()
-			? text.midRef(range.start, range.length)
-			: range.custom.midRef(0);
+			? base::StringViewMid(text, range.start, range.length)
+			: QStringView(range.custom);
 	};
 	const auto changed = [&] {
 		if (current.size() != count) {

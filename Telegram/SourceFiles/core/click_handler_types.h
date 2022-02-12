@@ -9,6 +9,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/basic_click_handlers.h"
 
+constexpr auto kPeerLinkPeerIdProperty = 0x01;
+constexpr auto kPhotoLinkMediaProperty = 0x02;
+constexpr auto kDocumentLinkMediaProperty = 0x03;
+constexpr auto kSendReactionEmojiProperty = 0x04;
+constexpr auto kReactionsCountEmojiProperty = 0x05;
+
 namespace Main {
 class Session;
 } // namespace Main
@@ -17,11 +23,21 @@ namespace HistoryView {
 class ElementDelegate;
 } // namespace HistoryView
 
+namespace Window {
+class SessionController;
+} // namespace Window
+
 [[nodiscard]] bool UrlRequiresConfirmation(const QUrl &url);
 
+class PeerData;
 struct ClickHandlerContext {
 	FullMsgId itemId;
+	// Is filled from sections.
 	Fn<HistoryView::ElementDelegate*()> elementDelegate;
+	base::weak_ptr<Window::SessionController> sessionWindow;
+	bool skipBotAutoLogin = false;
+	// Is filled from peer info.
+	PeerData *peer = nullptr;
 };
 Q_DECLARE_METATYPE(ClickHandlerContext);
 
@@ -29,11 +45,9 @@ class HiddenUrlClickHandler : public UrlClickHandler {
 public:
 	HiddenUrlClickHandler(QString url) : UrlClickHandler(url, false) {
 	}
-	QString copyToClipboardContextItemText() const override {
-		return (url().isEmpty() || url().startsWith(qstr("internal:")))
-			? QString()
-			: UrlClickHandler::copyToClipboardContextItemText();
-	}
+	QString copyToClipboardText() const override;
+	QString copyToClipboardContextItemText() const override;
+	QString dragText() const override;
 
 	static void Open(QString url, QVariant context = {});
 	void onClick(ClickContext context) const override {
@@ -163,7 +177,6 @@ private:
 
 };
 
-class PeerData;
 class BotCommandClickHandler : public TextClickHandler {
 public:
 	BotCommandClickHandler(const QString &cmd) : _cmd(cmd) {
@@ -184,5 +197,22 @@ protected:
 
 private:
 	QString _cmd;
+
+};
+
+class MonospaceClickHandler : public TextClickHandler {
+public:
+	MonospaceClickHandler(const QString &text, EntityType type);
+
+	void onClick(ClickContext context) const override;
+
+	TextEntity getTextEntity() const override;
+
+protected:
+	QString url() const override;
+
+private:
+	const QString _text;
+	const TextEntity _entity;
 
 };

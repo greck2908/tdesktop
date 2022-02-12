@@ -37,7 +37,7 @@ public:
 		int width);
 	~Photo();
 
-	void draw(Painter &p, const QRect &clip, TextSelection selection, crl::time ms) const override;
+	void draw(Painter &p, const PaintContext &context) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
 
 	[[nodiscard]] TextSelection adjustSelection(
@@ -62,12 +62,11 @@ public:
 	QSize sizeForGrouping(int width) const override;
 	void drawGrouped(
 		Painter &p,
-		const QRect &clip,
-		TextSelection selection,
-		crl::time ms,
+		const PaintContext &context,
 		const QRect &geometry,
 		RectParts sides,
 		RectParts corners,
+		float64 highlightOpacity,
 		not_null<uint64*> cacheKey,
 		not_null<QPixmap*> cache) const override;
 	TextState getStateGrouped(
@@ -83,6 +82,7 @@ public:
 	bool customInfoLayout() const override {
 		return _caption.isEmpty();
 	}
+	QPoint resolveCustomInfoRightBottom() const override;
 	bool skipBubbleTail() const override {
 		return isRoundedInBubbleBottom() && _caption.isEmpty();
 	}
@@ -100,6 +100,8 @@ protected:
 
 private:
 	struct Streamed;
+
+	void showPhoto(FullMsgId id);
 
 	void create(FullMsgId contextId, PeerData *chat = nullptr);
 
@@ -130,10 +132,10 @@ private:
 	void streamingReady(::Media::Streaming::Information &&info);
 	void paintUserpicFrame(
 		Painter &p,
-		QPoint photoPosition,
-		bool selected) const;
+		const PaintContext &context,
+		QPoint photoPosition) const;
 
-	not_null<PhotoData*> _data;
+	const not_null<PhotoData*> _data;
 	int _serviceWidth = 0;
 	int _pixw = 1;
 	int _pixh = 1;

@@ -12,11 +12,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "history/history_item_components.h"
 #include "history/history_item.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/shadow.h"
 #include "ui/layers/generic_box.h"
 #include "ui/item_text_options.h"
+#include "ui/chat/chat_style.h"
 #include "ui/toast/toast.h"
 #include "ui/text/format_values.h"
 #include "ui/text/text_utilities.h"
@@ -25,10 +26,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/toasts/common_toasts.h"
 #include "base/timer_rpl.h"
 #include "apiwrap.h"
+#include "window/window_adaptive.h"
 #include "window/window_session_controller.h"
 #include "window/window_peer_menu.h"
 #include "base/event_filter.h"
 #include "base/call_delayed.h"
+#include "base/qt/qt_key_modifiers.h"
 #include "core/file_utilities.h"
 #include "main/main_session.h"
 #include "data/data_session.h"
@@ -43,14 +46,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/platform_specific.h"
 #include "lang/lang_keys.h"
 #include "facades.h"
-#include "app.h"
 #include "styles/style_chat.h"
 #include "styles/style_window.h"
 #include "styles/style_info.h"
 #include "styles/style_boxes.h"
 
 #include <QtCore/QMimeData>
-#include <QtGui/QGuiApplication>
 
 namespace HistoryView {
 namespace {
@@ -59,13 +60,11 @@ namespace {
 
 PinnedMemento::PinnedMemento(
 	not_null<History*> history,
-	MsgId highlightId)
+	UniversalMsgId highlightId)
 : _history(history)
 , _highlightId(highlightId) {
 	_list.setAroundPosition({
-		.fullId = FullMsgId(
-			history->channelId(),
-			highlightId),
+		.fullId = FullMsgId(history->peer->id, highlightId),
 		.date = TimeId(0),
 	});
 }
@@ -90,17 +89,35 @@ PinnedWidget::PinnedWidget(
 	QWidget *parent,
 	not_null<Window::SessionController*> controller,
 	not_null<History*> history)
-: Window::SectionWidget(parent, controller)
+: Window::SectionWidget(parent, controller, history->peer)
 , _history(history->migrateToOrMe())
 , _migratedPeer(_history->peer->migrateFrom())
 , _topBar(this, controller)
 , _topBarShadow(this)
-, _scroll(std::make_unique<Ui::ScrollArea>(this, st::historyScroll, false))
+, _scroll(std::make_unique<Ui::ScrollArea>(
+	this,
+	controller->chatStyle()->value(lifetime(), st::historyScroll),
+	false))
 , _clearButton(std::make_unique<Ui::FlatButton>(
 	this,
 	QString(),
 	st::historyComposeButton))
-, _scrollDown(_scroll.get(), st::historyToDown) {
+, _scrollDown(
+		_scroll.get(),
+		controller->chatStyle()->value(lifetime(), st::historyToDown)) {
+	controller->chatStyle()->paletteChanged(
+	) | rpl::start_with_next([=] {
+		_scroll->updateBars();
+	}, _scroll->lifetime());
+
+	Window::ChatThemeValueFromPeer(
+		controller,
+		history->peer
+	) | rpl::start_with_next([=](std::shared_ptr<Ui::ChatTheme> &&theme) {
+		_theme = std::move(theme);
+		controller->setChatStyleTheme(_theme);
+	}, lifetime());
+
 	_topBar->setActiveChat(
 		TopBarWidget::ActiveChat{
 			.key = _history,
@@ -127,8 +144,10 @@ PinnedWidget::PinnedWidget(
 	}, _topBar->lifetime());
 
 	_topBarShadow->raise();
-	updateAdaptiveLayout();
-	subscribe(Adaptive::Changed(), [=] { updateAdaptiveLayout(); });
+	controller->adaptive().value(
+	) | rpl::start_with_next([=] {
+		updateAdaptiveLayout();
+	}, lifetime());
 
 	_inner = _scroll->setOwnedWidget(object_ptr<ListWidget>(
 		this,
@@ -136,7 +155,10 @@ PinnedWidget::PinnedWidget(
 		static_cast<ListDelegate*>(this)));
 	_scroll->move(0, _topBar->height());
 	_scroll->show();
-	connect(_scroll.get(), &Ui::ScrollArea::scrolled, [=] { onScroll(); });
+	_scroll->scrolls(
+	) | rpl::start_with_next([=] {
+		onScroll();
+	}, lifetime());
 
 	setupClearButton();
 	setupScrollDownButton();
@@ -182,7 +204,7 @@ void PinnedWidget::setupClearButton() {
 }
 
 void PinnedWidget::scrollDownClicked() {
-	if (QGuiApplication::keyboardModifiers() == Qt::ControlModifier) {
+	if (base::IsCtrlPressed()) {
 		showAtEnd();
 	//} else if (_replyReturn) {
 	//	showAtPosition(_replyReturn->position());
@@ -221,10 +243,13 @@ bool PinnedWidget::showAtPositionNow(
 	const auto use = item ? item->position() : position;
 	if (const auto scrollTop = _inner->scrollTopForPosition(use)) {
 		const auto currentScrollTop = _scroll->scrollTop();
-		const auto wanted = snap(*scrollTop, 0, _scroll->scrollTopMax());
+		const auto wanted = std::clamp(
+			*scrollTop,
+			0,
+			_scroll->scrollTopMax());
 		const auto fullDelta = (wanted - currentScrollTop);
 		const auto limit = _scroll->height();
-		const auto scrollDelta = snap(fullDelta, -limit, limit);
+		const auto scrollDelta = std::clamp(fullDelta, -limit, limit);
 		const auto type = (animated == anim::type::instant)
 			? AnimatedScroll::None
 			: (std::abs(fullDelta) > limit)
@@ -294,7 +319,7 @@ void PinnedWidget::scrollDownAnimationFinish() {
 
 void PinnedWidget::updateAdaptiveLayout() {
 	_topBarShadow->moveToLeft(
-		Adaptive::OneColumn() ? 0 : st::lineWidth,
+		controller()->adaptive().isOneColumn() ? 0 : st::lineWidth,
 		_topBar->height());
 }
 
@@ -305,7 +330,7 @@ not_null<History*> PinnedWidget::history() const {
 Dialogs::RowDescriptor PinnedWidget::activeChat() const {
 	return {
 		_history,
-		FullMsgId(_history->channelId(), ShowAtUnreadMsgId)
+		FullMsgId(_history->peer->id, ShowAtUnreadMsgId)
 	};
 }
 
@@ -364,8 +389,8 @@ void PinnedWidget::restoreState(not_null<PinnedMemento*> memento) {
 	if (const auto highlight = memento->getHighlightId()) {
 		const auto position = Data::MessagePosition{
 			.fullId = ((highlight > 0 || !_migratedPeer)
-				? FullMsgId(_history->channelId(), highlight)
-				: FullMsgId(0, -highlight)),
+				? FullMsgId(_history->peer->id, highlight)
+				: FullMsgId(_migratedPeer->id, -highlight)),
 			.date = TimeId(0),
 		};
 		_inner->showAroundPosition(position, [=] {
@@ -384,12 +409,9 @@ void PinnedWidget::resizeEvent(QResizeEvent *e) {
 
 void PinnedWidget::recountChatWidth() {
 	auto layout = (width() < st::adaptiveChatWideWidth)
-		? Adaptive::ChatLayout::Normal
-		: Adaptive::ChatLayout::Wide;
-	if (layout != Global::AdaptiveChatLayout()) {
-		Global::SetAdaptiveChatLayout(layout);
-		Adaptive::Changed().notify(true);
-	}
+		? Window::Adaptive::ChatLayout::Normal
+		: Window::Adaptive::ChatLayout::Wide;
+	controller()->adaptive().setChatLayout(layout);
 }
 
 void PinnedWidget::setMessagesCount(int count) {
@@ -455,7 +477,7 @@ void PinnedWidget::paintEvent(QPaintEvent *e) {
 	const auto aboveHeight = _topBar->height();
 	const auto bg = e->rect().intersected(
 		QRect(0, aboveHeight, width(), height() - aboveHeight));
-	SectionWidget::PaintBackground(controller(), this, bg);
+	SectionWidget::PaintBackground(controller(), _theme.get(), this, bg);
 }
 
 void PinnedWidget::onScroll() {
@@ -541,7 +563,6 @@ rpl::producer<Data::MessagesSlice> PinnedWidget::listSource(
 		Data::MessagePosition aroundId,
 		int limitBefore,
 		int limitAfter) {
-	const auto channelId = peerToChannel(_history->peer->id);
 	const auto messageId = aroundId.fullId.msg
 		? aroundId.fullId.msg
 		: (ServerMaxMsgId - 1);
@@ -590,7 +611,7 @@ bool PinnedWidget::listAllowsMultiSelect() {
 
 bool PinnedWidget::listIsItemGoodForSelection(
 		not_null<HistoryItem*> item) {
-	return IsServerMsgId(item->id);
+	return item->isRegular();
 }
 
 bool PinnedWidget::listIsLessInOrder(
@@ -602,7 +623,7 @@ bool PinnedWidget::listIsLessInOrder(
 void PinnedWidget::listSelectionChanged(SelectedItems &&items) {
 	HistoryView::TopBarWidget::SelectedState state;
 	state.count = items.size();
-	for (const auto item : items) {
+	for (const auto &item : items) {
 		if (item.canDelete) {
 			++state.canDeleteCount;
 		}
@@ -638,7 +659,7 @@ bool PinnedWidget::listElementShownUnread(not_null<const Element*> view) {
 
 bool PinnedWidget::listIsGoodForAroundPosition(
 		not_null<const Element*> view) {
-	return IsServerMsgId(view->data()->id);
+	return view->data()->isRegular();
 }
 
 void PinnedWidget::listSendBotCommand(
@@ -647,6 +668,24 @@ void PinnedWidget::listSendBotCommand(
 }
 
 void PinnedWidget::listHandleViaClick(not_null<UserData*> bot) {
+}
+
+not_null<Ui::ChatTheme*> PinnedWidget::listChatTheme() {
+	return _theme.get();
+}
+
+CopyRestrictionType PinnedWidget::listCopyRestrictionType(
+		HistoryItem *item) {
+	return CopyRestrictionTypeFor(_history->peer, item);
+}
+
+CopyRestrictionType PinnedWidget::listSelectRestrictionType() {
+	return SelectRestrictionTypeFor(_history->peer);
+}
+
+auto PinnedWidget::listAllowedReactionsValue()
+-> rpl::producer<std::optional<base::flat_set<QString>>> {
+	return Data::PeerAllowedReactionsValue(_history->peer);
 }
 
 void PinnedWidget::confirmDeleteSelected() {

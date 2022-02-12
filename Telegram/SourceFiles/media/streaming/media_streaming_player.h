@@ -64,6 +64,14 @@ public:
 	[[nodiscard]] QImage frame(
 		const FrameRequest &request,
 		const Instance *instance = nullptr) const;
+	[[nodiscard]] FrameWithInfo frameWithInfo(
+		const FrameRequest &request,
+		const Instance *instance = nullptr) const;
+	[[nodiscard]] FrameWithInfo frameWithInfo(
+		const Instance *instance = nullptr) const; // !requireARGB32
+
+	[[nodiscard]] QImage currentFrameImage() const; // Converts if needed.
+
 	void unregisterInstance(not_null<const Instance*> instance);
 	bool markFrameShown();
 
@@ -91,6 +99,7 @@ private:
 	not_null<FileDelegate*> delegate();
 
 	// FileDelegate methods are called only from the File thread.
+	Mode fileOpenMode() override;
 	bool fileReady(int headerSize, Stream &&video, Stream &&audio) override;
 	void fileError(Error error) override;
 	void fileWaitingForData() override;

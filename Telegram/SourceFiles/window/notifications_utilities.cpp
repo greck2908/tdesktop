@@ -7,7 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/notifications_utilities.h"
 
+#include "window/main_window.h"
 #include "base/platform/base_platform_file_utilities.h"
+#include "base/random.h"
 #include "core/application.h"
 #include "data/data_peer.h"
 #include "ui/empty_userpic.h"
@@ -30,7 +32,6 @@ CachedUserpics::CachedUserpics(Type type)
 
 CachedUserpics::~CachedUserpics() {
 	if (_someSavedFlag) {
-		crl::time result = 0;
 		for (const auto &item : std::as_const(_images)) {
 			QFile(item.path).remove();
 		}
@@ -59,7 +60,9 @@ QString CachedUserpics::get(
 		} else {
 			v.until = 0;
 		}
-		v.path = cWorkingDir() + qsl("tdata/temp/") + QString::number(rand_value<uint64>(), 16) + qsl(".png");
+		v.path = u"%1tdata/temp/%2.png"_q.arg(
+			cWorkingDir(),
+			QString::number(base::RandomValue<uint64>(), 16));
 		if (key.first || key.second) {
 			if (peer->isSelf()) {
 				const auto method = (_type == Type::Rounded)
@@ -77,7 +80,7 @@ QString CachedUserpics::get(
 				peer->saveUserpic(view, v.path, st::notifyMacPhotoSize);
 			}
 		} else {
-			Core::App().logoNoMargin().save(v.path, "PNG");
+			LogoNoMargin().save(v.path, "PNG");
 		}
 		i = _images.insert(key, v);
 		_someSavedFlag = true;

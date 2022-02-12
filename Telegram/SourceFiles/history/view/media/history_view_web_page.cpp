@@ -15,17 +15,22 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "history/view/history_view_element.h"
 #include "history/view/history_view_cursor_state.h"
+#include "history/view/history_view_view_button.h"
 #include "history/view/media/history_view_media_common.h"
+#include "history/view/media/history_view_theme_document.h"
 #include "ui/image/image.h"
 #include "ui/text/text_options.h"
+#include "ui/text/text_utilities.h"
 #include "ui/text/format_values.h"
+#include "ui/chat/chat_style.h"
 #include "ui/cached_round_corners.h"
-#include "layout.h" // FullSelection
 #include "data/data_session.h"
+#include "data/data_wall_paper.h"
 #include "data/data_media_types.h"
 #include "data/data_web_page.h"
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
+#include "data/data_file_click_handler.h"
 #include "data/data_file_origin.h"
 #include "styles/style_chat.h"
 
@@ -53,7 +58,7 @@ std::vector<std::unique_ptr<Data::Media>> PrepareCollageMedia(
 		const WebPageCollage &data) {
 	auto result = std::vector<std::unique_ptr<Data::Media>>();
 	result.reserve(data.items.size());
-	for (const auto item : data.items) {
+	for (const auto &item : data.items) {
 		if (const auto document = std::get_if<DocumentData*>(&item)) {
 			result.push_back(std::make_unique<Data::MediaFile>(
 				parent,
@@ -185,15 +190,17 @@ QSize WebPage::countOptimalSize() {
 			_data->url);
 	}
 
-	auto textFloatsAroundInfo = !_asArticle && !_attach && isBubbleBottom();
+	_hasViewButton = ViewButton::MediaHasViewButton(_data);
+
+	const auto textFloatsAroundInfo = !_asArticle
+		&& !_attach
+		&& isBubbleBottom()
+		&& !_hasViewButton;
 
 	// init strings
 	if (_description.isEmpty() && !_data->description.text.isEmpty()) {
 		auto text = _data->description;
 
-		if (textFloatsAroundInfo) {
-			text.text += _parent->skipBlock();
-		}
 		if (isLogEntryOriginal()) {
 			// Fix layout for small bubbles (narrow media caption edit log entries).
 			_description = Ui::Text::String(st::minPhotoSize
@@ -213,22 +220,30 @@ QSize WebPage::countOptimalSize() {
 			text,
 			Ui::WebpageTextDescriptionOptions(),
 			context);
+		if (textFloatsAroundInfo) {
+			_description.updateSkipBlock(
+				_parent->skipBlockWidth(),
+				_parent->skipBlockHeight());
+		}
 	}
 	if (!displayedSiteName().isEmpty()) {
 		_siteNameLines = 1;
-		_siteName.setRichText(
+		_siteName.setMarkedText(
 			st::webPageTitleStyle,
-			textcmdLink(_data->url, displayedSiteName()),
+			Ui::Text::Link(displayedSiteName(), _data->url),
 			Ui::WebpageTextTitleOptions());
 	}
 	if (_title.isEmpty() && !title.isEmpty()) {
+		auto titleWithEntities = Ui::Text::Link(title, _data->url);
 		if (textFloatsAroundInfo && _description.isEmpty()) {
-			title += _parent->skipBlock();
+			_title.updateSkipBlock(
+				_parent->skipBlockWidth(),
+				_parent->skipBlockHeight());
 		}
 		if (!_siteNameLines && !_data->url.isEmpty()) {
-			_title.setRichText(
+			_title.setMarkedText(
 				st::webPageTitleStyle,
-				textcmdLink(_data->url, title),
+				std::move(titleWithEntities),
 				Ui::WebpageTextTitleOptions());
 
 		} else {
@@ -240,7 +255,6 @@ QSize WebPage::countOptimalSize() {
 	}
 
 	// init dimensions
-	auto l = st::msgPadding.left() + st::webPageLeft, r = st::msgPadding.right();
 	auto skipBlockWidth = _parent->skipBlockWidth();
 	auto maxWidth = skipBlockWidth;
 	auto minHeight = 0;
@@ -389,6 +403,8 @@ QSize WebPage::countCurrentSize(int newWidth) {
 			} else if (isBubbleBottom() && _attach->customInfoLayout() && _attach->width() + _parent->skipBlockWidth() > innerWidth + bubble.left() + bubble.right()) {
 				newHeight += bottomInfoPadding();
 			}
+		} else if (_hasViewButton) {
+			newHeight += bottomInfoPadding();
 		}
 	}
 	auto padding = inBubblePadding();
@@ -446,16 +462,16 @@ void WebPage::unloadHeavyPart() {
 	_photoMedia = nullptr;
 }
 
-void WebPage::draw(Painter &p, const QRect &r, TextSelection selection, crl::time ms) const {
+void WebPage::draw(Painter &p, const PaintContext &context) const {
 	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) return;
-	auto paintx = 0, painty = 0, paintw = width(), painth = height();
+	auto paintw = width();
 
-	auto outbg = _parent->hasOutLayout();
-	bool selected = (selection == FullSelection);
+	const auto st = context.st;
+	const auto sti = context.imageStyle();
+	const auto stm = context.messageStyle();
 
-	auto &barfg = selected ? (outbg ? st::msgOutReplyBarSelColor : st::msgInReplyBarSelColor) : (outbg ? st::msgOutReplyBarColor : st::msgInReplyBarColor);
-	auto &semibold = selected ? (outbg ? st::msgOutServiceFgSelected : st::msgInServiceFgSelected) : (outbg ? st::msgOutServiceFg : st::msgInServiceFg);
-	auto &regular = selected ? (outbg ? st::msgOutDateFgSelected : st::msgInDateFgSelected) : (outbg ? st::msgOutDateFg : st::msgInDateFg);
+	const auto &barfg = stm->msgReplyBarColor;
+	const auto &semibold = stm->msgServiceFg;
 
 	QMargins bubble(_attach ? _attach->bubbleMargins() : QMargins());
 	auto padding = inBubblePadding();
@@ -469,6 +485,8 @@ void WebPage::draw(Painter &p, const QRect &r, TextSelection selection, crl::tim
 		bshift += bottomInfoPadding();
 	} else if (isBubbleBottom() && _attach && _attach->customInfoLayout() && _attach->width() + _parent->skipBlockWidth() > paintw + bubble.left() + bubble.right()) {
 		bshift += bottomInfoPadding();
+	} else if (_hasViewButton) {
+		bshift += bottomInfoPadding();
 	}
 
 	QRect bar(style::rtlrect(st::msgPadding.left(), tshift, st::webPageBar, height() - tshift - bshift, width()));
@@ -478,7 +496,6 @@ void WebPage::draw(Painter &p, const QRect &r, TextSelection selection, crl::tim
 	if (asArticle()) {
 		ensurePhotoMediaCreated();
 
-		const auto contextId = _parent->data()->fullId();
 		QPixmap pix;
 		auto pw = qMax(_pixw, lineHeight);
 		auto ph = _pixh;
@@ -491,50 +508,63 @@ void WebPage::draw(Painter &p, const QRect &r, TextSelection selection, crl::tim
 			pixh = qRound(pixh * coef);
 			pixw = qRound(pixw * coef);
 		}
+		const auto size = QSize(pixw, pixh);
+		const auto args = Images::PrepareArgs{
+			.options = Images::Option::RoundSmall,
+			.outer = { pw, ph },
+		};
 		if (const auto thumbnail = _photoMedia->image(
 				Data::PhotoSize::Thumbnail)) {
-			pix = thumbnail->pixSingle(pixw, pixh, pw, ph, ImageRoundRadius::Small);
+			pix = thumbnail->pixSingle(size, args);
 		} else if (const auto small = _photoMedia->image(
 				Data::PhotoSize::Small)) {
-			pix = small->pixBlurredSingle(pixw, pixh, pw, ph, ImageRoundRadius::Small);
+			pix = small->pixSingle(size, args.blurred());
 		} else if (const auto blurred = _photoMedia->thumbnailInline()) {
-			pix = blurred->pixBlurredSingle(pixw, pixh, pw, ph, ImageRoundRadius::Small);
+			pix = blurred->pixSingle(size, args.blurred());
 		}
 		p.drawPixmapLeft(padding.left() + paintw - pw, tshift, width(), pix);
-		if (selected) {
-			Ui::FillRoundRect(p, style::rtlrect(padding.left() + paintw - pw, tshift, pw, _pixh, width()), p.textPalette().selectOverlay, Ui::SelectedOverlaySmallCorners);
+		if (context.selected()) {
+			const auto st = context.st;
+			Ui::FillRoundRect(
+				p,
+				style::rtlrect(padding.left() + paintw - pw, tshift, pw, _pixh, width()),
+				st->msgSelectOverlay(),
+				st->msgSelectOverlayCornersSmall());
 		}
 		paintw -= pw + st::webPagePhotoDelta;
 	}
 	if (_siteNameLines) {
 		p.setPen(semibold);
+		p.setTextPalette(stm->semiboldPalette);
+
 		auto endskip = 0;
 		if (_siteName.hasSkipBlock()) {
 			endskip = _parent->skipBlockWidth();
 		}
-		_siteName.drawLeftElided(p, padding.left(), tshift, paintw, width(), _siteNameLines, style::al_left, 0, -1, endskip, false, selection);
+		_siteName.drawLeftElided(p, padding.left(), tshift, paintw, width(), _siteNameLines, style::al_left, 0, -1, endskip, false, context.selection);
 		tshift += lineHeight;
+
+		p.setTextPalette(stm->textPalette);
 	}
+	p.setPen(stm->historyTextFg);
 	if (_titleLines) {
-		p.setPen(outbg ? st::webPageTitleOutFg : st::webPageTitleInFg);
 		auto endskip = 0;
 		if (_title.hasSkipBlock()) {
 			endskip = _parent->skipBlockWidth();
 		}
-		_title.drawLeftElided(p, padding.left(), tshift, paintw, width(), _titleLines, style::al_left, 0, -1, endskip, false, toTitleSelection(selection));
+		_title.drawLeftElided(p, padding.left(), tshift, paintw, width(), _titleLines, style::al_left, 0, -1, endskip, false, toTitleSelection(context.selection));
 		tshift += _titleLines * lineHeight;
 	}
 	if (_descriptionLines) {
-		p.setPen(outbg ? st::webPageDescriptionOutFg : st::webPageDescriptionInFg);
 		auto endskip = 0;
 		if (_description.hasSkipBlock()) {
 			endskip = _parent->skipBlockWidth();
 		}
 		if (_descriptionLines > 0) {
-			_description.drawLeftElided(p, padding.left(), tshift, paintw, width(), _descriptionLines, style::al_left, 0, -1, endskip, false, toDescriptionSelection(selection));
+			_description.drawLeftElided(p, padding.left(), tshift, paintw, width(), _descriptionLines, style::al_left, 0, -1, endskip, false, toDescriptionSelection(context.selection));
 			tshift += _descriptionLines * lineHeight;
 		} else {
-			_description.drawLeft(p, padding.left(), tshift, paintw, width(), style::al_left, 0, -1, toDescriptionSelection(selection));
+			_description.drawLeft(p, padding.left(), tshift, paintw, width(), style::al_left, 0, -1, toDescriptionSelection(context.selection));
 			tshift += _description.countHeight(paintw);
 		}
 	}
@@ -548,8 +578,12 @@ void WebPage::draw(Painter &p, const QRect &r, TextSelection selection, crl::tim
 
 		p.translate(attachLeft, attachTop);
 
-		auto attachSelection = selected ? FullSelection : TextSelection { 0, 0 };
-		_attach->draw(p, r.translated(-attachLeft, -attachTop), attachSelection, ms);
+		_attach->draw(p, context.translated(
+			-attachLeft,
+			-attachTop
+		).withSelection(context.selected()
+			? FullSelection
+			: TextSelection()));
 		auto pixwidth = _attach->width();
 		auto pixheight = _attach->height();
 
@@ -559,9 +593,9 @@ void WebPage::draw(Painter &p, const QRect &r, TextSelection selection, crl::tim
 			&& !_data->document) {
 			if (_attach->isReadyForOpen()) {
 				if (_data->siteName == qstr("YouTube")) {
-					st::youtubeIcon.paint(p, (pixwidth - st::youtubeIcon.width()) / 2, (pixheight - st::youtubeIcon.height()) / 2, width());
+					st->youtubeIcon().paint(p, (pixwidth - st::youtubeIcon.width()) / 2, (pixheight - st::youtubeIcon.height()) / 2, width());
 				} else {
-					st::videoIcon.paint(p, (pixwidth - st::videoIcon.width()) / 2, (pixheight - st::videoIcon.height()) / 2, width());
+					st->videoIcon().paint(p, (pixwidth - st::videoIcon.width()) / 2, (pixheight - st::videoIcon.height()) / 2, width());
 				}
 			}
 			if (_durationWidth) {
@@ -570,10 +604,10 @@ void WebPage::draw(Painter &p, const QRect &r, TextSelection selection, crl::tim
 				auto dateW = pixwidth - dateX - st::msgDateImgDelta;
 				auto dateH = pixheight - dateY - st::msgDateImgDelta;
 
-				Ui::FillRoundRect(p, dateX, dateY, dateW, dateH, selected ? st::msgDateImgBgSelected : st::msgDateImgBg, selected ? Ui::DateSelectedCorners : Ui::DateCorners);
+				Ui::FillRoundRect(p, dateX, dateY, dateW, dateH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
 
 				p.setFont(st::msgDateFont);
-				p.setPen(st::msgDateImgFg);
+				p.setPen(st->msgDateImgFg());
 				p.drawTextLeft(dateX + st::msgDateImgPadding.x(), dateY + st::msgDateImgPadding.y(), pixwidth, _duration);
 			}
 		}
@@ -582,7 +616,7 @@ void WebPage::draw(Painter &p, const QRect &r, TextSelection selection, crl::tim
 
 		if (!attachAdditionalInfoText.isEmpty()) {
 			p.setFont(st::msgDateFont);
-			p.setPen(selected ? (outbg ? st::msgOutDateFgSelected : st::msgInDateFgSelected) : (outbg ? st::msgOutDateFg : st::msgInDateFg));
+			p.setPen(stm->msgDateFg);
 			p.drawTextLeft(st::msgPadding.left(), bar.y() + bar.height() + st::mediaInBubbleSkip, width(), attachAdditionalInfoText);
 		}
 	}
@@ -598,7 +632,7 @@ TextState WebPage::textState(QPoint point, StateRequest request) const {
 	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) {
 		return result;
 	}
-	auto paintx = 0, painty = 0, paintw = width(), painth = height();
+	auto paintw = width();
 
 	QMargins bubble(_attach ? _attach->bubbleMargins() : QMargins());
 	auto padding = inBubblePadding();
@@ -613,7 +647,7 @@ TextState WebPage::textState(QPoint point, StateRequest request) const {
 	auto inThumb = false;
 	if (asArticle()) {
 		auto pw = qMax(_pixw, lineHeight);
-		if (style::rtlrect(padding.left() + paintw - pw, 0, pw, _pixh, width()).contains(point)) {
+		if (style::rtlrect(padding.left() + paintw - pw, tshift, pw, _pixh, width()).contains(point)) {
 			inThumb = true;
 		}
 		paintw -= pw + st::webPagePhotoDelta;
@@ -709,6 +743,8 @@ ClickHandlerPtr WebPage::replaceAttachLink(
 		} else {
 			return _openl;
 		}
+	} else if (ThemeDocument::ParamsFromUrl(_data->url).has_value()) {
+		return _openl;
 	}
 	return link;
 }

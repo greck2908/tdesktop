@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document_media.h"
 
 #include "data/data_document.h"
+#include "data/data_document_resolver.h"
 #include "data/data_session.h"
 #include "data/data_cloud_themes.h"
 #include "data/data_file_origin.h"
@@ -23,7 +24,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "storage/file_download.h"
 #include "ui/image/image.h"
-#include "app.h"
 
 #include <QtCore/QBuffer>
 #include <QtGui/QImageReader>
@@ -37,8 +37,11 @@ constexpr auto kGoodThumbQuality = 87;
 
 enum class FileType {
 	Video,
+	VideoSticker,
 	AnimatedSticker,
 	WallPaper,
+	WallPatternPNG,
+	WallPatternSVG,
 	Theme,
 };
 
@@ -47,19 +50,32 @@ enum class FileType {
 		|| owner->isAnimation()
 		|| owner->isWallPaper()
 		|| owner->isTheme()
-		|| (owner->sticker() && owner->sticker()->animated);
+		|| (owner->sticker() && owner->sticker()->isAnimated());
 }
 
 [[nodiscard]] QImage PrepareGoodThumbnail(
 		const QString &path,
 		QByteArray data,
 		FileType type) {
-	if (type == FileType::Video) {
-		return ::Media::Clip::PrepareForSending(path, data).thumbnail;
+	if (type == FileType::Video || type == FileType::VideoSticker) {
+		auto result = ::Media::Clip::PrepareForSending(path, data);
+		if (result.isWebmSticker && type == FileType::Video) {
+			result.thumbnail = Images::Opaque(std::move(result.thumbnail));
+		}
+		return result.thumbnail;
 	} else if (type == FileType::AnimatedSticker) {
 		return Lottie::ReadThumbnail(Lottie::ReadContent(data, path));
 	} else if (type == FileType::Theme) {
 		return Window::Theme::GeneratePreview(data, path);
+	} else if (type == FileType::WallPatternSVG) {
+		return Images::Read({
+			.path = path,
+			.content = std::move(data),
+			.maxSize = QSize(
+				kWallPaperThumbnailLimit,
+				kWallPaperThumbnailLimit),
+			.gzipSvg = true,
+		}).image;
 	}
 	auto buffer = QBuffer(&data);
 	auto file = QFile(path);
@@ -171,7 +187,7 @@ void DocumentMedia::setGoodThumbnail(QImage thumbnail) {
 }
 
 Image *DocumentMedia::thumbnailInline() const {
-	if (!_inlineThumbnail) {
+	if (!_inlineThumbnail && !_owner->inlineThumbnailIsPath()) {
 		const auto bytes = _owner->inlineThumbnailBytes();
 		if (!bytes.isEmpty()) {
 			auto image = Images::FromInlineBytes(bytes);
@@ -183,6 +199,19 @@ Image *DocumentMedia::thumbnailInline() const {
 		}
 	}
 	return _inlineThumbnail.get();
+}
+
+const QPainterPath &DocumentMedia::thumbnailPath() const {
+	if (_pathThumbnail.isEmpty() && _owner->inlineThumbnailIsPath()) {
+		const auto bytes = _owner->inlineThumbnailBytes();
+		if (!bytes.isEmpty()) {
+			_pathThumbnail = Images::PathFromInlineBytes(bytes);
+			if (_pathThumbnail.isEmpty()) {
+				_owner->clearInlineThumbnailBytes();
+			}
+		}
+	}
+	return _pathThumbnail;
 }
 
 Image *DocumentMedia::thumbnail() const {
@@ -236,7 +265,7 @@ void DocumentMedia::checkStickerLarge() {
 		return;
 	}
 	automaticLoad(_owner->stickerSetOrigin(), nullptr);
-	if (data->animated || !loaded()) {
+	if (data->isAnimated() || !loaded()) {
 		return;
 	}
 	if (_bytes.isEmpty()) {
@@ -324,10 +353,10 @@ float64 DocumentMedia::progress() const {
 		: (loaded() ? 1. : 0.);
 }
 
-bool DocumentMedia::canBePlayed() const {
+bool DocumentMedia::canBePlayed(HistoryItem *item) const {
 	return !_owner->inappPlaybackFailed()
 		&& _owner->useStreamingLoader()
-		&& (loaded() || _owner->canBeStreamed());
+		&& (loaded() || _owner->canBeStreamed(item));
 }
 
 bool DocumentMedia::thumbnailEnoughForSticker() const {
@@ -342,9 +371,9 @@ bool DocumentMedia::thumbnailEnoughForSticker() const {
 
 void DocumentMedia::checkStickerSmall() {
 	const auto data = _owner->sticker();
-	if ((data && data->animated) || thumbnailEnoughForSticker()) {
+	if ((data && data->isAnimated()) || thumbnailEnoughForSticker()) {
 		_owner->loadThumbnail(_owner->stickerSetOrigin());
-		if (data && data->animated) {
+		if (data && data->isAnimated()) {
 			automaticLoad(_owner->stickerSetOrigin(), nullptr);
 		}
 	} else {
@@ -359,7 +388,7 @@ Image *DocumentMedia::getStickerLarge() {
 
 Image *DocumentMedia::getStickerSmall() {
 	const auto data = _owner->sticker();
-	if ((data && data->animated) || thumbnailEnoughForSticker()) {
+	if ((data && data->isAnimated()) || thumbnailEnoughForSticker()) {
 		return thumbnail();
 	}
 	return _sticker.get();
@@ -377,13 +406,19 @@ void DocumentMedia::checkStickerLarge(not_null<FileLoader*> loader) {
 void DocumentMedia::GenerateGoodThumbnail(
 		not_null<DocumentData*> document,
 		QByteArray data) {
-	const auto type = document->isWallPaper()
+	const auto type = document->isPatternWallPaperSVG()
+		? FileType::WallPatternSVG
+		: document->isPatternWallPaperPNG()
+		? FileType::WallPatternPNG
+		: document->isWallPaper()
 		? FileType::WallPaper
 		: document->isTheme()
 		? FileType::Theme
-		: document->sticker()
+		: !document->sticker()
+		? FileType::Video
+		: document->sticker()->isLottie()
 		? FileType::AnimatedSticker
-		: FileType::Video;
+		: FileType::VideoSticker;
 	auto location = document->location().isEmpty()
 		? nullptr
 		: std::make_unique<Core::FileLocation>(document->location());
@@ -400,9 +435,11 @@ void DocumentMedia::GenerateGoodThumbnail(
 		auto bytes = QByteArray();
 		if (!result.isNull()) {
 			auto buffer = QBuffer(&bytes);
-			const auto format = (type == FileType::AnimatedSticker)
+			const auto format = (type == FileType::AnimatedSticker
+				|| type == FileType::VideoSticker)
 				? "WEBP"
-				: (type == FileType::WallPaper && result.hasAlphaChannel())
+				: (type == FileType::WallPatternPNG
+					|| type == FileType::WallPatternSVG)
 				? "PNG"
 				: "JPG";
 			result.save(&buffer, format, kGoodThumbQuality);
@@ -450,11 +487,11 @@ void DocumentMedia::ReadOrGenerateThumbnail(
 			});
 		} else if (active) {
 			crl::async([=] {
-				const auto image = App::readImage(value, nullptr, false);
-				crl::on_main(guard, [=] {
+				auto image = Images::Read({ .content = value }).image;
+				crl::on_main(guard, [=, image = std::move(image)]() mutable {
 					document->setGoodThumbnailChecked(true);
 					if (const auto active = document->activeMediaView()) {
-						active->setGoodThumbnail(image);
+						active->setGoodThumbnail(std::move(image));
 					}
 				});
 			});

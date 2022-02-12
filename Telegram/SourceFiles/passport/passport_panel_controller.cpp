@@ -9,22 +9,21 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "lang/lang_keys.h"
 #include "passport/passport_panel_edit_document.h"
-#include "passport/passport_panel_details_row.h"
 #include "passport/passport_panel_edit_contact.h"
 #include "passport/passport_panel_edit_scans.h"
 #include "passport/passport_panel.h"
-#include "base/openssl_help.h"
+#include "passport/ui/passport_details_row.h"
 #include "base/unixtime.h"
 #include "boxes/passcode_box.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "window/window_session_controller.h"
 #include "ui/toast/toast.h"
 #include "ui/rp_widget.h"
 #include "ui/countryinput.h"
 #include "ui/text/format_values.h"
+#include "ui/widgets/sent_code_field.h"
 #include "core/update_checker.h"
-#include "data/data_countries.h"
-#include "app.h"
+#include "countries/countries_instance.h"
 #include "styles/style_layers.h"
 
 namespace Passport {
@@ -41,40 +40,44 @@ const auto kLanguageNamePrefix = "cloud_lng_passport_in_";
 ScanInfo CollectScanInfo(const EditFile &file) {
 	const auto status = [&] {
 		if (file.fields.accessHash) {
-			if (file.fields.downloadOffset < 0) {
+			switch (file.fields.downloadStatus.status()) {
+			case LoadStatus::Status::Failed:
 				return tr::lng_attach_failed(tr::now);
-			} else if (file.fields.downloadOffset < file.fields.size) {
+			case LoadStatus::Status::InProgress:
 				return Ui::FormatDownloadText(
-					file.fields.downloadOffset,
+					file.fields.downloadStatus.offset(),
 					file.fields.size);
-			} else {
+			case LoadStatus::Status::Done:
 				return tr::lng_passport_scan_uploaded(
 					tr::now,
 					lt_date,
 					langDateTimeFull(
 						base::unixtime::parse(file.fields.date)));
 			}
+			Unexpected("LoadStatus value in CollectScanInfo.");
 		} else if (file.uploadData) {
-			if (file.uploadData->offset < 0) {
+			switch (file.uploadData->status.status()) {
+			case LoadStatus::Status::Failed:
 				return tr::lng_attach_failed(tr::now);
-			} else if (file.uploadData->fullId) {
+			case LoadStatus::Status::InProgress:
 				return Ui::FormatDownloadText(
-					file.uploadData->offset,
+					file.uploadData->status.offset(),
 					file.uploadData->bytes.size());
-			} else {
+			case LoadStatus::Status::Done:
 				return tr::lng_passport_scan_uploaded(
 					tr::now,
 					lt_date,
 					langDateTimeFull(
 						base::unixtime::parse(file.fields.date)));
 			}
+			Unexpected("LoadStatus value in CollectScanInfo.");
 		} else {
 			return Ui::FormatDownloadText(0, file.fields.size);
 		}
 	}();
 	return {
 		file.type,
-		FileKey{ file.fields.id, file.fields.dcId },
+		FileKey{ file.fields.id },
 		!file.fields.error.isEmpty() ? file.fields.error : status,
 		file.fields.image,
 		file.deleted,
@@ -100,11 +103,11 @@ std::map<FileType, ScanInfo> PrepareSpecialFiles(const Value &value) {
 	for (const auto type : types) {
 		if (value.requiresSpecialScan(type)) {
 			const auto i = value.specialScansInEdit.find(type);
-			const auto j = result.emplace(
+			result.emplace(
 				type,
 				(i != end(value.specialScansInEdit)
 					? CollectScanInfo(i->second)
-					: ScanInfo(type))).first;
+					: ScanInfo(type)));
 		}
 	}
 	return result;
@@ -115,12 +118,13 @@ std::map<FileType, ScanInfo> PrepareSpecialFiles(const Value &value) {
 EditDocumentScheme GetDocumentScheme(
 		Scope::Type type,
 		std::optional<Value::Type> scansType,
-		bool nativeNames) {
+		bool nativeNames,
+		preferredLangCallback &&preferredLanguage) {
 	using Scheme = EditDocumentScheme;
 	using ValueClass = Scheme::ValueClass;
 	const auto DontFormat = nullptr;
 	const auto CountryFormat = [](const QString &value) {
-		const auto result = Data::CountryNameByISO2(value);
+		const auto result = Countries::Instance().countryNameByISO2(value);
 		return result.isEmpty() ? value : result;
 	};
 	const auto GenderFormat = [](const QString &value) {
@@ -212,7 +216,7 @@ EditDocumentScheme GetDocumentScheme(
 		result.rows = {
 			{
 				ValueClass::Fields,
-				PanelDetailsType::Text,
+				Ui::PanelDetailsType::Text,
 				qsl("first_name"),
 				tr::lng_passport_first_name(tr::now),
 				NameValidate,
@@ -221,7 +225,7 @@ EditDocumentScheme GetDocumentScheme(
 			},
 			{
 				ValueClass::Fields,
-				PanelDetailsType::Text,
+				Ui::PanelDetailsType::Text,
 				qsl("middle_name"),
 				tr::lng_passport_middle_name(tr::now),
 				NameOrEmptyValidate,
@@ -231,7 +235,7 @@ EditDocumentScheme GetDocumentScheme(
 			},
 			{
 				ValueClass::Fields,
-				PanelDetailsType::Text,
+				Ui::PanelDetailsType::Text,
 				qsl("last_name"),
 				tr::lng_passport_last_name(tr::now),
 				NameValidate,
@@ -241,7 +245,7 @@ EditDocumentScheme GetDocumentScheme(
 			},
 			{
 				ValueClass::Fields,
-				PanelDetailsType::Date,
+				Ui::PanelDetailsType::Date,
 				qsl("birth_date"),
 				tr::lng_passport_birth_date(tr::now),
 				DateValidate,
@@ -249,7 +253,7 @@ EditDocumentScheme GetDocumentScheme(
 			},
 			{
 				ValueClass::Fields,
-				PanelDetailsType::Gender,
+				Ui::PanelDetailsType::Gender,
 				qsl("gender"),
 				tr::lng_passport_gender(tr::now),
 				GenderValidate,
@@ -257,7 +261,7 @@ EditDocumentScheme GetDocumentScheme(
 			},
 			{
 				ValueClass::Fields,
-				PanelDetailsType::Country,
+				Ui::PanelDetailsType::Country,
 				qsl("country_code"),
 				tr::lng_passport_country(tr::now),
 				CountryValidate,
@@ -265,7 +269,7 @@ EditDocumentScheme GetDocumentScheme(
 			},
 			{
 				ValueClass::Fields,
-				PanelDetailsType::Country,
+				Ui::PanelDetailsType::Country,
 				qsl("residence_country_code"),
 				tr::lng_passport_residence_country(tr::now),
 				CountryValidate,
@@ -273,7 +277,7 @@ EditDocumentScheme GetDocumentScheme(
 			},
 			{
 				ValueClass::Scans,
-				PanelDetailsType::Text,
+				Ui::PanelDetailsType::Text,
 				qsl("document_no"),
 				tr::lng_passport_document_number(tr::now),
 				DocumentValidate,
@@ -282,7 +286,7 @@ EditDocumentScheme GetDocumentScheme(
 			},
 			{
 				ValueClass::Scans,
-				PanelDetailsType::Date,
+				Ui::PanelDetailsType::Date,
 				qsl("expiry_date"),
 				tr::lng_passport_expiry_date(tr::now),
 				DateOrEmptyValidate,
@@ -292,21 +296,17 @@ EditDocumentScheme GetDocumentScheme(
 		if (nativeNames) {
 			result.additionalDependencyKey = qsl("residence_country_code");
 
-			const auto languageValue = [](const QString &countryCode) {
-				if (countryCode.isEmpty()) {
-					return QString();
-				}
-				const auto &config = ConfigInstance();
-				const auto i = config.languagesByCountryCode.find(
-					countryCode);
-				if (i == end(config.languagesByCountryCode)) {
-					return QString();
-				}
-				return Lang::GetNonDefaultValue(
-					kLanguageNamePrefix + i->second.toUtf8());
+			result.preferredLanguage = preferredLanguage
+				? std::move(preferredLanguage)
+				: [](const QString &) {
+					return rpl::single(EditDocumentCountry());
+				};
+			const auto languageValue = [](const QString &langCode) {
+				return Lang::GetNonDefaultValue(kLanguageNamePrefix
+					+ langCode.toUtf8());
 			};
-			result.additionalHeader = [=](const QString &countryCode) {
-				const auto language = languageValue(countryCode);
+			result.additionalHeader = [=](const EditDocumentCountry &info) {
+				const auto language = languageValue(info.languageCode);
 				return language.isEmpty()
 					? tr::lng_passport_native_name_title(tr::now)
 					: tr::lng_passport_native_name_language(
@@ -314,37 +314,34 @@ EditDocumentScheme GetDocumentScheme(
 						lt_language,
 						language);
 			};
-			result.additionalDescription = [=](const QString &countryCode) {
-				const auto language = languageValue(countryCode);
+			result.additionalDescription = [=](
+					const EditDocumentCountry &info) {
+				const auto language = languageValue(info.languageCode);
 				if (!language.isEmpty()) {
-					return tr::lng_passport_native_name_language_about(tr::now);
+					return tr::lng_passport_native_name_language_about(
+						tr::now);
 				}
-				const auto name = Data::CountryNameByISO2(countryCode);
+				const auto name = Countries::Instance().countryNameByISO2(
+					info.countryCode);
 				Assert(!name.isEmpty());
 				return tr::lng_passport_native_name_about(
 					tr::now,
 					lt_country,
 					name);
 			};
-			result.additionalShown = [](const QString &countryCode) {
+			result.additionalShown = [](const EditDocumentCountry &info) {
 				using Result = EditDocumentScheme::AdditionalVisibility;
-				if (countryCode.isEmpty()) {
-					return Result::Hidden;
-				}
-				const auto &config = ConfigInstance();
-				const auto i = config.languagesByCountryCode.find(
-					countryCode);
-				if (i != end(config.languagesByCountryCode)
-					&& i->second == "en") {
-					return Result::OnlyIfError;
-				}
-				return Result::Shown;
+				return (info.countryCode.isEmpty())
+					? Result::Hidden
+					: (info.languageCode == "en")
+					? Result::OnlyIfError
+					: Result::Shown;
 			};
 			using Row = EditDocumentScheme::Row;
 			auto additional = std::initializer_list<Row>{
 				{
 					ValueClass::Additional,
-					PanelDetailsType::Text,
+					Ui::PanelDetailsType::Text,
 					qsl("first_name_native"),
 					tr::lng_passport_first_name(tr::now),
 					NativeNameValidate,
@@ -355,7 +352,7 @@ EditDocumentScheme GetDocumentScheme(
 				},
 				{
 					ValueClass::Additional,
-					PanelDetailsType::Text,
+					Ui::PanelDetailsType::Text,
 					qsl("middle_name_native"),
 					tr::lng_passport_middle_name(tr::now),
 					NativeNameOrEmptyValidate,
@@ -366,7 +363,7 @@ EditDocumentScheme GetDocumentScheme(
 				},
 				{
 					ValueClass::Additional,
-					PanelDetailsType::Text,
+					Ui::PanelDetailsType::Text,
 					qsl("last_name_native"),
 					tr::lng_passport_last_name(tr::now),
 					NativeNameValidate,
@@ -411,7 +408,7 @@ EditDocumentScheme GetDocumentScheme(
 		result.rows = {
 			{
 				ValueClass::Fields,
-				PanelDetailsType::Text,
+				Ui::PanelDetailsType::Text,
 				qsl("street_line1"),
 				tr::lng_passport_street(tr::now),
 				StreetValidate,
@@ -420,7 +417,7 @@ EditDocumentScheme GetDocumentScheme(
 			},
 			{
 				ValueClass::Fields,
-				PanelDetailsType::Text,
+				Ui::PanelDetailsType::Text,
 				qsl("street_line2"),
 				tr::lng_passport_street(tr::now),
 				DontValidate,
@@ -429,7 +426,7 @@ EditDocumentScheme GetDocumentScheme(
 			},
 			{
 				ValueClass::Fields,
-				PanelDetailsType::Text,
+				Ui::PanelDetailsType::Text,
 				qsl("city"),
 				tr::lng_passport_city(tr::now),
 				CityValidate,
@@ -438,7 +435,7 @@ EditDocumentScheme GetDocumentScheme(
 			},
 			{
 				ValueClass::Fields,
-				PanelDetailsType::Text,
+				Ui::PanelDetailsType::Text,
 				qsl("state"),
 				tr::lng_passport_state(tr::now),
 				DontValidate,
@@ -447,7 +444,7 @@ EditDocumentScheme GetDocumentScheme(
 			},
 			{
 				ValueClass::Fields,
-				PanelDetailsType::Country,
+				Ui::PanelDetailsType::Country,
 				qsl("country_code"),
 				tr::lng_passport_country(tr::now),
 				CountryValidate,
@@ -455,7 +452,7 @@ EditDocumentScheme GetDocumentScheme(
 			},
 			{
 				ValueClass::Fields,
-				PanelDetailsType::Postcode,
+				Ui::PanelDetailsType::Postcode,
 				qsl("post_code"),
 				tr::lng_passport_postcode(tr::now),
 				PostcodeValidate,
@@ -485,7 +482,7 @@ EditContactScheme GetContactScheme(Scope::Type type) {
 			).match(value).hasMatch();
 		};
 		result.format = [](const QString &value) {
-			return App::formatPhone(value);
+			return Ui::FormatPhone(value);
 		};
 		result.postprocess = [](QString value) {
 			return value.replace(QRegularExpression("[^\\d]"), QString());
@@ -685,23 +682,23 @@ void PanelController::setupPassword() {
 		return;
 	}
 
-	auto fields = PasscodeBox::CloudFields();
-	fields.newAlgo = settings.newAlgo;
-	fields.newSecureSecretAlgo = settings.newSecureAlgo;
+	auto fields = PasscodeBox::CloudFields{
+		.newAlgo = settings.newAlgo,
+		.hasRecovery = settings.hasRecovery,
+		.newSecureSecretAlgo = settings.newSecureAlgo,
+		.pendingResetDate = settings.pendingResetDate,
+	};
 	auto box = show(Box<PasscodeBox>(&_form->window()->session(), fields));
 	box->newPasswordSet(
-	) | rpl::filter([=](const QByteArray &password) {
-		return !password.isEmpty();
-	}) | rpl::start_with_next([=](const QByteArray &password) {
-		_form->reloadAndSubmitPassword(password);
+	) | rpl::start_with_next([=](const QByteArray &password) {
+		if (password.isEmpty()) {
+			_form->reloadPassword();
+		} else {
+			_form->reloadAndSubmitPassword(password);
+		}
 	}, box->lifetime());
 
-	rpl::merge(
-		box->passwordReloadNeeded(),
-		box->newPasswordSet(
-		) | rpl::filter([=](const QByteArray &password) {
-			return password.isEmpty();
-		}) | rpl::to_empty
+	box->passwordReloadNeeded(
 	) | rpl::start_with_next([=] {
 		_form->reloadPassword();
 	}, box->lifetime());
@@ -713,7 +710,7 @@ void PanelController::setupPassword() {
 }
 
 void PanelController::cancelPasswordSubmit() {
-	show(Box<ConfirmBox>(
+	show(Box<Ui::ConfirmBox>(
 		tr::lng_passport_stop_password_sure(tr::now),
 		tr::lng_passport_stop(tr::now),
 		[=](Fn<void()> &&close) { close(); _form->cancelPassword(); }));
@@ -890,7 +887,7 @@ void PanelController::deleteValueSure(bool withDetails) {
 }
 
 void PanelController::suggestReset(Fn<void()> callback) {
-	_resetBox = Ui::BoxPointer(show(Box<ConfirmBox>(
+	_resetBox = Ui::BoxPointer(show(Box<Ui::ConfirmBox>(
 		Lang::Hard::PassportCorrupted(),
 		Lang::Hard::PassportCorruptedReset(),
 		[=] { resetPassport(callback); },
@@ -898,7 +895,7 @@ void PanelController::suggestReset(Fn<void()> callback) {
 }
 
 void PanelController::resetPassport(Fn<void()> callback) {
-	const auto box = show(Box<ConfirmBox>(
+	const auto box = show(Box<Ui::ConfirmBox>(
 		Lang::Hard::PassportCorruptedResetSure(),
 		Lang::Hard::PassportCorruptedReset(),
 		st::attentionBoxButton,
@@ -945,7 +942,7 @@ void PanelController::showUpdateAppBox() {
 		Core::UpdateApplication();
 	};
 	show(
-		Box<ConfirmBox>(
+		Box<Ui::ConfirmBox>(
 			tr::lng_passport_app_out_of_date(tr::now),
 			tr::lng_menu_update(tr::now),
 			callback,
@@ -1005,11 +1002,11 @@ void PanelController::requestScopeFilesType(int index) {
 				[=](int documentIndex) {
 					editWithUpload(index, documentIndex);
 				},
-				ranges::view::all(
+				ranges::views::all(
 					_scopes[index].documents
-				) | ranges::view::transform([](auto value) {
+				) | ranges::views::transform([](auto value) {
 					return value->type;
-				}) | ranges::view::transform([](Value::Type type) {
+				}) | ranges::views::transform([](Value::Type type) {
 					switch (type) {
 					case Value::Type::Passport:
 						return tr::lng_passport_identity_passport(tr::now);
@@ -1028,11 +1025,11 @@ void PanelController::requestScopeFilesType(int index) {
 				[=](int documentIndex) {
 					editWithUpload(index, documentIndex);
 				},
-				ranges::view::all(
+				ranges::views::all(
 					_scopes[index].documents
-				) | ranges::view::transform([](auto value) {
+				) | ranges::views::transform([](auto value) {
 					return value->type;
-				}) | ranges::view::transform([](Value::Type type) {
+				}) | ranges::views::transform([](Value::Type type) {
 					switch (type) {
 					case Value::Type::UtilityBill:
 						return tr::lng_passport_address_bill(tr::now);
@@ -1064,7 +1061,6 @@ void PanelController::editWithUpload(int index, int documentIndex) {
 	const auto type = document->requiresSpecialScan(FileType::FrontSide)
 		? FileType::FrontSide
 		: FileType::Scan;
-	const auto allowMany = (type == FileType::Scan);
 	const auto widget = _panel->widget();
 	EditScans::ChooseScan(widget.get(), type, [=](QByteArray &&content) {
 		if (_scopeDocumentTypeBox) {
@@ -1080,7 +1076,7 @@ void PanelController::editWithUpload(int index, int documentIndex) {
 }
 
 void PanelController::readScanError(ReadScanError error) {
-	show(Box<InformBox>([&] {
+	show(Box<Ui::InformBox>([&] {
 		switch (error) {
 		case ReadScanError::FileTooLarge:
 			return tr::lng_passport_error_too_large(tr::now);
@@ -1147,6 +1143,10 @@ void PanelController::startScopeEdit(
 		_form->startValueEdit(_editDocument);
 	}
 
+	auto preferredLanguage = [=](const QString &countryCode) {
+		return _form->preferredLanguage(countryCode);
+	};
+
 	auto content = [&]() -> object_ptr<Ui::RpWidget> {
 		switch (_editScope->type) {
 		case Scope::Type::Identity:
@@ -1167,7 +1167,8 @@ void PanelController::startScopeEdit(
 					GetDocumentScheme(
 						_editScope->type,
 						_editDocument->type,
-						_editValue->nativeNames),
+						_editValue->nativeNames,
+						std::move(preferredLanguage)),
 					_editValue->error,
 					_editValue->data.parsedInEdit,
 					_editDocument->error,
@@ -1181,7 +1182,8 @@ void PanelController::startScopeEdit(
 					GetDocumentScheme(
 						_editScope->type,
 						_editDocument->type,
-						false),
+						false,
+						std::move(preferredLanguage)),
 					_editDocument->error,
 					_editDocument->data.parsedInEdit,
 					std::move(scans),
@@ -1202,7 +1204,8 @@ void PanelController::startScopeEdit(
 				GetDocumentScheme(
 					_editScope->type,
 					std::nullopt,
-					_editValue->nativeNames),
+					_editValue->nativeNames,
+					std::move(preferredLanguage)),
 				_editValue->error,
 				_editValue->data.parsedInEdit);
 			const auto weak = Ui::MakeWeak(result.data());
@@ -1399,7 +1402,7 @@ void PanelController::cancelEditScope() {
 
 	if (_panelHasUnsavedChanges && _panelHasUnsavedChanges()) {
 		if (!_confirmForgetChangesBox) {
-			_confirmForgetChangesBox = show(Box<ConfirmBox>(
+			_confirmForgetChangesBox = show(Box<Ui::ConfirmBox>(
 				tr::lng_passport_sure_cancel(tr::now),
 				tr::lng_continue(tr::now),
 				[=] { _panel->showForm(); }));

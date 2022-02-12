@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/sandbox.h"
 
 #include "base/platform/base_platform_info.h"
+#include "platform/platform_specific.h"
 #include "mainwidget.h"
 #include "mainwindow.h"
 #include "storage/localstorage.h"
@@ -23,13 +24,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/invoke_queued.h"
 #include "base/qthelp_url.h"
 #include "base/qthelp_regex.h"
-#include "base/qt_adapters.h"
+#include "base/qt/qt_common_adapters.h"
+#include "ui/ui_utility.h"
 #include "ui/effects/animations.h"
-#include "facades.h"
-#include "app.h"
 
+#include <QtCore/QLockFile>
 #include <QtGui/QSessionManager>
 #include <QtGui/QScreen>
+#include <qpa/qplatformscreen.h>
 
 namespace Core {
 namespace {
@@ -76,6 +78,8 @@ QString _escapeFrom7bit(const QString &str) {
 
 } // namespace
 
+bool Sandbox::QuitOnStartRequested = false;
+
 Sandbox::Sandbox(
 	not_null<Core::Launcher*> launcher,
 	int &argc,
@@ -95,10 +99,35 @@ int Sandbox::start() {
 	if (!Core::UpdaterDisabled()) {
 		_updateChecker = std::make_unique<Core::UpdateChecker>();
 	}
-	const auto d = QFile::encodeName(QDir(cWorkingDir()).absolutePath());
-	char h[33] = { 0 };
-	hashMd5Hex(d.constData(), d.size(), h);
-	_localServerName = Platform::SingleInstanceLocalServerName(h);
+
+	{
+		const auto d = QFile::encodeName(QDir(cWorkingDir()).absolutePath());
+		char h[33] = { 0 };
+		hashMd5Hex(d.constData(), d.size(), h);
+		_localServerName = Platform::SingleInstanceLocalServerName(h);
+	}
+
+	{
+		const auto d = QFile::encodeName(cExeDir() + cExeName());
+		QByteArray h;
+		h.resize(32);
+		hashMd5Hex(d.constData(), d.size(), h.data());
+		_lockFile = std::make_unique<QLockFile>(QDir::tempPath() + '/' + h + '-' + cGUIDStr());
+		_lockFile->setStaleLockTime(0);
+		if (!_lockFile->tryLock() && _launcher->customWorkingDir()) {
+			// On Windows, QLockFile has problems detecting a stale lock
+			// if the machine's hostname contains characters outside the US-ASCII character set.
+			if constexpr (Platform::IsWindows()) {
+				// QLockFile::removeStaleLockFile returns false on Windows,
+				// when the application owning the lock is still running.
+				if (!_lockFile->removeStaleLockFile()) {
+					gManyInstance = true;
+				}
+			} else {
+				gManyInstance = true;
+			}
+		}
+	}
 
 	connect(
 		&_localSocket,
@@ -145,20 +174,28 @@ int Sandbox::start() {
 		restartHint,
 		Qt::DirectConnection);
 
-	if (cManyInstance()) {
-		LOG(("Many instance allowed, starting..."));
-		singleInstanceChecked();
-	} else {
-		LOG(("Connecting local socket to %1...").arg(_localServerName));
-		_localSocket.connectToServer(_localServerName);
-	}
+	LOG(("Connecting local socket to %1...").arg(_localServerName));
+	_localSocket.connectToServer(_localServerName);
 
+	if (QuitOnStartRequested) {
+		closeApplication();
+		return 0;
+	}
+	_started = true;
 	return exec();
+}
+
+void Sandbox::QuitWhenStarted() {
+	if (!QApplication::instance() || !Instance()._started) {
+		QuitOnStartRequested = true;
+	} else {
+		quit();
+	}
 }
 
 void Sandbox::launchApplication() {
 	InvokeQueued(this, [=] {
-		if (App::quitting()) {
+		if (Quitting()) {
 			quit();
 		} else if (_application) {
 			return;
@@ -182,7 +219,11 @@ void Sandbox::launchApplication() {
 }
 
 void Sandbox::setupScreenScale() {
-	const auto dpi = Sandbox::primaryScreen()->logicalDotsPerInch();
+	const auto processDpi = [](const QDpi &dpi) {
+		return (dpi.first + dpi.second) * qreal(0.5);
+	};
+	const auto dpi = processDpi(
+		Sandbox::primaryScreen()->handle()->logicalDpi());
 	LOG(("Primary screen DPI: %1").arg(dpi));
 	if (dpi <= 108) {
 		cSetScreenScale(100); // 100%:  96 DPI (0-108)
@@ -202,21 +243,29 @@ void Sandbox::setupScreenScale() {
 	if (ratio > 1.) {
 		if (!Platform::IsMac() || (ratio != 2.)) {
 			LOG(("Found non-trivial Device Pixel Ratio: %1").arg(ratio));
-			LOG(("Environmental variables: QT_DEVICE_PIXEL_RATIO='%1'").arg(QString::fromLatin1(qgetenv("QT_DEVICE_PIXEL_RATIO"))));
-			LOG(("Environmental variables: QT_SCALE_FACTOR='%1'").arg(QString::fromLatin1(qgetenv("QT_SCALE_FACTOR"))));
-			LOG(("Environmental variables: QT_AUTO_SCREEN_SCALE_FACTOR='%1'").arg(QString::fromLatin1(qgetenv("QT_AUTO_SCREEN_SCALE_FACTOR"))));
-			LOG(("Environmental variables: QT_SCREEN_SCALE_FACTORS='%1'").arg(QString::fromLatin1(qgetenv("QT_SCREEN_SCALE_FACTORS"))));
+			LOG(("Environmental variables: QT_DEVICE_PIXEL_RATIO='%1'").arg(qEnvironmentVariable("QT_DEVICE_PIXEL_RATIO")));
+			LOG(("Environmental variables: QT_SCALE_FACTOR='%1'").arg(qEnvironmentVariable("QT_SCALE_FACTOR")));
+			LOG(("Environmental variables: QT_AUTO_SCREEN_SCALE_FACTOR='%1'").arg(qEnvironmentVariable("QT_AUTO_SCREEN_SCALE_FACTOR")));
+			LOG(("Environmental variables: QT_SCREEN_SCALE_FACTORS='%1'").arg(qEnvironmentVariable("QT_SCREEN_SCALE_FACTORS")));
 		}
 		style::SetDevicePixelRatio(int(ratio));
-		cSetScreenScale(style::kScaleDefault);
+		if (Platform::IsMac() && ratio == 2.) {
+			cSetScreenScale(110); // 110% for Retina screens by default.
+		} else {
+			cSetScreenScale(style::kScaleDefault);
+		}
 	}
 }
 
 Sandbox::~Sandbox() = default;
 
 bool Sandbox::event(QEvent *e) {
-	if (e->type() == QEvent::Close || e->type() == QEvent::Quit) {
-		App::quit();
+	if (e->type() == QEvent::Quit && !Quitting()) {
+		Quit(QuitReason::QtQuitEvent);
+		e->ignore();
+		return false;
+	} else if (e->type() == QEvent::Close) {
+		Quit();
 	}
 	return QApplication::event(e);
 }
@@ -232,6 +281,8 @@ void Sandbox::socketConnected() {
 	}
 	if (!cStartUrl().isEmpty()) {
 		commands += qsl("OPEN:") + _escapeTo7bit(cStartUrl()) + ';';
+	} else if (cQuit()) {
+		commands += qsl("CMD:quit;");
 	} else {
 		commands += qsl("CMD:show;");
 	}
@@ -258,21 +309,24 @@ void Sandbox::socketReading() {
 	}
 	_localSocketReadData.append(_localSocket.readAll());
 	if (QRegularExpression("RES:(\\d+);").match(_localSocketReadData).hasMatch()) {
-		uint64 pid = _localSocketReadData.mid(4, _localSocketReadData.length() - 5).toULongLong();
+		uint64 pid = base::StringViewMid(
+			_localSocketReadData,
+			4,
+			_localSocketReadData.length() - 5).toULongLong();
 		if (pid != kEmptyPidForCommandResponse) {
 			psActivateProcess(pid);
 		}
 		LOG(("Show command response received, pid = %1, activating and quitting...").arg(pid));
-		return App::quit();
+		return Quit();
 	}
 }
 
 void Sandbox::socketError(QLocalSocket::LocalSocketError e) {
-	if (App::quitting()) return;
+	if (Quitting()) return;
 
 	if (_secondInstance) {
 		LOG(("Could not write show command, error %1, quitting...").arg(e));
-		return App::quit();
+		return Quit();
 	}
 
 	if (e == QLocalSocket::ServerNotFoundError) {
@@ -287,8 +341,8 @@ void Sandbox::socketError(QLocalSocket::LocalSocketError e) {
 	psCheckLocalSocket(_localServerName);
 
 	if (!_localServer.listen(_localServerName)) {
-		LOG(("Failed to start listening to %1 server: %2").arg(_localServerName).arg(_localServer.errorString()));
-		return App::quit();
+		LOG(("Failed to start listening to %1 server: %2").arg(_localServerName, _localServer.errorString()));
+		return Quit();
 	}
 #endif // !Q_OS_WINRT
 
@@ -297,7 +351,11 @@ void Sandbox::socketError(QLocalSocket::LocalSocketError e) {
 		&& Core::checkReadyUpdate()) {
 		cSetRestartingUpdate(true);
 		DEBUG_LOG(("Sandbox Info: installing update instead of starting app..."));
-		return App::quit();
+		return Quit();
+	}
+
+	if (cQuit()) {
+		return Quit();
 	}
 
 	singleInstanceChecked();
@@ -305,11 +363,12 @@ void Sandbox::socketError(QLocalSocket::LocalSocketError e) {
 
 void Sandbox::singleInstanceChecked() {
 	if (cManyInstance()) {
-		Logs::multipleInstances();
+		LOG(("App Info: Detected another instance"));
 	}
 
+	Ui::DisableCustomScaling();
 	refreshGlobalProxy();
-	if (!Logs::started() || (!cManyInstance() && !Logs::instanceChecked())) {
+	if (!Logs::started() || !Logs::instanceChecked()) {
 		new NotStartedWindow();
 		return;
 	}
@@ -347,7 +406,7 @@ void Sandbox::singleInstanceChecked() {
 void Sandbox::socketDisconnected() {
 	if (_secondInstance) {
 		DEBUG_LOG(("Sandbox Error: socket disconnected before command response received, quitting..."));
-		return App::quit();
+		return Quit();
 	}
 }
 
@@ -376,7 +435,7 @@ void Sandbox::readClients() {
 			QString cmds(QString::fromLatin1(i->second));
 			int32 from = 0, l = cmds.length();
 			for (int32 to = cmds.indexOf(QChar(';'), from); to >= from; to = (from < l) ? cmds.indexOf(QChar(';'), from) : -1) {
-				QStringRef cmd(&cmds, from, to - from);
+				auto cmd = base::StringViewMid(cmds, from, to - from);
 				if (cmd.startsWith(qsl("CMD:"))) {
 					execExternal(cmds.mid(from + 4, to - from - 4));
 					const auto response = qsl("RES:%1;").arg(QApplication::applicationPid()).toLatin1();
@@ -397,7 +456,7 @@ void Sandbox::readClients() {
 					const auto response = qsl("RES:%1;").arg(responsePid).toLatin1();
 					i->first->write(response.data(), response.size());
 				} else {
-					LOG(("Sandbox Error: unknown command %1 passed in local socket").arg(QString(cmd.constData(), cmd.length())));
+					LOG(("Sandbox Error: unknown command %1 passed in local socket").arg(cmd.toString()));
 				}
 				from = to + 1;
 			}
@@ -439,23 +498,23 @@ void Sandbox::removeClients() {
 }
 
 void Sandbox::checkForQuit() {
-	if (App::quitting()) {
+	if (Quitting()) {
 		quit();
 	}
 }
 
 void Sandbox::refreshGlobalProxy() {
-	const auto proxy = !Global::started()
+	const auto proxy = !Core::IsAppLaunched()
 		? _sandboxProxy
-		: (Global::ProxySettings() == MTP::ProxyData::Settings::Enabled)
-		? Global::SelectedProxy()
+		: Core::App().settings().proxy().isEnabled()
+		? Core::App().settings().proxy().selected()
 		: MTP::ProxyData();
 	if (proxy.type == MTP::ProxyData::Type::Socks5
 		|| proxy.type == MTP::ProxyData::Type::Http) {
 		QNetworkProxy::setApplicationProxy(
 			MTP::ToNetworkProxy(MTP::ToDirectIpProxy(proxy)));
-	} else if (!Global::started()
-		|| Global::ProxySettings() == MTP::ProxyData::Settings::System) {
+	} else if (!Core::IsAppLaunched()
+		|| Core::App().settings().proxy().isSystem()) {
 		QNetworkProxyFactory::setUseSystemConfiguration(true);
 	} else {
 		QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
@@ -559,7 +618,7 @@ void Sandbox::processPostponedCalls(int level) {
 bool Sandbox::nativeEventFilter(
 		const QByteArray &eventType,
 		void *message,
-		long *result) {
+		base::NativeEventResult *result) {
 	registerEnterFromEventLoop();
 	return false;
 }
@@ -573,10 +632,10 @@ MTP::ProxyData Sandbox::sandboxProxy() const {
 }
 
 void Sandbox::closeApplication() {
-	if (App::launchState() == App::QuitProcessed) {
+	if (CurrentLaunchState() == LaunchState::QuitProcessed) {
 		return;
 	}
-	App::setLaunchState(App::QuitProcessed);
+	SetLaunchState(LaunchState::QuitProcessed);
 
 	_application = nullptr;
 
@@ -599,6 +658,8 @@ void Sandbox::execExternal(const QString &cmd) {
 		} else if (PreLaunchWindow::instance()) {
 			PreLaunchWindow::instance()->activate();
 		}
+	} else if (cmd == "quit") {
+		Quit();
 	}
 }
 
@@ -611,11 +672,3 @@ rpl::producer<> on_main_update_requests() {
 }
 
 } // namespace crl
-
-namespace base {
-
-void EnterFromEventLoop(FnMut<void()> &&method) {
-	Core::Sandbox::Instance().customEnterFromEventLoop(std::move(method));
-}
-
-} // namespace base

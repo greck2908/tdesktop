@@ -46,7 +46,7 @@ class AbstractController;
 namespace Media {
 
 using BaseLayout = Overview::Layout::ItemBase;
-using UniversalMsgId = int32;
+using UniversalMsgId = MsgId;
 
 class ListWidget final
 	: public Ui::RpWidget
@@ -76,11 +76,21 @@ public:
 	void saveState(not_null<Memento*> memento);
 	void restoreState(not_null<Memento*> memento);
 
+	// Overview::Layout::Delegate
 	void registerHeavyItem(not_null<const BaseLayout*> item) override;
 	void unregisterHeavyItem(not_null<const BaseLayout*> item) override;
+	void repaintItem(not_null<const BaseLayout*> item) override;
+	bool itemVisible(not_null<const BaseLayout*> item) override;
+
+	void openPhoto(not_null<PhotoData*> photo, FullMsgId id) override;
+	void openDocument(
+		not_null<DocumentData*> document,
+		FullMsgId id,
+		bool showInMediaView = false) override;
 
 private:
 	struct Context;
+	struct DateBadge;
 	class Section;
 	using CursorState = HistoryView::CursorState;
 	using TextState = HistoryView::TextState;
@@ -159,12 +169,15 @@ private:
 	void mouseReleaseEvent(QMouseEvent *e) override;
 	void mouseDoubleClickEvent(QMouseEvent *e) override;
 	void contextMenuEvent(QContextMenuEvent *e) override;
-	void enterEventHook(QEvent *e) override;
+	void enterEventHook(QEnterEvent *e) override;
 	void leaveEventHook(QEvent *e) override;
 
 	void start();
 	int recountHeight();
 	void refreshHeight();
+
+	void setupSelectRestriction();
+	[[nodiscard]] bool hasSelectRestriction() const;
 
 	QMargins padding() const;
 	bool isMyItem(not_null<const HistoryItem*> item) const;
@@ -271,6 +284,11 @@ private:
 	void updateDragSelection();
 	void clearDragSelection();
 
+	void updateDateBadgeFor(int top);
+	void scrollDateCheck();
+	void scrollDateHide();
+	void toggleScrollDateShown();
+
 	void trySwitchToWordSelection();
 	void switchToWordSelection();
 	void validateTrippleClickStartTime();
@@ -282,7 +300,7 @@ private:
 	const not_null<AbstractController*> _controller;
 	const not_null<PeerData*> _peer;
 	PeerData * const _migrated = nullptr;
-	Type _type = Type::Photo;
+	const Type _type = Type::Photo;
 
 	static constexpr auto kMinimalIdsLimit = 16;
 	static constexpr auto kDefaultAroundId = (ServerMaxMsgId - 1);
@@ -316,6 +334,8 @@ private:
 	style::cursor _cursor = style::cur_default;
 	DragSelectAction _dragSelectAction = DragSelectAction::None;
 	bool _wasSelectedText = false; // was some text selected in current drag action
+
+	const std::unique_ptr<DateBadge> _dateBadge;
 
 	base::unique_qptr<Ui::PopupMenu> _contextMenu;
 	rpl::event_stream<> _checkForHide;

@@ -5,7 +5,7 @@
 # https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 add_library(td_mtproto OBJECT)
-init_target(td_mtproto)
+init_non_host_target(td_mtproto)
 add_library(tdesktop::td_mtproto ALIAS td_mtproto)
 
 target_precompile_headers(td_mtproto PRIVATE ${src_loc}/mtproto/mtproto_pch.h)
@@ -48,8 +48,8 @@ PRIVATE
     mtproto/mtproto_pch.h
     mtproto/mtproto_proxy_data.cpp
     mtproto/mtproto_proxy_data.h
-    mtproto/mtproto_rpc_sender.cpp
-    mtproto/mtproto_rpc_sender.h
+    mtproto/mtproto_response.cpp
+    mtproto/mtproto_response.h
 )
 
 target_include_directories(td_mtproto

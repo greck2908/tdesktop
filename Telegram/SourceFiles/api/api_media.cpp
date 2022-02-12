@@ -7,7 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "api/api_media.h"
 
+#include "api/api_common.h"
 #include "data/data_document.h"
+#include "data/stickers/data_stickers_set.h"
 #include "history/history_item.h"
 
 namespace Api {
@@ -47,7 +49,7 @@ MTPVector<MTPDocumentAttribute> ComposeSendingDocumentAttributes(
 		attributes.push_back(MTP_documentAttributeSticker(
 			MTP_flags(0),
 			MTP_string(document->sticker()->alt),
-			document->sticker()->set,
+			Data::InputStickerSet(document->sticker()->set),
 			MTPMaskCoords()));
 	} else if (const auto song = document->song()) {
 		const auto flags = MTPDdocumentAttributeAudio::Flag::f_title
@@ -73,35 +75,52 @@ MTPVector<MTPDocumentAttribute> ComposeSendingDocumentAttributes(
 
 } // namespace
 
-MTPInputMedia PrepareUploadedPhoto(const MTPInputFile &file) {
+MTPInputMedia PrepareUploadedPhoto(RemoteFileInfo info) {
+	const auto flags = info.attachedStickers.empty()
+		? MTPDinputMediaUploadedPhoto::Flags(0)
+		: MTPDinputMediaUploadedPhoto::Flag::f_stickers;
 	return MTP_inputMediaUploadedPhoto(
-		MTP_flags(0),
-		file,
-		MTPVector<MTPInputDocument>(),
+		MTP_flags(flags),
+		info.file,
+		MTP_vector<MTPInputDocument>(
+			ranges::to<QVector>(info.attachedStickers)),
 		MTP_int(0));
 }
 
 MTPInputMedia PrepareUploadedDocument(
 		not_null<HistoryItem*> item,
-		const MTPInputFile &file,
-		const std::optional<MTPInputFile> &thumb) {
+		RemoteFileInfo info) {
 	if (!item || !item->media() || !item->media()->document()) {
 		return MTP_inputMediaEmpty();
 	}
 	const auto emptyFlag = MTPDinputMediaUploadedDocument::Flags(0);
 	using DocFlags = MTPDinputMediaUploadedDocument::Flag;
 	const auto flags = emptyFlag
-		| (thumb ? DocFlags::f_thumb : emptyFlag)
-		| (item->groupId() ? DocFlags::f_nosound_video : emptyFlag);
+		| (info.thumb ? DocFlags::f_thumb : emptyFlag)
+		| (item->groupId() ? DocFlags::f_nosound_video : emptyFlag)
+		| (info.attachedStickers.empty() ? DocFlags::f_stickers : emptyFlag);
 	const auto document = item->media()->document();
 	return MTP_inputMediaUploadedDocument(
 		MTP_flags(flags),
-		file,
-		thumb.value_or(MTPInputFile()),
+		info.file,
+		info.thumb.value_or(MTPInputFile()),
 		MTP_string(document->mimeString()),
 		ComposeSendingDocumentAttributes(document),
-		MTPVector<MTPInputDocument>(),
+		MTP_vector<MTPInputDocument>(
+			ranges::to<QVector>(info.attachedStickers)),
 		MTP_int(0));
+}
+
+bool HasAttachedStickers(MTPInputMedia media) {
+	return media.match([&](const MTPDinputMediaUploadedPhoto &photo) -> bool {
+		return (photo.vflags().v
+			& MTPDinputMediaUploadedPhoto::Flag::f_stickers);
+	}, [&](const MTPDinputMediaUploadedDocument &document) -> bool {
+		return (document.vflags().v
+			& MTPDinputMediaUploadedDocument::Flag::f_stickers);
+	}, [](const auto &d) {
+		return false;
+	});
 }
 
 } // namespace Api

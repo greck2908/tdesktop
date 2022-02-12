@@ -45,7 +45,7 @@ public:
 		not_null<DocumentData*> document);
 	~Gif();
 
-	void draw(Painter &p, const QRect &r, TextSelection selection, crl::time ms) const override;
+	void draw(Painter &p, const PaintContext &context) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
 
 	[[nodiscard]] TextSelection adjustSelection(
@@ -73,12 +73,11 @@ public:
 	QSize sizeForGrouping(int width) const override;
 	void drawGrouped(
 		Painter &p,
-		const QRect &clip,
-		TextSelection selection,
-		crl::time ms,
+		const PaintContext &context,
 		const QRect &geometry,
 		RectParts sides,
 		RectParts corners,
+		float64 highlightOpacity,
 		not_null<uint64*> cacheKey,
 		not_null<QPixmap*> cache) const override;
 	TextState getStateGrouped(
@@ -97,7 +96,14 @@ public:
 	bool customInfoLayout() const override {
 		return _caption.isEmpty();
 	}
+	QRect contentRectForReactions() const override;
+	std::optional<int> reactionButtonCenterOverride() const override;
+	QPoint resolveCustomInfoRightBottom() const override;
 	QString additionalInfoString() const override;
+
+	void stickerClearLoopPlayed() override {
+		_stickerOncePlayed = false;
+	}
 
 	bool skipBubbleTail() const override {
 		return isRoundedInBubbleBottom() && _caption.isEmpty();
@@ -117,6 +123,7 @@ private:
 	struct Streamed;
 
 	void validateVideoThumbnail() const;
+	[[nodiscard]] QSize countThumbSize(int &inOutWidthMax) const;
 
 	float64 dataProgress() const override;
 	bool dataFinished() const override;
@@ -153,8 +160,7 @@ private:
 		const HistoryMessageReply *reply,
 		const HistoryMessageForwarded *forwarded) const;
 	[[nodiscard]] int additionalWidth() const;
-	[[nodiscard]] QString mediaTypeString() const;
-	[[nodiscard]] bool isSeparateRoundVideo() const;
+	[[nodiscard]] bool isUnwrapped() const;
 
 	void validateGroupedCache(
 		const QRect &geometry,
@@ -166,11 +172,19 @@ private:
 	[[nodiscard]] QSize sizeForAspectRatio() const;
 
 	[[nodiscard]] bool downloadInCorner() const;
-	void drawCornerStatus(Painter &p, bool selected, QPoint position) const;
+	void drawCornerStatus(
+		Painter &p,
+		const PaintContext &context,
+		QPoint position) const;
 	[[nodiscard]] TextState cornerStatusTextState(
 		QPoint point,
 		StateRequest request,
 		QPoint position) const;
+
+	void paintPath(
+		Painter &p,
+		const PaintContext &context,
+		const QRect &r) const;
 
 	const not_null<DocumentData*> _data;
 	int _thumbw = 1;
@@ -179,8 +193,10 @@ private:
 	std::unique_ptr<Streamed> _streamed;
 	mutable std::shared_ptr<Data::DocumentMedia> _dataMedia;
 	mutable std::unique_ptr<Image> _videoThumbnailFrame;
+	ClickHandlerPtr _stickerLink;
 
 	QString _downloadSize;
+	mutable bool _stickerOncePlayed = false;
 
 };
 

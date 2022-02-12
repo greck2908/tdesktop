@@ -47,6 +47,10 @@ void DiscreteSlider::setActiveSectionFast(int index) {
 void DiscreteSlider::finishAnimating() {
 	_a_left.stop();
 	update();
+	_callbackAfterMs = 0;
+	if (_timerId >= 0) {
+		activateCallback();
+	}
 }
 
 void DiscreteSlider::setSelectOnPress(bool selectOnPress) {
@@ -58,8 +62,8 @@ void DiscreteSlider::addSection(const QString &label) {
 	resizeToWidth(width());
 }
 
-void DiscreteSlider::setSections(const QStringList &labels) {
-	Assert(!labels.isEmpty());
+void DiscreteSlider::setSections(const std::vector<QString> &labels) {
+	Assert(!labels.empty());
 
 	_sections.clear();
 	for (const auto &label : labels) {
@@ -160,7 +164,7 @@ DiscreteSlider::Section::Section(
 
 SettingsSlider::SettingsSlider(
 	QWidget *parent,
-		const style::SettingsSlider &st)
+	const style::SettingsSlider &st)
 : DiscreteSlider(parent)
 , _st(st) {
 	setSelectOnPress(_st.ripple.showDuration == 0);
@@ -190,7 +194,7 @@ void SettingsSlider::resizeSections(int newWidth) {
 	enumerateSections([&](Section &section) {
 		Expects(sectionWidth != sectionWidths.end());
 
-		section.left = qFloor(x) + skip;
+		section.left = std::floor(x) + skip;
 		x += *sectionWidth;
 		section.width = qRound(x) - (section.left - skip);
 		skip += _st.barSkip;
@@ -280,7 +284,11 @@ void SettingsSlider::paintEvent(QPaintEvent *e) {
 	auto activeLeft = getCurrentActiveLeft();
 
 	enumerateSections([&](Section &section) {
-		auto active = 1. - snap(qAbs(activeLeft - section.left) / float64(section.width), 0., 1.);
+		auto active = 1.
+			- std::clamp(
+				qAbs(activeLeft - section.left) / float64(section.width),
+				0.,
+				1.);
 		if (section.ripple) {
 			auto color = anim::color(_st.rippleBg, _st.rippleBgActive, active);
 			section.ripple->paint(p, section.left, 0, width(), &color);

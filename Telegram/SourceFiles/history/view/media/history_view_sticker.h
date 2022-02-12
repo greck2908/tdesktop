@@ -39,7 +39,10 @@ public:
 
 	void initSize();
 	QSize size() override;
-	void draw(Painter &p, const QRect &r, bool selected) override;
+	void draw(
+		Painter &p,
+		const PaintContext &context,
+		const QRect &r) override;
 	ClickHandlerPtr link() override {
 		return _link;
 	}
@@ -75,17 +78,17 @@ public:
 	}
 	[[nodiscard]] bool readyToDrawLottie();
 
-	[[nodiscard]] static QSize GetAnimatedEmojiSize(
-		not_null<Main::Session*> session);
-	[[nodiscard]] static QSize GetAnimatedEmojiSize(
-		not_null<Main::Session*> session,
-		QSize documentSize);
+	[[nodiscard]] static QSize Size();
+	[[nodiscard]] static QSize EmojiSize();
+	[[nodiscard]] static ClickHandlerPtr ShowSetHandler(
+		not_null<DocumentData*> document);
 
 private:
 	[[nodiscard]] bool isEmojiSticker() const;
-	void paintLottie(Painter &p, const QRect &r, bool selected);
-	void paintPixmap(Painter &p, const QRect &r, bool selected);
-	[[nodiscard]] QPixmap paintedPixmap(bool selected) const;
+	void paintLottie(Painter &p, const PaintContext &context, const QRect &r);
+	bool paintPixmap(Painter &p, const PaintContext &context, const QRect &r);
+	void paintPath(Painter &p, const PaintContext &context, const QRect &r);
+	[[nodiscard]] QPixmap paintedPixmap(const PaintContext &context) const;
 
 	void ensureDataMediaCreated() const;
 	void dataMediaCreated() const;
@@ -93,6 +96,7 @@ private:
 	void setupLottie();
 	void lottieCreated();
 	void unloadLottie();
+	void emojiStickerClicked();
 
 	const not_null<Element*> _parent;
 	const not_null<DocumentData*> _data;

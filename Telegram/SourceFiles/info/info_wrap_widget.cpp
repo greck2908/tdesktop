@@ -27,7 +27,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_slide_animation.h"
 #include "window/window_peer_menu.h"
 #include "boxes/peer_list_box.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "main/main_session.h"
 #include "mtproto/mtproto_config.h"
 #include "data/data_session.h"
@@ -37,6 +37,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "styles/style_info.h"
 #include "styles/style_profile.h"
+#include "styles/style_menu_icons.h"
 
 namespace Info {
 namespace {
@@ -59,7 +60,7 @@ WrapWidget::WrapWidget(
 	not_null<Window::SessionController*> window,
 	Wrap wrap,
 	not_null<Memento*> memento)
-: SectionWidget(parent, window)
+: SectionWidget(parent, window, rpl::producer<PeerData*>())
 , _wrap(wrap)
 , _controller(createController(window, memento->content()))
 , _topShadow(this) {
@@ -134,8 +135,6 @@ void WrapWidget::startInjectingActivePeerProfiles() {
 void WrapWidget::injectActiveProfile(Dialogs::Key key) {
 	if (const auto peer = key.peer()) {
 		injectActivePeerProfile(peer);
-	//} else if (const auto feed = key.feed()) { // #feed
-	//	injectActiveFeedProfile(feed);
 	}
 }
 
@@ -170,22 +169,6 @@ void WrapWidget::injectActivePeerProfile(not_null<PeerData*> peer) {
 			Memento(peer, section).takeStack().front()));
 	}
 }
-// // #feed
-//void WrapWidget::injectActiveFeedProfile(not_null<Data::Feed*> feed) {
-//	const auto firstFeed = hasStackHistory()
-//		? _historyStack.front().section->feed()
-//		: _controller->feed();
-//	const auto firstSectionType = hasStackHistory()
-//		? _historyStack.front().section->section().type()
-//		: _controller->section().type();
-//	const auto expectedType = Section::Type::Profile;
-//	if (firstSectionType != expectedType
-//		|| firstFeed != feed) {
-//		auto section = Section(Section::Type::Profile);
-//		injectActiveProfileMemento(std::move(
-//			Memento(feed, section).takeStack().front()));
-//	}
-//}
 
 void WrapWidget::injectActiveProfileMemento(
 		std::shared_ptr<ContentMemento> memento) {
@@ -217,8 +200,6 @@ Key WrapWidget::key() const {
 Dialogs::RowDescriptor WrapWidget::activeChat() const {
 	if (const auto peer = key().peer()) {
 		return Dialogs::RowDescriptor(peer->owner().history(peer), FullMsgId());
-	//} else if (const auto feed = key().feed()) { // #feed
-	//	return Dialogs::RowDescriptor(feed, FullMsgId());
 	} else if (key().settingsSelf() || key().poll()) {
 		return Dialogs::RowDescriptor();
 	}
@@ -431,7 +412,7 @@ void WrapWidget::checkBeforeClose(Fn<void()> close) {
 		close();
 	};
 	if (_controller->canSaveChangesNow()) {
-		Ui::show(Box<ConfirmBox>(
+		Ui::show(Box<Ui::ConfirmBox>(
 			tr::lng_settings_close_sure(tr::now),
 			tr::lng_close(tr::now),
 			confirmed));
@@ -549,7 +530,9 @@ void WrapWidget::showTopBarMenu() {
 			Ui::InnerDropdown::HideOption::IgnoreShow);
 		return;
 	}
-	_topBarMenu = base::make_unique_q<Ui::DropdownMenu>(this);
+	_topBarMenu = base::make_unique_q<Ui::DropdownMenu>(
+		this,
+		st::dropdownMenuWithIcons);
 
 	_topBarMenu->setHiddenCallback([this] {
 		InvokeQueued(this, [this] { _topBarMenu = nullptr; });
@@ -571,8 +554,9 @@ void WrapWidget::showTopBarMenu() {
 
 	const auto addAction = [=](
 			const QString &text,
-			Fn<void()> callback) {
-		return _topBarMenu->addAction(text, std::move(callback));
+			Fn<void()> callback,
+			const style::icon *icon) {
+		return _topBarMenu->addAction(text, std::move(callback), icon);
 	};
 	if (const auto peer = key().peer()) {
 		Window::FillDialogsEntryMenu(
@@ -582,12 +566,6 @@ void WrapWidget::showTopBarMenu() {
 				.section = Dialogs::EntryState::Section::Profile,
 			},
 			addAction);
-	//} else if (const auto feed = key().feed()) { // #feed
-	//	Window::FillFeedMenu(
-	//		_controller->parentController(),
-	//		feed,
-	//		addAction,
-	//		Window::PeerMenuSource::Profile);
 	} else if (const auto self = key().settingsSelf()) {
 		const auto showOther = [=](::Settings::Type type) {
 			const auto controller = _controller.get();

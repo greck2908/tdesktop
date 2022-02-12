@@ -12,7 +12,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <rpl/combine.h>
 #include "data/data_peer.h"
 
+enum class ImageRoundRadius;
+
+namespace Main {
+class Session;
+} // namespace Main
+
 namespace Data {
+
+struct Reaction;
 
 template <typename ChangeType, typename Error, typename Generator>
 inline auto FlagsValueWithMask(
@@ -64,20 +72,6 @@ inline auto PeerFlagValue(
 		typename PeerType::Flags::Enum flag) {
 	return SingleFlagValue(PeerFlagsValue(peer), flag);
 }
-//
-//inline auto PeerFlagValue(
-//		UserData *user,
-//		MTPDuser_ClientFlag flag) {
-//	return PeerFlagValue(user, static_cast<MTPDuser::Flag>(flag));
-//}
-
-rpl::producer<bool> PeerFlagValue(
-	ChatData *chat,
-	MTPDchat_ClientFlag flag);
-
-rpl::producer<bool> PeerFlagValue(
-	ChannelData *channel,
-	MTPDchannel_ClientFlag flag);
 
 template <
 	typename PeerType,
@@ -111,6 +105,7 @@ inline auto PeerFullFlagValue(
 [[nodiscard]] rpl::producer<bool> CanWriteValue(ChannelData *channel);
 [[nodiscard]] rpl::producer<bool> CanWriteValue(not_null<PeerData*> peer);
 [[nodiscard]] rpl::producer<bool> CanPinMessagesValue(not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<bool> CanManageGroupCallValue(not_null<PeerData*> peer);
 
 [[nodiscard]] TimeId SortByOnlineValue(not_null<UserData*> user, TimeId now);
 [[nodiscard]] crl::time OnlineChangeTimeout(TimeId online, TimeId now);
@@ -122,5 +117,21 @@ inline auto PeerFullFlagValue(
 [[nodiscard]] bool OnlineTextActive(not_null<UserData*> user, TimeId now);
 [[nodiscard]] bool IsUserOnline(not_null<UserData*> user);
 [[nodiscard]] bool ChannelHasActiveCall(not_null<ChannelData*> channel);
+
+[[nodiscard]] rpl::producer<QImage> PeerUserpicImageValue(
+	not_null<PeerData*> peer,
+	int size);
+[[nodiscard]] rpl::producer<QImage> PeerUserpicImageValue(
+	not_null<PeerData*> peer,
+	int size,
+	ImageRoundRadius radius);
+
+[[nodiscard]] std::optional<base::flat_set<QString>> PeerAllowedReactions(
+	not_null<PeerData*> peer);
+[[nodiscard]] auto PeerAllowedReactionsValue(not_null<PeerData*> peer)
+-> rpl::producer<std::optional<base::flat_set<QString>>>;
+
+[[nodiscard]] rpl::producer<int> UniqueReactionsLimitValue(
+	not_null<Main::Session*> session);
 
 } // namespace Data

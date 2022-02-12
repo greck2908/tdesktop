@@ -22,7 +22,7 @@ def error(message):
     print('[ERROR] ' + message)
     finish(1)
 
-if sys.platform == 'win32' and not 'COMSPEC' in os.environ:
+if sys.platform == 'win32' and 'COMSPEC' not in os.environ:
     error('COMSPEC environment variable is not set.')
 
 executePath = os.getcwd()
@@ -39,9 +39,9 @@ if os.path.isfile(officialTargetFile):
             officialTarget = line.strip()
 
 arch = ''
-if officialTarget == 'win' or officialTarget == 'uwp':
+if officialTarget in ['win', 'uwp']:
     arch = 'x86'
-elif officialTarget == 'win64' or officialTarget == 'uwp64':
+elif officialTarget in ['win64', 'uwp64']:
     arch = 'x64'
 
 if officialTarget != '':
@@ -59,9 +59,4 @@ if officialTarget != '':
                 arguments.append('-DTDESKTOP_API_HASH=' + apiHashMatch.group(1))
     if arch != '':
         arguments.append(arch)
-    finish(run_cmake.run(scriptName, arguments))
-elif 'linux' in sys.platform:
-    debugCode = run_cmake.run(scriptName, arguments, "Debug")
-    finish(debugCode if debugCode else run_cmake.run(scriptName, arguments, "Release"))
-else:
-    finish(run_cmake.run(scriptName, arguments))
+finish(run_cmake.run(scriptName, arguments))

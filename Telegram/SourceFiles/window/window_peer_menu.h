@@ -21,6 +21,7 @@ class GenericBox;
 namespace Data {
 class Folder;
 class Session;
+struct ForwardDraft;
 } // namespace Data
 
 namespace Dialogs {
@@ -34,9 +35,12 @@ class Controller;
 class SessionController;
 class SessionNavigation;
 
+extern const char kOptionViewProfileInChatsListContextMenu[];
+
 using PeerMenuCallback = Fn<QAction*(
 	const QString &text,
-	Fn<void()> handler)>;
+	Fn<void()> handler,
+	const style::icon *icon)>;
 
 void FillDialogsEntryMenu(
 	not_null<SessionController*> controller,
@@ -63,7 +67,6 @@ void PeerMenuShareContactBox(
 void PeerMenuAddChannelMembers(
 	not_null<Window::SessionNavigation*> navigation,
 	not_null<ChannelData*> channel);
-//void PeerMenuUngroupFeed(not_null<Data::Feed*> feed); // #feed
 void PeerMenuCreatePoll(
 	not_null<Window::SessionController*> controller,
 	not_null<PeerData*> peer,
@@ -86,10 +89,19 @@ void PeerMenuBlockUserBox(
 	std::variant<v::null_t, ClearChat, ClearReply> suggestClear);
 void PeerMenuUnblockUserWithBotRestart(not_null<UserData*> user);
 
+void BlockSenderFromRepliesBox(
+	not_null<Ui::GenericBox*> box,
+	not_null<Window::SessionController*> controller,
+	FullMsgId id);
+
 void ToggleHistoryArchived(not_null<History*> history, bool archived);
 Fn<void()> ClearHistoryHandler(not_null<PeerData*> peer);
 Fn<void()> DeleteAndLeaveHandler(not_null<PeerData*> peer);
 
+QPointer<Ui::RpWidget> ShowForwardMessagesBox(
+	not_null<Window::SessionNavigation*> navigation,
+	Data::ForwardDraft &&draft,
+	FnMut<void()> &&successCallback = nullptr);
 QPointer<Ui::RpWidget> ShowForwardMessagesBox(
 	not_null<Window::SessionNavigation*> navigation,
 	MessageIdsList &&items,

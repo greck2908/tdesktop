@@ -9,19 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "platform/platform_main_window.h"
 
-#include "ui/widgets/popup_menu.h"
-
-#ifndef DESKTOP_APP_DISABLE_DBUS_INTEGRATION
-#include "statusnotifieritem.h"
-#include <QtCore/QTemporaryFile>
-#include <QtDBus/QDBusObjectPath>
-#include <dbusmenuexporter.h>
-
-typedef void* gpointer;
-typedef char gchar;
-typedef struct _GVariant GVariant;
-typedef struct _GDBusProxy GDBusProxy;
-#endif // !DESKTOP_APP_DISABLE_DBUS_INTEGRATION
+class QMenuBar;
 
 namespace Platform {
 
@@ -29,20 +17,9 @@ class MainWindow : public Window::MainWindow {
 public:
 	explicit MainWindow(not_null<Window::Controller*> controller);
 
-	virtual QImage iconWithCounter(
-		int size,
-		int count,
-		style::color bg,
-		style::color fg,
-		bool smallIcon) = 0;
-
 	void psShowTrayMenu();
 
-	bool trayAvailable() {
-		return _sniAvailable || QSystemTrayIcon::isSystemTrayAvailable();
-	}
-
-	static void LibsLoaded();
+	bool isActiveForTrayMenu() override;
 
 	~MainWindow();
 
@@ -50,12 +27,11 @@ protected:
 	void initHook() override;
 	void unreadCounterChangedHook() override;
 	void updateGlobalMenuHook() override;
-	void handleVisibleChangedHook(bool visible) override;
 
 	void initTrayMenuHook() override;
 	bool hasTrayIcon() const override;
 
-	void workmodeUpdated(DBIWorkMode mode) override;
+	void workmodeUpdated(Core::Settings::WorkMode mode) override;
 	void createGlobalMenu() override;
 
 	QSystemTrayIcon *trayIcon = nullptr;
@@ -64,31 +40,12 @@ protected:
 	void psTrayMenuUpdated();
 	void psSetupTrayIcon();
 
-	virtual void placeSmallCounter(
-		QImage &img,
-		int size,
-		int count,
-		style::color bg,
-		const QPoint &shift,
-		style::color color) = 0;
-
 private:
-	bool _sniAvailable = false;
-	Ui::PopupMenu *_trayIconMenuXEmbed = nullptr;
+	class Private;
+	friend class Private;
+	const std::unique_ptr<Private> _private;
 
-	void updateIconCounters();
-	void updateWaylandDecorationColors();
-
-#ifndef DESKTOP_APP_DISABLE_DBUS_INTEGRATION
-	StatusNotifierItem *_sniTrayIcon = nullptr;
-	GDBusProxy *_sniDBusProxy = nullptr;
-	std::unique_ptr<QTemporaryFile> _trayIconFile = nullptr;
-
-	bool _appMenuSupported = false;
-	DBusMenuExporter *_mainMenuExporter = nullptr;
-	QDBusObjectPath _mainMenuPath;
-
-	QMenu *psMainMenu = nullptr;
+	QMenuBar *psMainMenu = nullptr;
 	QAction *psLogout = nullptr;
 	QAction *psUndo = nullptr;
 	QAction *psRedo = nullptr;
@@ -109,42 +66,8 @@ private:
 	QAction *psMonospace = nullptr;
 	QAction *psClearFormat = nullptr;
 
-	void setSNITrayIcon(int counter, bool muted);
-	void attachToSNITrayIcon();
-	void handleSNIHostRegistered();
-
-	void handleSNIOwnerChanged(
-		const QString &service,
-		const QString &oldOwner,
-		const QString &newOwner);
-
-	void handleAppMenuOwnerChanged(
-		const QString &service,
-		const QString &oldOwner,
-		const QString &newOwner);
-
-	void psLinuxUndo();
-	void psLinuxRedo();
-	void psLinuxCut();
-	void psLinuxCopy();
-	void psLinuxPaste();
-	void psLinuxDelete();
-	void psLinuxSelectAll();
-
-	void psLinuxBold();
-	void psLinuxItalic();
-	void psLinuxUnderline();
-	void psLinuxStrikeOut();
-	void psLinuxMonospace();
-	void psLinuxClearFormat();
-
-	static void sniSignalEmitted(
-		GDBusProxy *proxy,
-		gchar *sender_name,
-		gchar *signal_name,
-		GVariant *parameters,
-		gpointer user_data);
-#endif // !DESKTOP_APP_DISABLE_DBUS_INTEGRATION
+	void updateIconCounters();
+	void handleNativeSurfaceChanged(bool exist);
 
 };
 

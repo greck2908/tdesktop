@@ -10,18 +10,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/themes/window_theme.h"
 #include "window/window_peer_menu.h"
 #include "window/window_session_controller.h"
+#include "ui/chat/chat_theme.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
-#include "ui/widgets/menu.h"
+#include "ui/widgets/menu/menu.h"
+#include "ui/widgets/menu/menu_common.h"
+#include "ui/widgets/menu/menu_toggle.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/shadow.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/vertical_layout.h"
+#include "ui/wrap/vertical_layout_reorder.h"
+#include "ui/text/format_values.h" // Ui::FormatPhone
 #include "ui/text/text_utilities.h"
 #include "ui/special_buttons.h"
 #include "ui/empty_userpic.h"
-#include "dialogs/dialogs_layout.h"
+#include "dialogs/ui/dialogs_layout.h"
 #include "base/call_delayed.h"
 #include "mainwindow.h"
 #include "storage/localstorage.h"
@@ -30,7 +35,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/settings_common.h"
 #include "base/qt_signal_producer.h"
 #include "boxes/about_box.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "boxes/peer_list_controllers.h"
 #include "calls/calls_box_controller.h"
 #include "lang/lang_keys.h"
@@ -48,13 +53,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user.h"
 #include "data/data_changes.h"
 #include "mainwidget.h"
-#include "app.h"
 #include "styles/style_window.h"
 #include "styles/style_widgets.h"
 #include "styles/style_dialogs.h"
 #include "styles/style_settings.h"
 #include "styles/style_boxes.h"
+#include "styles/style_info.h" // infoTopBarMenu
 #include "styles/style_layers.h"
+#include "styles/style_menu_icons.h"
 
 #include <QtGui/QWindow>
 #include <QtGui/QScreen>
@@ -63,7 +69,7 @@ namespace {
 
 constexpr auto kMinDiffIntensity = 0.25;
 
-[[nodicard]] float64 IntensityOfColor(QColor color) {
+[[nodiscard]] float64 IntensityOfColor(QColor color) {
 	return (0.299 * color.red()
 			+ 0.587 * color.green()
 			+ 0.114 * color.blue()) / 255.0;
@@ -85,7 +91,7 @@ constexpr auto kMinDiffIntensity = 0.25;
 	const auto background = Window::Theme::Background();
 	return background->tile()
 		|| background->colorForFill().has_value()
-		|| background->isMonoColorImage()
+		|| !background->gradientForFill().isNull()
 		|| background->paper().isPattern()
 		|| Data::IsLegacy1DefaultWallPaper(background->paper());
 }
@@ -94,13 +100,73 @@ constexpr auto kMinDiffIntensity = 0.25;
 	return (modifiers & Qt::ShiftModifier) && (modifiers & Qt::AltModifier);
 }
 
+void ShowCallsBox(not_null<Window::SessionController*> window) {
+	auto controller = std::make_unique<Calls::BoxController>(window);
+	const auto initBox = [
+		window,
+		controller = controller.get()
+	](not_null<PeerListBox*> box) {
+		box->addButton(tr::lng_close(), [=] {
+			box->closeBox();
+		});
+		using MenuPointer = base::unique_qptr<Ui::PopupMenu>;
+		const auto menu = std::make_shared<MenuPointer>();
+		const auto menuButton = box->addTopButton(st::infoTopBarMenu);
+		menuButton->setClickedCallback([=] {
+			*menu = base::make_unique_q<Ui::PopupMenu>(
+				menuButton,
+				st::popupMenuWithIcons);
+			const auto showSettings = [=] {
+				window->showSettings(
+					Settings::Type::Calls,
+					Window::SectionShow(anim::type::instant));
+			};
+			const auto clearAll = crl::guard(box, [=] {
+				box->getDelegate()->show(Box(Calls::ClearCallsBox, window));
+			});
+			(*menu)->addAction(
+				tr::lng_settings_section_call_settings(tr::now),
+				showSettings,
+				&st::menuIconSettings);
+			if (controller->delegate()->peerListFullRowsCount() > 0) {
+				(*menu)->addAction(
+					tr::lng_call_box_clear_all(tr::now),
+					clearAll,
+					&st::menuIconDelete);
+			}
+			(*menu)->popup(QCursor::pos());
+			return true;
+		});
+	};
+	window->show(Box<PeerListBox>(std::move(controller), initBox));
+}
+
+[[nodiscard]] std::vector<not_null<Main::Account*>> OrderedAccounts() {
+	const auto order = Core::App().settings().accountsOrder();
+	auto accounts = ranges::views::all(
+		Core::App().domain().accounts()
+	) | ranges::views::transform([](const Main::Domain::AccountWithIndex &a) {
+		return not_null{ a.account.get() };
+	}) | ranges::to_vector;
+	ranges::stable_sort(accounts, [&](
+			not_null<Main::Account*> a,
+			not_null<Main::Account*> b) {
+		const auto aIt = a->sessionExists()
+			? ranges::find(order, a->session().uniqueId())
+			: end(order);
+		const auto bIt = b->sessionExists()
+			? ranges::find(order, b->session().uniqueId())
+			: end(order);
+		return aIt < bIt;
+	});
+	return accounts;
+}
+
 } // namespace
 
 namespace Window {
 
-class MainMenu::AccountButton final
-	: public Ui::RippleButton
-	, public base::Subscriber {
+class MainMenu::AccountButton final : public Ui::RippleButton {
 public:
 	AccountButton(QWidget *parent, not_null<Main::Account*> account);
 
@@ -116,7 +182,7 @@ private:
 	QImage _userpicCache;
 	base::unique_qptr<Ui::PopupMenu> _menu;
 
-	Dialogs::Layout::UnreadBadgeStyle _unreadSt;
+	Dialogs::Ui::UnreadBadgeStyle _unreadSt;
 	int _unreadBadge = 0;
 	bool _unreadBadgeMuted = true;
 
@@ -169,12 +235,10 @@ MainMenu::AccountButton::AccountButton(
 		+ _st.itemPadding.bottom();
 	resize(width(), height);
 
-	subscribe(Window::Theme::Background(), [=](
-			const Window::Theme::BackgroundUpdate &update) {
-		if (update.paletteChanged()) {
-			_userpicKey = {};
-		}
-	});
+	style::PaletteChanged(
+	) | rpl::start_with_next([=] {
+		_userpicKey = {};
+	}, lifetime());
 
 	rpl::single(
 		rpl::empty_value()
@@ -251,19 +315,19 @@ void MainMenu::AccountButton::paintEvent(QPaintEvent *e) {
 		const auto string = (_unreadBadge > 99)
 			? "99+"
 			: QString::number(_unreadBadge);
-		auto unreadWidth = 0;
 		const auto skip = _st.itemPadding.right()
 			- st::mainMenu.itemToggleShift;
 		const auto unreadRight = width() - skip;
 		const auto unreadTop = (height() - _unreadSt.size) / 2;
-		Dialogs::Layout::paintUnreadCount(
+		const auto badge = Dialogs::Ui::PaintUnreadBadge(
 			p,
 			string,
 			unreadRight,
 			unreadTop,
-			_unreadSt,
-			&unreadWidth);
-		available -= unreadWidth + skip + st::mainMenu.itemStyle.font->spacew;
+			_unreadSt);
+		available -= badge.width()
+			+ skip
+			+ st::mainMenu.itemStyle.font->spacew;
 	} else {
 		available -= _st.itemPadding.right();
 	}
@@ -278,11 +342,17 @@ void MainMenu::AccountButton::paintEvent(QPaintEvent *e) {
 
 void MainMenu::AccountButton::contextMenuEvent(QContextMenuEvent *e) {
 	if (!_menu && IsAltShift(e->modifiers())) {
-		_menu = base::make_unique_q<Ui::PopupMenu>(this);
-		const auto addAction = [&](const QString &text, Fn<void()> callback) {
+		_menu = base::make_unique_q<Ui::PopupMenu>(
+			this,
+			st::popupMenuWithIcons);
+		const auto addAction = [&](
+				const QString &text,
+				Fn<void()> callback,
+				const style::icon *icon) {
 			return _menu->addAction(
 				text,
-				crl::guard(this, std::move(callback)));
+				crl::guard(this, std::move(callback)),
+				icon);
 		};
 		MenuAddMarkAsReadAllChatsAction(&_session->data(), addAction);
 		_menu->popup(QCursor::pos());
@@ -291,22 +361,24 @@ void MainMenu::AccountButton::contextMenuEvent(QContextMenuEvent *e) {
 	if (&_session->account() == &Core::App().activeAccount() || _menu) {
 		return;
 	}
-	_menu = base::make_unique_q<Ui::PopupMenu>(this);
+	_menu = base::make_unique_q<Ui::PopupMenu>(
+		this,
+		st::popupMenuWithIcons);
 	_menu->addAction(tr::lng_menu_activate(tr::now), crl::guard(this, [=] {
 		Core::App().domain().activate(&_session->account());
-	}));
+	}), &st::menuIconProfile);
 	_menu->addAction(tr::lng_settings_logout(tr::now), crl::guard(this, [=] {
 		const auto session = _session;
 		const auto callback = [=](Fn<void()> &&close) {
 			close();
-			Core::App().logout(&session->account());
+			Core::App().logoutWithChecks(&session->account());
 		};
-		Ui::show(Box<ConfirmBox>(
+		Ui::show(Box<Ui::ConfirmBox>(
 			tr::lng_sure_logout(tr::now),
 			tr::lng_settings_logout(tr::now),
 			st::attentionBoxButton,
 			crl::guard(session, callback)));
-	}));
+	}), &st::menuIconLeave);
 	_menu->popup(QCursor::pos());
 }
 
@@ -357,7 +429,6 @@ void MainMenu::ToggleAccountsButton::paintEvent(QPaintEvent *e) {
 	const auto left = x - size;
 	const auto right = x + size;
 	const auto bottom = y + size2;
-	const auto top = y - size2;
 	constexpr auto kPointCount = 6;
 	std::array<QPointF, kPointCount> points = { {
 		{ left - stroke, bottom - stroke },
@@ -398,7 +469,7 @@ void MainMenu::ToggleAccountsButton::paintUnreadBadge(QPainter &p) {
 	if (_unreadBadge.isEmpty()) {
 		return;
 	}
-	Dialogs::Layout::UnreadBadgeStyle st;
+	Dialogs::Ui::UnreadBadgeStyle st;
 
 	const auto right = width() - st::mainMenuTogglePosition.x() - st::mainMenuToggleSize * 2;
 	const auto top = height() - st::mainMenuTogglePosition.y() - st::mainMenuToggleSize;
@@ -436,7 +507,7 @@ void MainMenu::ToggleAccountsButton::validateUnreadBadge() {
 	}
 	_unreadBadge = computeUnreadBadge();
 
-	Dialogs::Layout::UnreadBadgeStyle st;
+	Dialogs::Ui::UnreadBadgeStyle st;
 	_unreadBadgeWidth = st.font->width(_unreadBadge);
 	const auto rectHeight = st.size;
 	const auto rectWidth = std::max(
@@ -524,7 +595,7 @@ MainMenu::MainMenu(
 	_inner.get(),
 	object_ptr<Ui::PlainShadow>(_inner.get()))))
 , _menu(_inner->add(
-	object_ptr<Ui::Menu>(_inner.get(), st::mainMenu),
+	object_ptr<Ui::Menu::Menu>(_inner.get(), st::mainMenu),
 	{ 0, st::mainMenuSkip, 0, 0 }))
 , _footer(_inner->add(object_ptr<Ui::RpWidget>(_inner.get())))
 , _telegram(
@@ -565,8 +636,8 @@ MainMenu::MainMenu(
 	}, _inner->lifetime());
 
 	parentResized();
-	_menu->setTriggeredCallback([](QAction *action, int actionTop, Ui::Menu::TriggeredSource source) {
-		emit action->triggered();
+	_menu->setTriggeredCallback([](const Ui::Menu::CallbackData &data) {
+		data.action->triggered();
 	});
 	refreshMenu();
 	refreshBackground();
@@ -575,9 +646,25 @@ MainMenu::MainMenu(
 		qsl("Telegram Desktop"),
 		qsl("https://desktop.telegram.org")));
 	_telegram->setLinksTrusted();
-	_version->setRichText(textcmdLink(1, tr::lng_settings_current_version(tr::now, lt_version, currentVersionText())) + QChar(' ') + QChar(8211) + QChar(' ') + textcmdLink(2, tr::lng_menu_about(tr::now)));
-	_version->setLink(1, std::make_shared<UrlClickHandler>(qsl("https://desktop.telegram.org/changelog")));
-	_version->setLink(2, std::make_shared<LambdaClickHandler>([] { Ui::show(Box<AboutBox>()); }));
+	_version->setMarkedText(
+		Ui::Text::Link(
+			tr::lng_settings_current_version(
+				tr::now,
+				lt_version,
+				currentVersionText()),
+			1) // Link 1.
+		.append(QChar(' '))
+		.append(QChar(8211))
+		.append(QChar(' '))
+		.append(Ui::Text::Link(tr::lng_menu_about(tr::now), 2))); // Link 2.
+	_version->setLink(
+		1,
+		std::make_shared<UrlClickHandler>(Core::App().changelogLink()));
+	_version->setLink(
+		2,
+		std::make_shared<LambdaClickHandler>([=] {
+			controller->show(Box<AboutBox>());
+		}));
 
 	_controller->session().downloaderTaskFinished(
 	) | rpl::start_with_next([=] {
@@ -596,8 +683,10 @@ MainMenu::MainMenu(
 		refreshMenu();
 	}, lifetime());
 
-	subscribe(Window::Theme::Background(), [this](const Window::Theme::BackgroundUpdate &update) {
-		if (update.type == Window::Theme::BackgroundUpdate::Type::ApplyingTheme) {
+	using Window::Theme::BackgroundUpdate;
+	Window::Theme::Background()->updates(
+	) | rpl::start_with_next([=](const BackgroundUpdate &update) {
+		if (update.type == BackgroundUpdate::Type::ApplyingTheme) {
 			if (const auto action = *_nightThemeAction) {
 				const auto nightMode = Window::Theme::IsNightMode();
 				if (action->isChecked() != nightMode) {
@@ -606,10 +695,10 @@ MainMenu::MainMenu(
 				}
 			}
 		}
-		if (update.type == Window::Theme::BackgroundUpdate::Type::New) {
+		if (update.type == BackgroundUpdate::Type::New) {
 			refreshBackground();
 		}
-	});
+	}, lifetime());
 	updatePhone();
 	initResetScaleButton();
 }
@@ -641,9 +730,17 @@ void MainMenu::setupArchiveButton() {
 		} else if (which != Qt::RightButton) {
 			return;
 		}
-		_contextMenu = base::make_unique_q<Ui::PopupMenu>(this);
-		const auto addAction = [&](const QString &text, Fn<void()> callback) {
-			return _contextMenu->addAction(text, std::move(callback));
+		_contextMenu = base::make_unique_q<Ui::PopupMenu>(
+			this,
+			st::popupMenuWithIcons);
+		const auto addAction = [&](
+				const QString &text,
+				Fn<void()> callback,
+				const style::icon *icon) {
+			return _contextMenu->addAction(
+				text,
+				std::move(callback),
+				icon);
 		};
 
 		const auto hide = [=] {
@@ -651,7 +748,10 @@ void MainMenu::setupArchiveButton() {
 			controller->session().saveSettingsDelayed();
 			Ui::hideSettingsAndLayer();
 		};
-		addAction(tr::lng_context_archive_to_list(tr::now), std::move(hide));
+		addAction(
+			tr::lng_context_archive_to_list(tr::now),
+			std::move(hide),
+			&st::menuIconFromMainMenu);
 
 		MenuAddMarkAsReadChatListAction(
 			[f = folder()] { return f->chatsList(); },
@@ -739,11 +839,37 @@ void MainMenu::setupAccounts() {
 }
 
 void MainMenu::rebuildAccounts() {
-	const auto inner = _accounts->entity();
+	const auto inner = _accounts->entity()->insert(
+		1, // After skip with the fixed height.
+		object_ptr<Ui::VerticalLayout>(_accounts.get()));
 
-	auto count = 0;
-	for (const auto &[index, pointer] : Core::App().domain().accounts()) {
-		const auto account = pointer.get();
+	_reorder = std::make_unique<Ui::VerticalLayoutReorder>(inner);
+	_reorder->updates(
+	) | rpl::start_with_next([=](Ui::VerticalLayoutReorder::Single data) {
+		using State = Ui::VerticalLayoutReorder::State;
+		if (data.state == State::Started) {
+			++_reordering;
+		} else {
+			Ui::PostponeCall(inner, [=] {
+				--_reordering;
+			});
+			if (data.state == State::Applied) {
+				std::vector<uint64> order;
+				order.reserve(inner->count());
+				for (auto i = 0; i < inner->count(); i++) {
+					for (const auto &[account, button] : _watched) {
+						if (button.get() == inner->widgetAt(i)) {
+							order.push_back(account->session().uniqueId());
+						}
+					}
+				}
+				Core::App().settings().setAccountsOrder(order);
+				Core::App().saveSettings();
+			}
+		}
+	}, inner->lifetime());
+
+	for (const auto &account : OrderedAccounts()) {
 		auto i = _watched.find(account);
 		Assert(i != _watched.end());
 
@@ -751,16 +877,19 @@ void MainMenu::rebuildAccounts() {
 		if (!account->sessionExists()) {
 			button = nullptr;
 		} else if (!button) {
-			button.reset(inner->insert(
-				++count,
+			button.reset(inner->add(
 				object_ptr<AccountButton>(inner, account)));
 			button->setClickedCallback([=] {
+				if (_reordering) {
+					return;
+				}
 				if (account == &Core::App().domain().active()) {
 					closeLayer();
 					return;
 				}
 				auto activate = [=, guard = _accountSwitchGuard.make_guard()]{
 					if (guard) {
+						_reorder->finishReordering();
 						Core::App().domain().maybeActivate(account);
 					}
 				};
@@ -769,15 +898,15 @@ void MainMenu::rebuildAccounts() {
 					account,
 					std::move(activate));
 			});
-		} else {
-			++count;
 		}
 	}
 	inner->resizeToWidth(_accounts->width());
 
 	_addAccount->toggle(
-		(count < Main::Domain::kMaxAccounts),
+		(inner->count() < Main::Domain::kMaxAccounts),
 		anim::type::instant);
+
+	_reorder->start();
 }
 
 not_null<Ui::SlideWrap<Ui::RippleButton>*> MainMenu::setupAddAccount(
@@ -854,43 +983,42 @@ void MainMenu::parentResized() {
 
 void MainMenu::refreshMenu() {
 	_menu->clearActions();
+	const auto controller = _controller;
 	if (!_controller->session().supportMode()) {
-		const auto controller = _controller;
-		_menu->addAction(tr::lng_create_group_title(tr::now), [] {
-			App::wnd()->onShowNewGroup();
+		_menu->addAction(tr::lng_create_group_title(tr::now), [=] {
+			controller->showNewGroup();
 		}, &st::mainMenuNewGroup, &st::mainMenuNewGroupOver);
-		_menu->addAction(tr::lng_create_channel_title(tr::now), [] {
-			App::wnd()->onShowNewChannel();
+		_menu->addAction(tr::lng_create_channel_title(tr::now), [=] {
+			controller->showNewChannel();
 		}, &st::mainMenuNewChannel, &st::mainMenuNewChannelOver);
 		_menu->addAction(tr::lng_menu_contacts(tr::now), [=] {
-			Ui::show(PrepareContactsBox(controller));
+			controller->show(PrepareContactsBox(controller));
 		}, &st::mainMenuContacts, &st::mainMenuContactsOver);
 		if (_controller->session().serverConfig().phoneCallsEnabled.current()) {
 			_menu->addAction(tr::lng_menu_calls(tr::now), [=] {
-				Ui::show(Box<PeerListBox>(std::make_unique<Calls::BoxController>(controller), [=](not_null<PeerListBox*> box) {
-					box->addButton(tr::lng_close(), [=] {
-						box->closeBox();
-					});
-					box->addTopButton(st::callSettingsButton, [=] {
-						controller->showSettings(
-							Settings::Type::Calls,
-							Window::SectionShow(anim::type::instant));
-					});
-				}));
+				ShowCallsBox(controller);
 			}, &st::mainMenuCalls, &st::mainMenuCallsOver);
 		}
 	} else {
-		_menu->addAction(tr::lng_profile_add_contact(tr::now), [] {
-			App::wnd()->onShowAddContact();
+		_menu->addAction(tr::lng_profile_add_contact(tr::now), [=] {
+			controller->showAddContact();
 		}, &st::mainMenuContacts, &st::mainMenuContactsOver);
 
 		const auto fix = std::make_shared<QPointer<QAction>>();
-		*fix = _menu->addAction(qsl("Fix chats order"), [=] {
+		auto fixCallback = [=] {
 			(*fix)->setChecked(!(*fix)->isChecked());
 			_controller->session().settings().setSupportFixChatsOrder(
 				(*fix)->isChecked());
 			_controller->session().saveSettings();
-		}, &st::mainMenuFixOrder, &st::mainMenuFixOrderOver);
+		};
+		auto item = base::make_unique_q<Ui::Menu::Toggle>(
+			_menu,
+			st::mainMenu,
+			u"Fix chats order"_q,
+			std::move(fixCallback),
+			&st::mainMenuFixOrder,
+			&st::mainMenuFixOrderOver);
+		*fix = _menu->addAction(std::move(item));
 		(*fix)->setCheckable(true);
 		(*fix)->setChecked(
 			_controller->session().settings().supportFixChatsOrder());
@@ -899,14 +1027,15 @@ void MainMenu::refreshMenu() {
 			_controller->session().supportTemplates().reload();
 		}, &st::mainMenuReload, &st::mainMenuReloadOver);
 	}
-	_menu->addAction(tr::lng_menu_settings(tr::now), [] {
-		App::wnd()->showSettings();
+	_menu->addAction(tr::lng_menu_settings(tr::now), [=] {
+		controller->showSettings();
 	}, &st::mainMenuSettings, &st::mainMenuSettingsOver);
 
 	_nightThemeAction = std::make_shared<QPointer<QAction>>();
-	auto action = _menu->addAction(tr::lng_menu_night_mode(tr::now), [=] {
+
+	auto nightCallback = [=] {
 		if (Window::Theme::Background()->editingTheme()) {
-			Ui::show(Box<InformBox>(
+			controller->show(Box<Ui::InformBox>(
 				tr::lng_theme_editor_cant_change_theme(tr::now)));
 			return;
 		}
@@ -923,7 +1052,17 @@ void MainMenu::refreshMenu() {
 		Window::Theme::ToggleNightModeWithConfirmation(
 			&_controller->window(),
 			toggle);
-	}, &st::mainMenuNightMode, &st::mainMenuNightModeOver);
+	};
+
+	auto item = base::make_unique_q<Ui::Menu::Toggle>(
+		_menu,
+		st::mainMenu,
+		tr::lng_menu_night_mode(tr::now),
+		std::move(nightCallback),
+		&st::mainMenuNightMode,
+		&st::mainMenuNightModeOver);
+
+	auto action = _menu->addAction(std::move(item));
 	*_nightThemeAction = action;
 	action->setCheckable(true);
 	action->setChecked(Window::Theme::IsNightMode());
@@ -940,11 +1079,20 @@ void MainMenu::refreshMenu() {
 }
 
 void MainMenu::refreshBackground() {
-	const auto fill = QRect(0, 0, width(), st::mainMenuCoverHeight);
+	if (IsFilledCover()) {
+		return;
+	}
+	const auto fill = QSize(st::mainMenuWidth, st::mainMenuCoverHeight);
 	const auto intensityText = IntensityOfColor(st::mainMenuCoverFg->c);
-	QImage backgroundImage(
-		st::mainMenuWidth * cIntRetinaFactor(),
-		st::mainMenuCoverHeight * cIntRetinaFactor(),
+	const auto background = Window::Theme::Background();
+	const auto &prepared = background->prepared();
+
+	const auto rects = Ui::ComputeChatBackgroundRects(
+		fill,
+		prepared.size());
+
+	auto backgroundImage = QImage(
+		fill * cIntRetinaFactor(),
 		QImage::Format_ARGB32_Premultiplied);
 	QPainter p(&backgroundImage);
 
@@ -959,21 +1107,8 @@ void MainMenu::refreshBackground() {
 				: Qt::black);
 	};
 
-	// Solid color.
-	if (const auto color = Window::Theme::Background()->colorForFill()) {
-		const auto intensity = IntensityOfColor(*color);
-		p.fillRect(fill, *color);
-		if (std::abs(intensity - intensityText) < kMinDiffIntensity) {
-			drawShadow(p);
-		}
-		_background = backgroundImage;
-		return;
-	}
-
 	// Background image.
-	const auto &pixmap = Window::Theme::Background()->pixmap();
-	QRect to, from;
-	Window::Theme::ComputeBackgroundRects(fill, pixmap.size(), to, from);
+	p.drawImage(rects.to, prepared, rects.from);
 
 	// Cut off the part of the background that is under text.
 	const QRect underText(
@@ -984,8 +1119,6 @@ void MainMenu::refreshBackground() {
 				_controller->session().user()->nameText().toString()),
 			st::normalFont->width(_phoneText)),
 		st::semiboldFont->height * 2);
-
-	p.drawPixmap(to, pixmap, from);
 	if (IsShadowShown(backgroundImage, underText, intensityText)) {
 		drawShadow(p);
 	}
@@ -1041,7 +1174,7 @@ void MainMenu::updateInnerControlsGeometry() {
 }
 
 void MainMenu::updatePhone() {
-	_phoneText = App::formatPhone(_controller->session().user()->phone());
+	_phoneText = Ui::FormatPhone(_controller->session().user()->phone());
 	update();
 }
 
@@ -1124,11 +1257,7 @@ void MainMenu::initResetScaleButton() {
 		return rpl::single(
 			screen->availableGeometry()
 		) | rpl::then(
-#ifdef OS_MAC_OLD
-			base::qt_signal_producer(screen, &QScreen::virtualGeometryChanged)
-#else // OS_MAC_OLD
 			base::qt_signal_producer(screen, &QScreen::availableGeometryChanged)
-#endif // OS_MAC_OLD
 		);
 	}) | rpl::flatten_latest(
 	) | rpl::map([](QRect available) {
@@ -1143,7 +1272,7 @@ void MainMenu::initResetScaleButton() {
 			_resetScaleButton->addClickHandler([] {
 				cSetConfigScale(style::kScaleDefault);
 				Local::writeSettings();
-				App::restart();
+				Core::Restart();
 			});
 			_resetScaleButton->show();
 			updateControlsGeometry();

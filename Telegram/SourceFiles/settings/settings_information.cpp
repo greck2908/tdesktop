@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings/settings_information.h"
 
+#include "editor/photo_editor_layer_widget.h"
 #include "settings/settings_common.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/padding_wrap.h"
@@ -20,9 +21,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/core_settings.h"
 #include "chat_helpers/emoji_suggestions_widget.h"
 #include "boxes/add_contact_box.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "boxes/change_phone_box.h"
-#include "boxes/photo_crop_box.h"
 #include "boxes/username_box.h"
 #include "data/data_user.h"
 #include "info/profile/info_profile_values.h"
@@ -30,9 +30,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "window/window_session_controller.h"
 #include "apiwrap.h"
+#include "api/api_peer_photo.h"
 #include "core/file_utilities.h"
 #include "base/call_delayed.h"
-#include "app.h"
 #include "styles/style_layers.h"
 #include "styles/style_settings.h"
 
@@ -63,36 +63,13 @@ void SetupPhoto(
 		st::settingsInfoPhotoSet);
 	upload->setFullRadius(true);
 	upload->addClickHandler([=] {
-		const auto filter = FileDialog::ImagesOrAllFilter();
-		const auto callback = [=](const FileDialog::OpenResult &result) {
-			if (result.paths.isEmpty() && result.remoteContent.isEmpty()) {
-				return;
-			}
-
-			const auto image = result.remoteContent.isEmpty()
-				? App::readImage(result.paths.front())
-				: App::readImage(result.remoteContent);
-			if (image.isNull()
-				|| image.width() > 10 * image.height()
-				|| image.height() > 10 * image.width()) {
-				Ui::show(Box<InformBox>(tr::lng_bad_photo(tr::now)));
-				return;
-			}
-
-			const auto box = Ui::show(
-				Box<PhotoCropBox>(image, tr::lng_settings_crop_profile(tr::now)));
-			box->ready(
-			) | rpl::start_with_next([=](QImage &&image) {
-				self->session().api().uploadPeerPhoto(
-					self,
-					std::move(image));
-			}, box->lifetime());
+		auto callback = [=](QImage &&image) {
+			self->session().api().peerPhoto().upload(self, std::move(image));
 		};
-		FileDialog::GetOpenPath(
+		Editor::PrepareProfilePhoto(
 			upload,
-			tr::lng_choose_image(tr::now),
-			filter,
-			crl::guard(upload, callback));
+			&controller->window(),
+			std::move(callback));
 	});
 	rpl::combine(
 		wrap->widthValue(),
@@ -219,6 +196,7 @@ void AddRow(
 
 void SetupRows(
 		not_null<Ui::VerticalLayout*> container,
+		not_null<Window::SessionController*> controller,
 		not_null<UserData*> self) {
 	const auto session = &self->session();
 
@@ -229,7 +207,7 @@ void SetupRows(
 		tr::lng_settings_name_label(),
 		Info::Profile::NameValue(self),
 		tr::lng_profile_copy_fullname(tr::now),
-		[=] { Ui::show(Box<EditNameBox>(self)); },
+		[=] { controller->show(Box<EditNameBox>(self)); },
 		st::settingsInfoName);
 
 	AddRow(
@@ -237,7 +215,7 @@ void SetupRows(
 		tr::lng_settings_phone_label(),
 		Info::Profile::PhoneValue(self),
 		tr::lng_profile_copy_phone(tr::now),
-		[=] { Ui::show(Box<ChangePhoneBox>(session)); },
+		[=] { controller->show(Box<ChangePhoneBox>(controller)); },
 		st::settingsInfoPhone);
 
 	auto username = Info::Profile::UsernameValue(self);
@@ -263,7 +241,7 @@ void SetupRows(
 		result.entities.push_back({
 			EntityType::CustomUrl,
 			0,
-			add.size(),
+			int(add.size()),
 			"internal:edit_username" });
 		return result;
 	});
@@ -272,18 +250,13 @@ void SetupRows(
 		std::move(label),
 		std::move(value),
 		tr::lng_context_copy_mention(tr::now),
-		[=] { Ui::show(Box<UsernameBox>(session)); },
+		[=] { controller->show(Box<UsernameBox>(session)); },
 		st::settingsInfoUsername);
 
 	AddSkip(container, st::settingsInfoAfterSkip);
 }
 
-struct BioManager {
-	rpl::producer<bool> canSave;
-	Fn<void(FnMut<void()> done)> save;
-};
-
-BioManager SetupBio(
+void SetupBio(
 		not_null<Ui::VerticalLayout*> container,
 		not_null<UserData*> self) {
 	AddDivider(container);
@@ -291,8 +264,7 @@ BioManager SetupBio(
 
 	const auto bioStyle = [] {
 		auto result = st::settingsBio;
-		result.textMargins.setRight(
-			st::boxTextFont->spacew
+		result.textMargins.setRight(st::boxTextFont->spacew
 			+ st::boxTextFont->width(QString::number(kMaxBioLength)));
 		return result;
 	};
@@ -340,10 +312,9 @@ BioManager SetupBio(
 		const auto countLeft = qMax(kMaxBioLength - text.size(), 0);
 		countdown->setText(QString::number(countLeft));
 	};
-	const auto save = [=](FnMut<void()> done) {
+	const auto save = [=] {
 		self->session().api().saveSelfBio(
-			TextUtilities::PrepareForSending(bio->getLastText()),
-			std::move(done));
+			TextUtilities::PrepareForSending(bio->getLastText()));
 	};
 
 	Info::Profile::AboutValue(
@@ -366,7 +337,7 @@ BioManager SetupBio(
 			const auto saved = *generation = std::abs(*generation) + 1;
 			base::call_delayed(kSaveBioTimeout, bio, [=] {
 				if (*generation == saved) {
-					save(nullptr);
+					save();
 					*generation = 0;
 				}
 			});
@@ -379,7 +350,7 @@ BioManager SetupBio(
 	// to 'container' lifetime, not to the 'bio' lifetime.
 	container->lifetime().add([=] {
 		if (*generation > 0) {
-			save(nullptr);
+			save();
 		}
 	});
 
@@ -389,7 +360,7 @@ BioManager SetupBio(
 	cursor.setPosition(bio->getLastText().size());
 	bio->setTextCursor(cursor);
 	QObject::connect(bio, &Ui::InputField::submitted, [=] {
-		save(nullptr);
+		save();
 	});
 	QObject::connect(bio, &Ui::InputField::changed, updated);
 	bio->setInstantReplaces(Ui::InstantReplaces::Default());
@@ -409,11 +380,6 @@ BioManager SetupBio(
 		st::settingsBioLabelPadding);
 
 	AddSkip(container);
-
-	return BioManager{
-		changed->events() | rpl::distinct_until_changed(),
-		save
-	};
 }
 
 } // namespace
@@ -425,25 +391,14 @@ Information::Information(
 	setupContent(controller);
 }
 
-//rpl::producer<bool> Information::sectionCanSaveChanges() {
-//	return _canSaveChanges.value();
-//}
-//
-//void Information::sectionSaveChanges(FnMut<void()> done) {
-//	_save(std::move(done));
-//}
-
 void Information::setupContent(
 		not_null<Window::SessionController*> controller) {
 	const auto content = Ui::CreateChild<Ui::VerticalLayout>(this);
 
 	const auto self = controller->session().user();
 	SetupPhoto(content, controller, self);
-	SetupRows(content, self);
+	SetupRows(content, controller, self);
 	SetupBio(content, self);
-	//auto manager = SetupBio(content, self);
-	//_canSaveChanges = std::move(manager.canSave);
-	//_save = std::move(manager.save);
 
 	Ui::ResizeFitChild(this, content);
 }

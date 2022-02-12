@@ -57,7 +57,6 @@ public:
 	void peerListSetAdditionalTitle(rpl::producer<QString> title) override;
 	bool peerListIsRowChecked(not_null<PeerListRow*> row) override;
 	int peerListSelectedRowsCount() override;
-	std::vector<not_null<PeerData*>> peerListCollectSelectedRows() override;
 	void peerListScrollToTop() override;
 	void peerListAddSelectedPeerInBunch(
 		not_null<PeerData*> peer) override;
@@ -128,11 +127,6 @@ bool ListDelegate::peerListIsRowChecked(not_null<PeerListRow*> row) {
 
 int ListDelegate::peerListSelectedRowsCount() {
 	return 0;
-}
-
-auto ListDelegate::peerListCollectSelectedRows()
--> std::vector<not_null<PeerData*>> {
-	return {};
 }
 
 void ListDelegate::peerListScrollToTop() {
@@ -255,7 +249,7 @@ void ListController::loadMoreRows() {
 		return;
 	}
 	const auto item = session().data().message(_context);
-	if (!item || !IsServerMsgId(item->id)) {
+	if (!item || !item->isRegular()) {
 		_leftToLoad = 0;
 		return;
 	}
@@ -304,7 +298,7 @@ void ListController::loadMoreRows() {
 			delegate()->peerListRefreshRows();
 		}
 		_loadRequestId = 0;
-	}).fail([=](const RPCError &error) {
+	}).fail([=] {
 		_loadRequestId = 0;
 	}).send();
 }
@@ -323,14 +317,14 @@ void ListController::collapse() {
 		return;
 	}
 	const auto remove = count - (kFirstPage - kLeavePreloaded);
-	ranges::action::reverse(_preloaded);
+	ranges::actions::reverse(_preloaded);
 	_preloaded.reserve(_preloaded.size() + remove);
 	for (auto i = 0; i != remove; ++i) {
 		const auto row = delegate()->peerListRowAt(count - i - 1);
 		_preloaded.push_back(row->peer()->asUser());
 		delegate()->peerListRemoveRow(row);
 	}
-	ranges::action::reverse(_preloaded);
+	ranges::actions::reverse(_preloaded);
 
 	delegate()->peerListRefreshRows();
 	const auto now = count - remove;
@@ -444,7 +438,7 @@ void ListController::rowClicked(not_null<PeerListRow*> row) {
 }
 
 bool ListController::appendRow(not_null<UserData*> user) {
-	if (delegate()->peerListFindRow(user->id)) {
+	if (delegate()->peerListFindRow(user->id.value)) {
 		return false;
 	}
 	delegate()->peerListAppendRow(createRow(user));
@@ -674,7 +668,6 @@ int InnerWidget::desiredHeight() const {
 }
 
 void InnerWidget::setupContent() {
-	const auto quiz = _poll->quiz();
 	_content->add(
 		object_ptr<Ui::FlatLabel>(
 			_content,

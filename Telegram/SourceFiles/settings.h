@@ -8,7 +8,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "ui/style/style_core.h"
-#include "emoji.h"
 
 #define DeclareReadSetting(Type, Name) extern Type g##Name; \
 inline const Type &c##Name() { \
@@ -68,17 +67,6 @@ inline const QString &cDialogHelperPathFinal() {
 
 DeclareSetting(bool, AutoUpdate);
 
-struct TWindowPos {
-	TWindowPos() = default;
-
-	int32 moncrc = 0;
-	int maximized = 0;
-	int x = 0;
-	int y = 0;
-	int w = 0;
-	int h = 0;
-};
-DeclareSetting(TWindowPos, WindowPos);
 DeclareSetting(bool, SeenTrayTooltip);
 DeclareSetting(bool, RestartingUpdate);
 DeclareSetting(bool, Restarting);
@@ -89,21 +77,13 @@ DeclareSetting(bool, NoStartUpdate);
 DeclareSetting(bool, StartToSettings);
 DeclareSetting(bool, DebugMode);
 DeclareReadSetting(bool, ManyInstance);
+DeclareSetting(bool, Quit);
 
 DeclareSetting(QByteArray, LocalSalt);
 DeclareSetting(int, ScreenScale);
 DeclareSetting(int, ConfigScale);
+DeclareSetting(QString, DateFormat);
 DeclareSetting(QString, TimeFormat);
-
-using RecentEmojiPreloadOldOld = QVector<QPair<uint32, ushort>>;
-using RecentEmojiPreloadOld = QVector<QPair<uint64, ushort>>;
-using RecentEmojiPreload = QVector<QPair<QString, ushort>>;
-using RecentEmojiPack = QVector<QPair<EmojiPtr, ushort>>;
-using EmojiColorVariantsOld = QMap<uint32, uint64>;
-using EmojiColorVariants = QMap<QString, int>;
-DeclareRefSetting(RecentEmojiPack, RecentEmoji);
-DeclareSetting(RecentEmojiPreload, RecentEmojiPreload);
-DeclareRefSetting(EmojiColorVariants, EmojiVariants);
 
 class DocumentData;
 
@@ -131,14 +111,13 @@ DeclareSetting(QString, StartUrl);
 
 DeclareSetting(int, OtherOnline);
 
+inline void cChangeDateFormat(const QString &newFormat) {
+	if (!newFormat.isEmpty()) cSetDateFormat(newFormat);
+}
+
 inline void cChangeTimeFormat(const QString &newFormat) {
 	if (!newFormat.isEmpty()) cSetTimeFormat(newFormat);
 }
-
-RecentEmojiPack &GetRecentEmoji();
-QVector<EmojiPtr> GetRecentEmojiSection();
-void AddRecentEmoji(EmojiPtr emoji);
-[[nodiscard]] rpl::producer<> UpdatedRecentEmoji();
 
 inline bool passcodeCanTry() {
 	if (cPasscodeBadTries() < 3) return true;

@@ -29,7 +29,7 @@ namespace {
 // max 512kb uploaded at the same time in each session
 constexpr auto kMaxUploadFileParallelSize = MTP::kUploadSessionsCount * 512 * 1024;
 
-constexpr auto kDocumentMaxPartsCount = 3000;
+constexpr auto kDocumentMaxPartsCount = 4000;
 
 // 32kb for tiny document ( < 1mb )
 constexpr auto kDocumentUploadPartSize0 = 32 * 1024;
@@ -153,62 +153,41 @@ const QString &Uploader::File::filename() const {
 }
 
 Uploader::Uploader(not_null<ApiWrap*> api)
-: _api(api) {
-	nextTimer.setSingleShot(true);
-	connect(&nextTimer, SIGNAL(timeout()), this, SLOT(sendNext()));
-	stopSessionsTimer.setSingleShot(true);
-	connect(&stopSessionsTimer, SIGNAL(timeout()), this, SLOT(stopSessions()));
-
+: _api(api)
+, _nextTimer([=] { sendNext(); })
+, _stopSessionsTimer([=] { stopSessions(); }) {
 	const auto session = &_api->session();
 	photoReady(
-	) | rpl::start_with_next([=](const UploadedPhoto &data) {
+	) | rpl::start_with_next([=](UploadedMedia &&data) {
 		if (data.edit) {
 			const auto item = session->data().message(data.fullId);
-			Api::EditMessageWithUploadedPhoto(item, data.file, data.options);
+			Api::EditMessageWithUploadedPhoto(
+				item,
+				std::move(data.info),
+				data.options);
 		} else {
 			_api->sendUploadedPhoto(
 				data.fullId,
-				data.file,
+				std::move(data.info),
 				data.options);
 		}
 	}, _lifetime);
 
 	documentReady(
-	) | rpl::start_with_next([=](const UploadedDocument &data) {
+	) | rpl::start_with_next([=](UploadedMedia &&data) {
 		if (data.edit) {
 			const auto item = session->data().message(data.fullId);
 			Api::EditMessageWithUploadedDocument(
 				item,
-				data.file,
-				std::nullopt,
+				std::move(data.info),
 				data.options);
 		} else {
 			_api->sendUploadedDocument(
 				data.fullId,
-				data.file,
-				std::nullopt,
+				std::move(data.info),
 				data.options);
 		}
 	}, _lifetime);
-
-	thumbDocumentReady(
-	) | rpl::start_with_next([=](const UploadedThumbDocument &data) {
-		if (data.edit) {
-			const auto item = session->data().message(data.fullId);
-			Api::EditMessageWithUploadedDocument(
-				item,
-				data.file,
-				data.thumb,
-				data.options);
-		} else {
-			_api->sendUploadedDocument(
-				data.fullId,
-				data.file,
-				data.thumb,
-				data.options);
-		}
-	}, _lifetime);
-
 
 	photoProgress(
 	) | rpl::start_with_next([=](const FullMsgId &fullId) {
@@ -234,9 +213,6 @@ Uploader::Uploader(not_null<ApiWrap*> api)
 void Uploader::processPhotoProgress(const FullMsgId &newId) {
 	const auto session = &_api->session();
 	if (const auto item = session->data().message(newId)) {
-		const auto photo = item->media()
-			? item->media()->photo()
-			: nullptr;
 		sendProgressUpdate(item, Api::SendProgressType::UploadPhoto);
 	}
 }
@@ -382,26 +358,12 @@ void Uploader::upload(
 void Uploader::currentFailed() {
 	auto j = queue.find(uploadingId);
 	if (j != queue.end()) {
-		if (j->second.type() == SendMediaType::Photo) {
-			_photoFailed.fire_copy(j->first);
-		} else if (j->second.type() == SendMediaType::File
-			|| j->second.type() == SendMediaType::ThemeFile
-			|| j->second.type() == SendMediaType::Audio) {
-			const auto document = session().data().document(j->second.id());
-			if (document->uploading()) {
-				document->status = FileUploadFailed;
-			}
-			_documentFailed.fire_copy(j->first);
-		} else if (j->second.type() == SendMediaType::Secure) {
-			_secureFailed.fire_copy(j->first);
-		} else {
-			Unexpected("Type in Uploader::currentFailed.");
-		}
+		const auto [msgId, file] = std::move(*j);
 		queue.erase(j);
+		notifyFailed(msgId, file);
 	}
 
-	requestsSent.clear();
-	docRequestsSent.clear();
+	cancelRequests();
 	dcMap.clear();
 	uploadingId = FullMsgId();
 	sentSize = 0;
@@ -410,6 +372,25 @@ void Uploader::currentFailed() {
 	}
 
 	sendNext();
+}
+
+void Uploader::notifyFailed(FullMsgId id, const File &file) {
+	const auto type = file.type();
+	if (type == SendMediaType::Photo) {
+		_photoFailed.fire_copy(id);
+	} else if (type == SendMediaType::File
+		|| type == SendMediaType::ThemeFile
+		|| type == SendMediaType::Audio) {
+		const auto document = session().data().document(file.id());
+		if (document->uploading()) {
+			document->status = FileUploadFailed;
+		}
+		_documentFailed.fire_copy(id);
+	} else if (type == SendMediaType::Secure) {
+		_secureFailed.fire_copy(id);
+	} else {
+		Unexpected("Type in Uploader::currentFailed.");
+	}
 }
 
 void Uploader::stopSessions() {
@@ -423,16 +404,16 @@ void Uploader::sendNext() {
 		return;
 	}
 
-	bool stopping = stopSessionsTimer.isActive();
+	const auto stopping = _stopSessionsTimer.isActive();
 	if (queue.empty()) {
 		if (!stopping) {
-			stopSessionsTimer.start(kKillSessionTimeout);
+			_stopSessionsTimer.callOnce(kKillSessionTimeout);
 		}
 		return;
 	}
 
 	if (stopping) {
-		stopSessionsTimer.stop();
+		_stopSessionsTimer.cancel();
 	}
 	auto i = uploadingId.msg ? queue.find(uploadingId) : queue.begin();
 	if (!uploadingId.msg) {
@@ -469,7 +450,10 @@ void Uploader::sendNext() {
 					? uploadingData.file->to.options
 					: Api::SendOptions();
 				const auto edit = uploadingData.file &&
-					uploadingData.file->edit;
+					uploadingData.file->to.replaceMediaOf;
+				const auto attachedStickers = uploadingData.file
+					? uploadingData.file->attachedStickers
+					: std::vector<MTPInputDocument>();
 				if (uploadingData.type() == SendMediaType::Photo) {
 					auto photoFilename = uploadingData.filename();
 					if (!photoFilename.endsWith(qstr(".jpg"), Qt::CaseInsensitive)) {
@@ -486,7 +470,15 @@ void Uploader::sendNext() {
 						MTP_int(uploadingData.partsCount),
 						MTP_string(photoFilename),
 						MTP_bytes(md5));
-					_photoReady.fire({ uploadingId, options, file, edit });
+					_photoReady.fire({
+						.fullId = uploadingId,
+						.info = {
+							.file = file,
+							.attachedStickers = attachedStickers,
+						},
+						.options = options,
+						.edit = edit,
+					});
 				} else if (uploadingData.type() == SendMediaType::File
 					|| uploadingData.type() == SendMediaType::ThemeFile
 					|| uploadingData.type() == SendMediaType::Audio) {
@@ -503,31 +495,32 @@ void Uploader::sendNext() {
 							MTP_int(uploadingData.docPartsCount),
 							MTP_string(uploadingData.filename()),
 							MTP_bytes(docMd5));
-					if (uploadingData.partsCount) {
+					const auto thumb = [&]() -> std::optional<MTPInputFile> {
+						if (!uploadingData.partsCount) {
+							return std::nullopt;
+						}
 						const auto thumbFilename = uploadingData.file
 							? uploadingData.file->thumbname
 							: (qsl("thumb.") + uploadingData.media.thumbExt);
 						const auto thumbMd5 = uploadingData.file
 							? uploadingData.file->thumbmd5
 							: uploadingData.media.jpeg_md5;
-						const auto thumb = MTP_inputFile(
+						return MTP_inputFile(
 							MTP_long(uploadingData.thumbId()),
 							MTP_int(uploadingData.partsCount),
 							MTP_string(thumbFilename),
 							MTP_bytes(thumbMd5));
-						_thumbDocumentReady.fire({
-							uploadingId,
-							options,
-							file,
-							thumb,
-							edit });
-					} else {
-						_documentReady.fire({
-							uploadingId,
-							options,
-							file,
-							edit });
-					}
+					}();
+					_documentReady.fire({
+						.fullId = uploadingId,
+						.info = {
+							.file = file,
+							.thumb = thumb,
+							.attachedStickers = attachedStickers,
+						},
+						.options = options,
+						.edit = edit,
+					});
 				} else if (uploadingData.type() == SendMediaType::Secure) {
 					_secureReady.fire({
 						uploadingId,
@@ -586,7 +579,7 @@ void Uploader::sendNext() {
 				MTP_bytes(toSend)
 			)).done([=](const MTPBool &result, mtpRequestId requestId) {
 				partLoaded(result, requestId);
-			}).fail([=](const RPCError &error, mtpRequestId requestId) {
+			}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
 				partFailed(error, requestId);
 			}).toDC(MTP::uploadDcId(todc)).send();
 		} else {
@@ -596,7 +589,7 @@ void Uploader::sendNext() {
 				MTP_bytes(toSend)
 			)).done([=](const MTPBool &result, mtpRequestId requestId) {
 				partLoaded(result, requestId);
-			}).fail([=](const RPCError &error, mtpRequestId requestId) {
+			}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
 				partFailed(error, requestId);
 			}).toDC(MTP::uploadDcId(todc)).send();
 		}
@@ -615,7 +608,7 @@ void Uploader::sendNext() {
 			MTP_bytes(part.value())
 		)).done([=](const MTPBool &result, mtpRequestId requestId) {
 			partLoaded(result, requestId);
-		}).fail([=](const RPCError &error, mtpRequestId requestId) {
+		}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
 			partFailed(error, requestId);
 		}).toDC(MTP::uploadDcId(todc)).send();
 		requestsSent.emplace(requestId, part.value());
@@ -625,16 +618,33 @@ void Uploader::sendNext() {
 
 		parts.erase(part);
 	}
-	nextTimer.start(kUploadRequestInterval);
+	_nextTimer.callOnce(kUploadRequestInterval);
 }
 
 void Uploader::cancel(const FullMsgId &msgId) {
-	uploaded.erase(msgId);
 	if (uploadingId == msgId) {
 		currentFailed();
 	} else {
 		queue.erase(msgId);
 	}
+}
+
+void Uploader::cancelAll() {
+	const auto single = queue.empty() ? uploadingId : queue.begin()->first;
+	if (!single) {
+		return;
+	}
+	_pausedId = single;
+	if (uploadingId) {
+		currentFailed();
+	}
+	while (!queue.empty()) {
+		const auto [msgId, file] = std::move(*queue.begin());
+		queue.erase(queue.begin());
+		notifyFailed(msgId, file);
+	}
+	clear();
+	unpause();
 }
 
 void Uploader::pause(const FullMsgId &msgId) {
@@ -649,9 +659,7 @@ void Uploader::unpause() {
 void Uploader::confirm(const FullMsgId &msgId) {
 }
 
-void Uploader::clear() {
-	uploaded.clear();
-	queue.clear();
+void Uploader::cancelRequests() {
 	for (const auto &requestData : requestsSent) {
 		_api->request(requestData.first).cancel();
 	}
@@ -660,13 +668,18 @@ void Uploader::clear() {
 		_api->request(requestData.first).cancel();
 	}
 	docRequestsSent.clear();
+}
+
+void Uploader::clear() {
+	queue.clear();
+	cancelRequests();
 	dcMap.clear();
 	sentSize = 0;
 	for (int i = 0; i < MTP::kUploadSessionsCount; ++i) {
 		_api->instance().stopSession(MTP::uploadDcId(i));
 		sentSizes[i] = 0;
 	}
-	stopSessionsTimer.stop();
+	_stopSessionsTimer.cancel();
 }
 
 void Uploader::partLoaded(const MTPBool &result, mtpRequestId requestId) {
@@ -734,7 +747,7 @@ void Uploader::partLoaded(const MTPBool &result, mtpRequestId requestId) {
 	sendNext();
 }
 
-void Uploader::partFailed(const RPCError &error, mtpRequestId requestId) {
+void Uploader::partFailed(const MTP::Error &error, mtpRequestId requestId) {
 	// failed to upload current file
 	if ((requestsSent.find(requestId) != requestsSent.cend())
 		|| (docRequestsSent.find(requestId) != docRequestsSent.cend())) {

@@ -57,12 +57,22 @@ struct DocumentAdditionalData {
 
 };
 
-struct StickerData : public DocumentAdditionalData {
-	Data::FileOrigin setOrigin() const;
+enum class StickerType : uchar {
+	Webp,
+	Tgs,
+	Webm,
+};
 
-	bool animated = false;
+struct StickerData : public DocumentAdditionalData {
+	[[nodiscard]] Data::FileOrigin setOrigin() const;
+	[[nodiscard]] bool isStatic() const;
+	[[nodiscard]] bool isLottie() const;
+	[[nodiscard]] bool isAnimated() const;
+	[[nodiscard]] bool isWebm() const;
+
 	QString alt;
-	MTPInputStickerSet set = MTP_inputStickerSetEmpty();
+	StickerSetIdentifier set;
+	StickerType type = StickerType::Webp;
 };
 
 struct SongData : public DocumentAdditionalData {
@@ -115,7 +125,8 @@ public:
 	void setWaitingForAlbum();
 	[[nodiscard]] bool waitingForAlbum() const;
 
-	[[nodiscard]] const Core::FileLocation &location(bool check = false) const;
+	[[nodiscard]] const Core::FileLocation &location(
+		bool check = false) const;
 	void setLocation(const Core::FileLocation &loc);
 
 	bool saveFromData();
@@ -124,7 +135,10 @@ public:
 
 	[[nodiscard]] bool saveToCache() const;
 
-	[[nodiscard]] Image *getReplyPreview(Data::FileOrigin origin);
+	[[nodiscard]] Image *getReplyPreview(
+		Data::FileOrigin origin,
+		not_null<PeerData*> context);
+	[[nodiscard]] Image *getReplyPreview(not_null<HistoryItem*> item);
 	[[nodiscard]] bool replyPreviewLoaded() const;
 
 	[[nodiscard]] StickerData *sticker() const;
@@ -139,6 +153,7 @@ public:
 	[[nodiscard]] bool isVoiceMessage() const;
 	[[nodiscard]] bool isVideoMessage() const;
 	[[nodiscard]] bool isSong() const;
+	[[nodiscard]] bool isSongWithCover() const;
 	[[nodiscard]] bool isAudioFile() const;
 	[[nodiscard]] bool isVideoFile() const;
 	[[nodiscard]] bool isAnimation() const;
@@ -154,6 +169,8 @@ public:
 	bool checkWallPaperProperties();
 	[[nodiscard]] bool isWallPaper() const;
 	[[nodiscard]] bool isPatternWallPaper() const;
+	[[nodiscard]] bool isPatternWallPaperPNG() const;
+	[[nodiscard]] bool isPatternWallPaperSVG() const;
 
 	[[nodiscard]] bool hasThumbnail() const;
 	[[nodiscard]] bool thumbnailLoading() const;
@@ -170,12 +187,15 @@ public:
 	[[nodiscard]] int videoThumbnailByteSize() const;
 
 	void updateThumbnails(
-		const QByteArray &inlineThumbnailBytes,
+		const InlineImageLocation &inlineThumbnail,
 		const ImageWithLocation &thumbnail,
 		const ImageWithLocation &videoThumbnail);
 
 	[[nodiscard]] QByteArray inlineThumbnailBytes() const {
 		return _inlineThumbnailBytes;
+	}
+	[[nodiscard]] bool inlineThumbnailIsPath() const {
+		return (_flags & Flag::InlineThumbnailIsPath);
 	}
 	void clearInlineThumbnailBytes() {
 		_inlineThumbnailBytes = QByteArray();
@@ -227,9 +247,7 @@ public:
 	[[nodiscard]] Storage::Cache::Key cacheKey() const;
 	[[nodiscard]] uint8 cacheTag() const;
 
-	[[nodiscard]] QString composeNameString() const;
-
-	[[nodiscard]] bool canBeStreamed() const;
+	[[nodiscard]] bool canBeStreamed(HistoryItem *item) const;
 	[[nodiscard]] auto createStreamingLoader(
 		Data::FileOrigin origin,
 		bool forceRemoteLoader) const
@@ -258,6 +276,7 @@ private:
 		DownloadCancelled = 0x10,
 		LoadedInMediaCache = 0x20,
 		HasAttachedStickers = 0x40,
+		InlineThumbnailIsPath = 0x80,
 	};
 	using Flags = base::flags<Flag>;
 	friend constexpr bool is_flag_type(Flag) { return true; };
@@ -291,6 +310,7 @@ private:
 	void validateLottieSticker();
 	void setMaybeSupportsStreaming(bool supports);
 	void setLoadedInMediaCacheLocation();
+	void setFileName(const QString &remoteFileName);
 
 	void finishLoad();
 	void handleLoaderUpdates();
@@ -328,103 +348,6 @@ private:
 VoiceWaveform documentWaveformDecode(const QByteArray &encoded5bit);
 QByteArray documentWaveformEncode5bit(const VoiceWaveform &waveform);
 
-class DocumentClickHandler : public FileClickHandler {
-public:
-	DocumentClickHandler(
-		not_null<DocumentData*> document,
-		FullMsgId context = FullMsgId());
-
-	[[nodiscard]] not_null<DocumentData*> document() const {
-		return _document;
-	}
-
-private:
-	const not_null<DocumentData*> _document;
-
-};
-
-class DocumentSaveClickHandler : public DocumentClickHandler {
-public:
-	enum class Mode {
-		ToCacheOrFile,
-		ToFile,
-		ToNewFile,
-	};
-	using DocumentClickHandler::DocumentClickHandler;
-	static void Save(
-		Data::FileOrigin origin,
-		not_null<DocumentData*> document,
-		Mode mode = Mode::ToCacheOrFile);
-
-protected:
-	void onClickImpl() const override;
-
-};
-
-class DocumentOpenClickHandler : public DocumentClickHandler {
-public:
-	using DocumentClickHandler::DocumentClickHandler;
-	static void Open(
-		Data::FileOrigin origin,
-		not_null<DocumentData*> document,
-		HistoryItem *context);
-
-protected:
-	void onClickImpl() const override;
-
-};
-
-class DocumentCancelClickHandler : public DocumentClickHandler {
-public:
-	using DocumentClickHandler::DocumentClickHandler;
-
-protected:
-	void onClickImpl() const override;
-
-};
-
-class DocumentOpenWithClickHandler : public DocumentClickHandler {
-public:
-	using DocumentClickHandler::DocumentClickHandler;
-	static void Open(
-		Data::FileOrigin origin,
-		not_null<DocumentData*> document);
-
-protected:
-	void onClickImpl() const override;
-
-};
-
-class VoiceSeekClickHandler : public DocumentOpenClickHandler {
-public:
-	using DocumentOpenClickHandler::DocumentOpenClickHandler;
-
-protected:
-	void onClickImpl() const override {
-	}
-
-};
-
-class DocumentWrappedClickHandler : public DocumentClickHandler {
-public:
-	DocumentWrappedClickHandler(
-		ClickHandlerPtr wrapped,
-		not_null<DocumentData*> document,
-		FullMsgId context = FullMsgId())
-	: DocumentClickHandler(document, context)
-	, _wrapped(wrapped) {
-	}
-
-protected:
-	void onClickImpl() const override {
-		_wrapped->onClick({ Qt::LeftButton });
-	}
-
-private:
-	ClickHandlerPtr _wrapped;
-
-};
-
 QString FileNameForSave(
 	not_null<Main::Session*> session,
 	const QString &title,
@@ -439,16 +362,3 @@ QString DocumentFileNameForSave(
 	bool forceSavingAs = false,
 	const QString &already = QString(),
 	const QDir &dir = QDir());
-
-namespace Data {
-
-[[nodiscard]] QString FileExtension(const QString &filepath);
-[[nodiscard]] bool IsValidMediaFile(const QString &filepath);
-[[nodiscard]] bool IsExecutableName(const QString &filepath);
-[[nodiscard]] bool IsIpRevealingName(const QString &filepath);
-base::binary_guard ReadImageAsync(
-	not_null<Data::DocumentMedia*> media,
-	FnMut<QImage(QImage)> postprocess,
-	FnMut<void(QImage&&)> done);
-
-} // namespace Data

@@ -7,8 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "platform/mac/touchbar/items/mac_pinned_chats_item.h"
 
-#ifndef OS_OSX
-
 #include "apiwrap.h"
 #include "base/call_delayed.h"
 #include "base/timer.h"
@@ -22,7 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_peer_values.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
-#include "dialogs/dialogs_layout.h"
+#include "dialogs/ui/dialogs_layout.h"
 #include "history/history.h"
 #include "main/main_session.h"
 #include "mainwidget.h"
@@ -30,7 +28,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_dialogs.h"
 #include "ui/effects/animations.h"
 #include "ui/empty_userpic.h"
-#include "window/themes/window_theme.h"
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
 
@@ -100,8 +97,8 @@ QImage UnreadBadge(not_null<PeerData*> peer) {
 	const auto unread = history->unreadMark()
 		? QString()
 		: QString::number(count);
-	Dialogs::Layout::UnreadBadgeStyle unreadSt;
-	unreadSt.sizeId = Dialogs::Layout::UnreadBadgeInTouchBar;
+	Dialogs::Ui::UnreadBadgeStyle unreadSt;
+	unreadSt.sizeId = Dialogs::Ui::UnreadBadgeInTouchBar;
 	unreadSt.muted = history->mute();
 	// Use constant values to draw badge regardless of cConfigScale().
 	unreadSt.size = kUnreadBadgeSize * cRetinaFactor();
@@ -117,13 +114,12 @@ QImage UnreadBadge(not_null<PeerData*> peer) {
 	result.fill(Qt::transparent);
 	Painter p(&result);
 
-	Dialogs::Layout::paintUnreadCount(
+	Dialogs::Ui::PaintUnreadBadge(
 		p,
 		unread,
 		result.width(),
 		result.height() - unreadSt.size,
 		unreadSt,
-		nullptr,
 		2);
 	return result;
 }
@@ -195,7 +191,7 @@ TimeId CalculateOnlineTill(not_null<PeerData*> peer) {
 	rpl::event_stream<not_null<NSEvent*>> _touches;
 	rpl::event_stream<not_null<NSPressGestureRecognizer*>> _gestures;
 
-	double _r, _g, _b, _a; // The online circle color.
+	CGFloat _r, _g, _b, _a; // The online circle color.
 }
 
 - (void)processHorizontalReorder {
@@ -243,7 +239,8 @@ TimeId CalculateOnlineTill(not_null<PeerData*> peer) {
 			: indexOf(peer);
 		const auto &entry = _pins[index];
 		entry->shift = entry->deltaShift
-			+ std::round(entry->shiftAnimation.value(entry->finalShift));
+			+ base::SafeRound(
+				entry->shiftAnimation.value(entry->finalShift));
 		if (entry->deltaShift && !entry->shiftAnimation.animating()) {
 			entry->finalShift += entry->deltaShift;
 			entry->deltaShift = 0;
@@ -441,7 +438,8 @@ TimeId CalculateOnlineTill(not_null<PeerData*> peer) {
 	_gestures.events(
 	) | rpl::filter([=] {
 		return !(*waitForFinish);
-	}) | rpl::start_with_next([=](not_null<NSPressGestureRecognizer*> gesture) {
+	}) | rpl::start_with_next([=](
+			not_null<NSPressGestureRecognizer*> gesture) {
 		const auto currentPosition = [gesture locationInView:self].x;
 
 		switch ([gesture state]) {
@@ -530,7 +528,8 @@ TimeId CalculateOnlineTill(not_null<PeerData*> peer) {
 		pin->peer->paintUserpic(p, pin->userpicView, 0, 0, userpic.width());
 		userpic.setDevicePixelRatio(cRetinaFactor());
 		pin->userpic = std::move(userpic);
-		[self setNeedsDisplayInRect:PeerRectByIndex(pin->index)];
+		const auto userpicIndex = pin->index + [self shift];
+		[self setNeedsDisplayInRect:PeerRectByIndex(userpicIndex)];
 	};
 	const auto updateUserpics = [=] {
 		ranges::for_each(_pins, singleUserpic);
@@ -575,7 +574,8 @@ TimeId CalculateOnlineTill(not_null<PeerData*> peer) {
 			if (pin->onlineTill) {
 				const auto time = pin->onlineTill - base::unixtime::now();
 				if (time > 0) {
-					onlineTimer->callOnce(time * crl::time(1000));
+					onlineTimer->callOnce(std::min(86400, time)
+						* crl::time(1000));
 				}
 			}
 		};
@@ -632,9 +632,9 @@ TimeId CalculateOnlineTill(not_null<PeerData*> peer) {
 	};
 
 	const auto updatePinnedChats = [=] {
-		_pins = ranges::view::zip(
+		_pins = ranges::views::zip(
 			_session->data().pinnedChatsOrder(nullptr, FilterId()),
-			ranges::view::ints(0, ranges::unreachable)
+			ranges::views::ints(0, ranges::unreachable)
 		) | ranges::views::transform([=](const auto &pair) {
 			const auto index = pair.second;
 			auto peer = pair.first.history()->peer;
@@ -653,12 +653,15 @@ TimeId CalculateOnlineTill(not_null<PeerData*> peer) {
 		peerChangedLifetime->destroy();
 		for (const auto &pin : _pins) {
 			const auto peer = pin->peer;
+			const auto index = pin->index;
+
 			_session->changes().peerUpdates(
 				peer,
 				UpdateFlag::Photo
-			) | rpl::start_with_next(
-				listenToDownloaderFinished,
-				*peerChangedLifetime);
+			) | rpl::start_with_next([=](const Data::PeerUpdate &update) {
+				_pins[index]->userpicView = update.peer->createUserpicView();
+				listenToDownloaderFinished();
+			}, *peerChangedLifetime);
 
 			if (const auto user = peer->asUser()) {
 				if (!user->isServiceUser()
@@ -668,7 +671,6 @@ TimeId CalculateOnlineTill(not_null<PeerData*> peer) {
 				}
 			}
 
-			const auto index = pin->index;
 			rpl::merge(
 				_session->changes().historyUpdates(
 					_session->data().history(peer),
@@ -708,17 +710,19 @@ TimeId CalculateOnlineTill(not_null<PeerData*> peer) {
 	}, _lifetime);
 
 	const auto updateOnlineColor = [=] {
-		st::dialogsOnlineBadgeFg->c.getRgbF(&_r, &_g, &_b, &_a);
+		auto r = 0, g = 0, b = 0, a = 0;
+		st::dialogsOnlineBadgeFg->c.getRgb(&r, &g, &b, &a);
+		_r = r / 255.;
+		_g = g / 255.;
+		_b = b / 255.;
+		_a = a / 255.;
 	};
 	updateOnlineColor();
 
 	const auto localGuard = _lifetime.make_state<base::has_weak_ptr>();
 
-	base::ObservableViewer(
-		*Window::Theme::Background()
-	) | rpl::filter([](const Window::Theme::BackgroundUpdate &update) {
-		return update.paletteChanged();
-	}) | rpl::start_with_next([=] {
+	style::PaletteChanged(
+	) | rpl::start_with_next([=] {
 		crl::on_main(&(*localGuard), [=] {
 			updateOnlineColor();
 			if (const auto f = _session->data().folderLoaded(ArchiveId)) {
@@ -882,5 +886,3 @@ TimeId CalculateOnlineTill(not_null<PeerData*> peer) {
 }
 
 @end // @@implementation PinnedDialogsPanel
-
-#endif // OS_OSX

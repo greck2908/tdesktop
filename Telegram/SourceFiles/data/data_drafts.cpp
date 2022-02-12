@@ -18,32 +18,44 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/localstorage.h"
 
 namespace Data {
-namespace {
 
-} // namespace
+DraftKey DraftKey::FromSerializedOld(int32 value) {
+	return !value
+		? DraftKey::None()
+		: (value == kLocalDraftIndex + kEditDraftShiftOld)
+		? DraftKey::LocalEdit()
+		: (value == kScheduledDraftIndex + kEditDraftShiftOld)
+		? DraftKey::ScheduledEdit()
+		: (value > 0 && value < 0x4000'0000)
+		? DraftKey::Replies(int64(value))
+		: (value > kEditDraftShiftOld
+			&& value < kEditDraftShiftOld + 0x4000'000)
+		? DraftKey::RepliesEdit(int64(value - kEditDraftShiftOld))
+		: DraftKey::None();
+}
 
 Draft::Draft(
 	const TextWithTags &textWithTags,
 	MsgId msgId,
 	const MessageCursor &cursor,
-	bool previewCancelled,
+	PreviewState previewState,
 	mtpRequestId saveRequestId)
 : textWithTags(textWithTags)
 , msgId(msgId)
 , cursor(cursor)
-, previewCancelled(previewCancelled)
+, previewState(previewState)
 , saveRequestId(saveRequestId) {
 }
 
 Draft::Draft(
 	not_null<const Ui::InputField*> field,
 	MsgId msgId,
-	bool previewCancelled,
+	PreviewState previewState,
 	mtpRequestId saveRequestId)
 : textWithTags(field->getTextWithTags())
 , msgId(msgId)
 , cursor(field)
-, previewCancelled(previewCancelled) {
+, previewState(previewState) {
 }
 
 void ApplyPeerCloudDraft(
@@ -51,7 +63,11 @@ void ApplyPeerCloudDraft(
 		PeerId peerId,
 		const MTPDdraftMessage &draft) {
 	const auto history = session->data().history(peerId);
-	const auto textWithTags = TextWithTags {
+	const auto date = draft.vdate().v;
+	if (history->skipCloudDraftUpdate(date)) {
+		return;
+	}
+	const auto textWithTags = TextWithTags{
 		qs(draft.vmessage()),
 		TextUtilities::ConvertEntitiesToTextTags(
 			Api::EntitiesFromMTP(
@@ -59,15 +75,14 @@ void ApplyPeerCloudDraft(
 				draft.ventities().value_or_empty()))
 	};
 	const auto replyTo = draft.vreply_to_msg_id().value_or_empty();
-	if (history->skipCloudDraft(textWithTags.text, replyTo, draft.vdate().v)) {
-		return;
-	}
 	auto cloudDraft = std::make_unique<Draft>(
 		textWithTags,
 		replyTo,
 		MessageCursor(QFIXED_MAX, QFIXED_MAX, QFIXED_MAX),
-		draft.is_no_webpage());
-	cloudDraft->date = draft.vdate().v;
+		(draft.is_no_webpage()
+			? Data::PreviewState::Cancelled
+			: Data::PreviewState::Allowed));
+	cloudDraft->date = date;
 
 	history->setCloudDraft(std::move(cloudDraft));
 	history->applyCloudDraft();
@@ -78,7 +93,7 @@ void ClearPeerCloudDraft(
 		PeerId peerId,
 		TimeId date) {
 	const auto history = session->data().history(peerId);
-	if (history->skipCloudDraft(QString(), MsgId(0), date)) {
+	if (history->skipCloudDraftUpdate(date)) {
 		return;
 	}
 

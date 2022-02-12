@@ -38,10 +38,14 @@ class HideAllButton;
 class Manager;
 std::unique_ptr<Manager> Create(System *system);
 
-class Manager final : public Notifications::Manager, private base::Subscriber {
+class Manager final : public Notifications::Manager {
 public:
 	Manager(System *system);
 	~Manager();
+
+	[[nodiscard]] ManagerType type() const override {
+		return ManagerType::Default;
+	}
 
 	template <typename Method>
 	void enumerateNotifications(Method method) {
@@ -64,14 +68,15 @@ private:
 	[[nodiscard]] QPixmap hiddenUserpicPlaceholder() const;
 
 	void doUpdateAll() override;
-	void doShowNotification(
-		not_null<HistoryItem*> item,
-		int forwardedCount) override;
+	void doShowNotification(NotificationFields &&fields) override;
 	void doClearAll() override;
 	void doClearAllFast() override;
 	void doClearFromHistory(not_null<History*> history) override;
 	void doClearFromSession(not_null<Main::Session*> session) override;
 	void doClearFromItem(not_null<HistoryItem*> item) override;
+	bool doSkipAudio() const override;
+	bool doSkipToast() const override;
+	bool doSkipFlashBounce() const override;
 
 	void showNextFromQueue();
 	void unlinkFromShown(Notification *remove);
@@ -103,10 +108,11 @@ private:
 	base::Timer _inputCheckTimer;
 
 	struct QueuedNotification {
-		QueuedNotification(not_null<HistoryItem*> item, int forwardedCount);
+		QueuedNotification(NotificationFields &&fields);
 
 		not_null<History*> history;
 		not_null<PeerData*> peer;
+		QString reaction;
 		QString author;
 		HistoryItem *item = nullptr;
 		int forwardedCount = 0;
@@ -115,14 +121,17 @@ private:
 	std::deque<QueuedNotification> _queuedNotifications;
 
 	Ui::Animations::Simple _demoMasterOpacity;
+	bool _demoIsShown = false;
 
 	mutable QPixmap _hiddenUserpicPlaceholder;
+
+	rpl::lifetime _lifetime;
 
 };
 
 namespace internal {
 
-class Widget : public Ui::RpWidget, protected base::Subscriber {
+class Widget : public Ui::RpWidget {
 public:
 	enum class Direction {
 		Up,
@@ -198,6 +207,7 @@ public:
 		not_null<PeerData*> peer,
 		const QString &author,
 		HistoryItem *item,
+		const QString &reaction,
 		int forwardedCount,
 		bool fromScheduled,
 		QPoint startPosition,
@@ -224,10 +234,12 @@ public:
 	bool unlinkItem(HistoryItem *del);
 	bool unlinkHistory(History *history = nullptr);
 	bool unlinkSession(not_null<Main::Session*> session);
-	bool checkLastInput(bool hasReplyingNotifications);
+	bool checkLastInput(
+		bool hasReplyingNotifications,
+		std::optional<crl::time> lastInputTime);
 
 protected:
-	void enterEventHook(QEvent *e) override;
+	void enterEventHook(QEnterEvent *e) override;
 	void leaveEventHook(QEvent *e) override;
 	void paintEvent(QPaintEvent *e) override;
 	void mousePressEvent(QMouseEvent *e) override;
@@ -265,6 +277,7 @@ private:
 	History *_history = nullptr;
 	std::shared_ptr<Data::CloudImageView> _userpicView;
 	QString _author;
+	QString _reaction;
 	HistoryItem *_item = nullptr;
 	int _forwardedCount = 0;
 	bool _fromScheduled = false;
@@ -296,7 +309,7 @@ public:
 	void stopHiding();
 
 protected:
-	void enterEventHook(QEvent *e) override;
+	void enterEventHook(QEnterEvent *e) override;
 	void leaveEventHook(QEvent *e) override;
 	void mousePressEvent(QMouseEvent *e) override;
 	void mouseReleaseEvent(QMouseEvent *e) override;

@@ -172,7 +172,15 @@ QImage Instance::frame(const FrameRequest &request) const {
 	return player().frame(request, this);
 }
 
-bool Instance::markFrameShown() {
+FrameWithInfo Instance::frameWithInfo(const FrameRequest &request) const {
+	return player().frameWithInfo(request, this);
+}
+
+FrameWithInfo Instance::frameWithInfo() const {
+	return player().frameWithInfo(this);
+}
+
+bool Instance::markFrameShown() const {
 	Expects(_shared != nullptr);
 
 	return _shared->player().markFrameShown();

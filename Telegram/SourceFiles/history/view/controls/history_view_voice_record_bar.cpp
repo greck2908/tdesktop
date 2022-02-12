@@ -9,8 +9,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_send_progress.h"
 #include "base/event_filter.h"
+#include "base/random.h"
 #include "base/unixtime.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "core/application.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
@@ -42,11 +43,11 @@ using SendActionUpdate = VoiceRecordBar::SendActionUpdate;
 using VoiceToSend = VoiceRecordBar::VoiceToSend;
 
 constexpr auto kAudioVoiceUpdateView = crl::time(200);
-constexpr auto kLockDelay = crl::time(100);
-constexpr auto kRecordingUpdateDelta = crl::time(100);
 constexpr auto kAudioVoiceMaxLength = 100 * 60; // 100 minutes
-constexpr auto kMaxSamples =
-	::Media::Player::kDefaultFrequency * kAudioVoiceMaxLength;
+constexpr auto kMaxSamples
+	= ::Media::Player::kDefaultFrequency * kAudioVoiceMaxLength;
+constexpr auto kMinSamples
+	= ::Media::Player::kDefaultFrequency / 5; // 0.2 seconds
 
 constexpr auto kInactiveWaveformBarAlpha = int(255 * 0.6);
 
@@ -99,13 +100,13 @@ enum class FilterType {
 [[nodiscard]] not_null<DocumentData*> DummyDocument(
 		not_null<Data::Session*> owner) {
 	return owner->document(
-		rand_value<DocumentId>(),
+		base::RandomValue<DocumentId>(),
 		uint64(0),
 		QByteArray(),
 		base::unixtime::now(),
 		QVector<MTPDocumentAttribute>(),
 		QString(),
-		QByteArray(),
+		InlineImageLocation(),
 		ImageWithLocation(),
 		ImageWithLocation(),
 		owner->session().mainDcId(),
@@ -131,7 +132,7 @@ void PaintWaveform(
 	const auto samplesCount = wf
 		? wf->size()
 		: ::Media::Player::kWaveformSamplesCount;
-	const auto activeWidth = std::round(availableWidth * progress);
+	const auto activeWidth = base::SafeRound(availableWidth * progress);
 
 	const auto &barWidth = st::historyRecordWaveformBar;
 	const auto barFullWidth = barWidth + st::msgWaveformSkip;
@@ -775,7 +776,7 @@ void RecordLock::drawProgress(Painter &p) {
 			_lockToStopProgress);
 		const auto blockRectTop = anim::interpolateF(
 			size.height() - blockHeight,
-			std::round((size.height() - blockRectHeight) / 2.),
+			base::SafeRound((size.height() - blockRectHeight) / 2.),
 			_lockToStopProgress);
 
 		const auto blockRect = QRectF(
@@ -924,12 +925,9 @@ CancelButton::CancelButton(not_null<Ui::RpWidget*> parent, int height)
 
 void CancelButton::init() {
 	_showProgress.value(
-	) | rpl::start_with_next([=](float64 progress) {
-		const auto hasProgress = (progress > 0.);
-		if (isHidden() == !hasProgress) {
-			setVisible(hasProgress);
-		}
-		update();
+	) | rpl::map(rpl::mappers::_1 > 0.) | rpl::distinct_until_changed(
+	) | rpl::start_with_next([=](bool hasProgress) {
+		setVisible(hasProgress);
 	}, lifetime());
 
 	paintRequest(
@@ -960,6 +958,7 @@ QPoint CancelButton::prepareRippleStartPosition() const {
 
 void CancelButton::requestPaintProgress(float64 progress) {
 	_showProgress = progress;
+	update();
 }
 
 VoiceRecordBar::VoiceRecordBar(
@@ -1193,8 +1192,12 @@ void VoiceRecordBar::init() {
 			if (_startRecordingFilter && _startRecordingFilter()) {
 				return;
 			}
+			_recordingTipRequired = true;
 			_startTimer.callOnce(st::historyRecordVoiceShowDuration);
 		} else if (e->type() == QEvent::MouseButtonRelease) {
+			if (base::take(_recordingTipRequired)) {
+				_recordingTipRequests.fire({});
+			}
 			_startTimer.cancel();
 		}
 	}, lifetime());
@@ -1281,7 +1284,7 @@ void VoiceRecordBar::startRecording() {
 		return;
 	}
 	auto appearanceCallback = [=] {
-		if(_showAnimation.animating()) {
+		if (_showAnimation.animating()) {
 			return;
 		}
 
@@ -1299,6 +1302,7 @@ void VoiceRecordBar::startRecording() {
 		instance()->start();
 		instance()->updated(
 		) | rpl::start_with_next_error([=](const Update &update) {
+			_recordingTipRequired = (update.samples < kMinSamples);
 			recordUpdated(update.level, update.samples);
 		}, [=] {
 			stop(false);
@@ -1314,10 +1318,10 @@ void VoiceRecordBar::startRecording() {
 
 	_send->events(
 	) | rpl::filter([=](not_null<QEvent*> e) {
-		return isTypeRecord()
-			&& !_lock->isLocked()
-			&& (e->type() == QEvent::MouseMove
-				|| e->type() == QEvent::MouseButtonRelease);
+		return (e->type() == QEvent::MouseMove
+			|| e->type() == QEvent::MouseButtonRelease)
+			&& isTypeRecord()
+			&& !_lock->isLocked();
 	}) | rpl::start_with_next([=](not_null<QEvent*> e) {
 		const auto type = e->type();
 		if (type == QEvent::MouseMove) {
@@ -1334,6 +1338,9 @@ void VoiceRecordBar::startRecording() {
 			}
 			computeAndSetLockProgress(mouse->globalPos());
 		} else if (type == QEvent::MouseButtonRelease) {
+			if (base::take(_recordingTipRequired)) {
+				_recordingTipRequests.fire({});
+			}
 			stop(_inField.current());
 		}
 	}, _recordingLifetime);
@@ -1389,8 +1396,9 @@ void VoiceRecordBar::hideFast() {
 void VoiceRecordBar::stopRecording(StopType type) {
 	using namespace ::Media::Capture;
 	if (type == StopType::Cancel) {
-		_cancelRequests.fire({});
-		instance()->stop();
+		instance()->stop(crl::guard(this, [=](Result &&data) {
+			_cancelRequests.fire({});
+		}));
 		return;
 	}
 	instance()->stop(crl::guard(this, [=](Result &&data) {
@@ -1535,6 +1543,10 @@ rpl::producer<> VoiceRecordBar::updateSendButtonTypeRequests() const {
 	return _listenChanges.events();
 }
 
+rpl::producer<> VoiceRecordBar::recordingTipRequests() const {
+	return _recordingTipRequests.events();
+}
+
 bool VoiceRecordBar::isLockPresent() const {
 	return _lockShowing.current();
 }
@@ -1602,7 +1614,7 @@ void VoiceRecordBar::installListenStateFilter() {
 				_listen->playPause();
 				return Result::Cancel;
 			}
-			if (isEnter) {
+			if (isEnter && !_warningShown) {
 				requestToSendWithOptions({});
 				return Result::Cancel;
 			}
@@ -1633,17 +1645,19 @@ void VoiceRecordBar::showDiscardBox(
 			hideAnimated();
 		}
 		close();
+		_warningShown = false;
 		if (callback) {
 			callback();
 		}
 	};
-	Ui::show(Box<ConfirmBox>(
+	_controller->show(Box<Ui::ConfirmBox>(
 		(isListenState()
 			? tr::lng_record_listen_cancel_sure
 			: tr::lng_record_lock_cancel_sure)(tr::now),
 		tr::lng_record_lock_discard(tr::now),
 		st::attentionBoxButton,
 		std::move(sure)));
+	_warningShown = true;
 }
 
 } // namespace HistoryView::Controls

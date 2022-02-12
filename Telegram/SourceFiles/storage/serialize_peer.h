@@ -7,6 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+namespace Main {
+class Session;
+} // namespace Main
+
 namespace Serialize {
 
 int storageImageLocationSize(const StorageImageLocation &location);
@@ -30,7 +34,7 @@ std::optional<ImageLocation> readImageLocation(
 	QDataStream &stream);
 
 uint32 peerSize(not_null<PeerData*> peer);
-void writePeer(QDataStream &stream, PeerData *peer);
+void writePeer(QDataStream &stream, not_null<PeerData*> peer);
 PeerData *readPeer(
 	not_null<Main::Session*> session,
 	int streamAppVersion,

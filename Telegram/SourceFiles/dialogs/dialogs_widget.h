@@ -15,7 +15,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/sender.h"
 #include "api/api_single_message_search.h"
 
-class RPCError;
+#include <QtCore/QTimer>
+
+namespace MTP {
+class Error;
+} // namespace MTP
 
 namespace Main {
 class Session;
@@ -83,16 +87,20 @@ public:
 	void searchMessages(const QString &query, Key inChat = {});
 	void onSearchMore();
 
+	void updateForwardBar();
+
+	[[nodiscard]] rpl::producer<> closeForwardBarRequests() const;
+
+	[[nodiscard]] RowDescriptor resolveChatNext(RowDescriptor from = {}) const;
+	[[nodiscard]] RowDescriptor resolveChatPrevious(RowDescriptor from = {}) const;
+
 	// Float player interface.
 	bool floatPlayerHandleWheelEvent(QEvent *e) override;
 	QRect floatPlayerAvailableRect() override;
 
 	~Widget();
 
-signals:
-	void cancelled();
-
-public slots:
+public Q_SLOTS:
 	void onDraggingScrollDelta(int delta);
 
 	void onListScroll();
@@ -108,7 +116,7 @@ public slots:
 
 	void onChooseByDrag();
 
-private slots:
+private Q_SLOTS:
 	void onDraggingScrollTimer();
 
 protected:
@@ -142,7 +150,7 @@ private:
 	void setupMainMenuToggle();
 	bool searchForPeersRequired(const QString &query) const;
 	void setSearchInChat(Key chat, PeerData *from = nullptr);
-	void showJumpToDate();
+	void showCalendar();
 	void showSearchFrom();
 	void showMainMenu();
 	void clearSearchCache();
@@ -153,7 +161,6 @@ private:
 	void updateSearchFromVisibility(bool fast = false);
 	void updateControlsGeometry();
 	void refreshFolderTopBar();
-	void updateForwardBar();
 	void checkUpdateStatus();
 	void changeOpenedFolder(Data::Folder *folder, anim::type animated);
 	QPixmap grabForFolderSlideAnimation();
@@ -166,9 +173,9 @@ private:
 
 	void searchFailed(
 		SearchRequestType type,
-		const RPCError &error,
+		const MTP::Error &error,
 		mtpRequestId requestId);
-	void peopleFailed(const RPCError &error, mtpRequestId requestId);
+	void peopleFailed(const MTP::Error &error, mtpRequestId requestId);
 
 	void scrollToTop();
 	void setupScrollUpButton();
@@ -241,6 +248,8 @@ private:
 	int _draggingScrollDelta = 0;
 
 	int _topDelta = 0;
+
+	rpl::event_stream<> _closeForwardBarRequests;
 
 };
 

@@ -8,11 +8,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 class HistoryItem;
-class RPCError;
+
+namespace MTP {
+class Error;
+} // namespace MTP
 
 namespace Api {
 
 struct SendOptions;
+struct RemoteFileInfo;
 
 const auto kDefaultEditMessagesErrors = {
 	u"MESSAGE_ID_INVALID"_q,
@@ -26,13 +30,12 @@ void RescheduleMessage(
 
 void EditMessageWithUploadedDocument(
 	HistoryItem *item,
-	const MTPInputFile &file,
-	const std::optional<MTPInputFile> &thumb,
+	RemoteFileInfo info,
 	SendOptions options);
 
 void EditMessageWithUploadedPhoto(
 	HistoryItem *item,
-	const MTPInputFile &file,
+	RemoteFileInfo info,
 	SendOptions options);
 
 mtpRequestId EditCaption(
@@ -40,13 +43,13 @@ mtpRequestId EditCaption(
 	const TextWithEntities &caption,
 	SendOptions options,
 	Fn<void(const MTPUpdates &)> done,
-	Fn<void(const RPCError &)> fail);
+	Fn<void(const MTP::Error &)> fail);
 
 mtpRequestId EditTextMessage(
 	not_null<HistoryItem*> item,
 	const TextWithEntities &caption,
 	SendOptions options,
 	Fn<void(const MTPUpdates &, mtpRequestId requestId)> done,
-	Fn<void(const RPCError &, mtpRequestId requestId)> fail);
+	Fn<void(const MTP::Error &, mtpRequestId requestId)> fail);
 
 } // namespace Api

@@ -11,10 +11,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/click_handler_types.h"
 #include "main/main_session.h"
 #include "ui/wrap/slide_wrap.h"
+#include "ui/text/format_values.h" // Ui::FormatPhone
 #include "ui/text/text_utilities.h"
 #include "lang/lang_keys.h"
 #include "data/data_peer_values.h"
 #include "data/data_shared_media.h"
+#include "data/data_message_reactions.h"
 #include "data/data_folder.h"
 #include "data/data_changes.h"
 #include "data/data_channel.h"
@@ -22,7 +24,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user.h"
 #include "data/data_session.h"
 #include "boxes/peers/edit_peer_permissions_box.h"
-#include "app.h"
 
 namespace Info {
 namespace Profile {
@@ -74,7 +75,7 @@ rpl::producer<TextWithEntities> NameValue(not_null<PeerData*> peer) {
 		UpdateFlag::Name
 	) | rpl::map([=] {
 		return peer->name;
-	}) | Ui::Text::ToWithEntities();;
+	}) | Ui::Text::ToWithEntities();
 }
 
 rpl::producer<TextWithEntities> PhoneValue(not_null<UserData*> user) {
@@ -82,7 +83,7 @@ rpl::producer<TextWithEntities> PhoneValue(not_null<UserData*> user) {
 		user,
 		UpdateFlag::PhoneNumber
 	) | rpl::map([=] {
-		return App::formatPhone(user->phone());
+		return Ui::FormatPhone(user->phone());
 	}) | Ui::Text::ToWithEntities();
 }
 
@@ -113,7 +114,9 @@ rpl::producer<TextWithEntities> UsernameValue(not_null<UserData*> user) {
 	}) | Ui::Text::ToWithEntities();
 }
 
-rpl::producer<TextWithEntities> AboutValue(not_null<PeerData*> peer) {
+TextWithEntities AboutWithEntities(
+		not_null<PeerData*> peer,
+		const QString &value) {
 	auto flags = TextParseLinks | TextParseMentions;
 	const auto user = peer->asUser();
 	const auto isBot = user && user->isBot();
@@ -125,15 +128,19 @@ rpl::producer<TextWithEntities> AboutValue(not_null<PeerData*> peer) {
 	const auto stripExternal = peer->isChat()
 		|| peer->isMegagroup()
 		|| (user && !isBot);
+	auto result = TextWithEntities{ value };
+	TextUtilities::ParseEntities(result, flags);
+	if (stripExternal) {
+		StripExternalLinks(result);
+	}
+	return result;
+}
+
+rpl::producer<TextWithEntities> AboutValue(not_null<PeerData*> peer) {
 	return PlainAboutValue(
 		peer
-	) | Ui::Text::ToWithEntities(
-	) | rpl::map([=](TextWithEntities &&text) {
-		TextUtilities::ParseEntities(text, flags);
-		if (stripExternal) {
-			StripExternalLinks(text);
-		}
-		return std::move(text);
+	) | rpl::map([peer](const QString &value) {
+		return AboutWithEntities(peer, value);
 	});
 }
 
@@ -239,6 +246,25 @@ rpl::producer<int> MembersCountValue(not_null<PeerData*> peer) {
 	Unexpected("User in MembersCountViewer().");
 }
 
+rpl::producer<int> PendingRequestsCountValue(not_null<PeerData*> peer) {
+	if (const auto chat = peer->asChat()) {
+		return peer->session().changes().peerFlagsValue(
+			peer,
+			UpdateFlag::PendingRequests
+		) | rpl::map([=] {
+			return chat->pendingRequestsCount();
+		});
+	} else if (const auto channel = peer->asChannel()) {
+		return peer->session().changes().peerFlagsValue(
+			peer,
+			UpdateFlag::PendingRequests
+		) | rpl::map([=] {
+			return channel->pendingRequestsCount();
+		});
+	}
+	Unexpected("User in MembersCountViewer().");
+}
+
 rpl::producer<int> AdminsCountValue(not_null<PeerData*> peer) {
 	if (const auto chat = peer->asChat()) {
 		return peer->session().changes().peerFlagsValue(
@@ -247,7 +273,7 @@ rpl::producer<int> AdminsCountValue(not_null<PeerData*> peer) {
 		) | rpl::map([=] {
 			return chat->participants.empty()
 				? 0
-				: int(chat->admins.size() + 1); // + creator
+				: int(chat->admins.size() + (chat->creator ? 1 : 0));
 		});
 	} else if (const auto channel = peer->asChannel()) {
 		return peer->session().changes().peerFlagsValue(
@@ -266,7 +292,7 @@ rpl::producer<int> AdminsCountValue(not_null<PeerData*> peer) {
 rpl::producer<int> RestrictionsCountValue(not_null<PeerData*> peer) {
 	const auto countOfRestrictions = [](ChatRestrictions restrictions) {
 		auto count = 0;
-		for (const auto f : Data::ListOfRestrictions()) {
+		for (const auto &f : Data::ListOfRestrictions()) {
 			if (restrictions & f) count++;
 		}
 		return int(Data::ListOfRestrictions().size()) - count;
@@ -376,42 +402,59 @@ rpl::producer<bool> CanAddMemberValue(not_null<PeerData*> peer) {
 	return rpl::single(false);
 }
 
-rpl::producer<bool> VerifiedValue(not_null<PeerData*> peer) {
-	if (const auto user = peer->asUser()) {
-		return Data::PeerFlagValue(user, MTPDuser::Flag::f_verified);
-	} else if (const auto channel = peer->asChannel()) {
-		return Data::PeerFlagValue(
-			channel,
-			MTPDchannel::Flag::f_verified);
-	}
-	return rpl::single(false);
+rpl::producer<int> FullReactionsCountValue(
+		not_null<Main::Session*> session) {
+	const auto reactions = &session->data().reactions();
+	return rpl::single(
+		rpl::empty_value()
+	) | rpl::then(
+		reactions->updates()
+	) | rpl::map([=] {
+		return int(reactions->list(Data::Reactions::Type::Active).size());
+	}) | rpl::distinct_until_changed();
 }
 
-rpl::producer<bool> ScamValue(not_null<PeerData*> peer) {
-	if (const auto user = peer->asUser()) {
-		return Data::PeerFlagValue(user, MTPDuser::Flag::f_scam);
-	} else if (const auto channel = peer->asChannel()) {
-		return Data::PeerFlagValue(
-			channel,
-			MTPDchannel::Flag::f_scam);
+rpl::producer<int> AllowedReactionsCountValue(not_null<PeerData*> peer) {
+	if (peer->isUser()) {
+		return FullReactionsCountValue(&peer->session());
 	}
-	return rpl::single(false);
+	return peer->session().changes().peerFlagsValue(
+		peer,
+		UpdateFlag::Reactions
+	) | rpl::map([=] {
+		if (const auto chat = peer->asChat()) {
+			return int(chat->allowedReactions().size());
+		} else if (const auto channel = peer->asChannel()) {
+			return int(channel->allowedReactions().size());
+		}
+		Unexpected("Peer type in AllowedReactionsCountValue.");
+	});
 }
-// // #feed
-//rpl::producer<int> FeedChannelsCountValue(not_null<Data::Feed*> feed) {
-//	using Flag = Data::FeedUpdateFlag;
-//	return rpl::single(
-//		Data::FeedUpdate{ feed, Flag::Channels }
-//	) | rpl::then(
-//		feed->owner().feedUpdated()
-//	) | rpl::filter([=](const Data::FeedUpdate &update) {
-//		return (update.feed == feed) && (update.flag == Flag::Channels);
-//	}) | rpl::filter([=] {
-//		return feed->channelsLoaded();
-//	}) | rpl::map([=] {
-//		return int(feed->channels().size());
-//	}) | rpl::distinct_until_changed();
-//}
+
+template <typename Flag, typename Peer>
+rpl::producer<Badge> BadgeValueFromFlags(Peer peer) {
+	return Data::PeerFlagsValue(
+		peer,
+		Flag::Verified | Flag::Scam | Flag::Fake
+	) | rpl::map([=](base::flags<Flag> value) {
+		return (value & Flag::Verified)
+			? Badge::Verified
+			: (value & Flag::Scam)
+			? Badge::Scam
+			: (value & Flag::Fake)
+			? Badge::Fake
+			: Badge::None;
+	});
+}
+
+rpl::producer<Badge> BadgeValue(not_null<PeerData*> peer) {
+	if (const auto user = peer->asUser()) {
+		return BadgeValueFromFlags<UserDataFlag>(user);
+	} else if (const auto channel = peer->asChannel()) {
+		return BadgeValueFromFlags<ChannelDataFlag>(channel);
+	}
+	return rpl::single(Badge::None);
+}
 
 } // namespace Profile
 } // namespace Info

@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "base/platform/base_platform_info.h"
+#include "base/random.h"
 #include "ui/effects/animation_value.h"
 #include "core/update_checker.h"
 #include "core/file_location.h"
@@ -27,7 +28,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "window/themes/window_theme.h"
 #include "lang/lang_instance.h"
-#include "facades.h"
 
 #include <QtCore/QDirIterator>
 
@@ -59,7 +59,6 @@ using Database = Storage::Cache::Database;
 
 QString _basePath, _userBasePath, _userDbPath;
 
-bool _started = false;
 TaskQueue *_localLoader = nullptr;
 
 QByteArray _settingsSalt;
@@ -83,7 +82,6 @@ bool _useGlobalBackgroundKeys = false;
 bool _backgroundCanWrite = true;
 
 int32 _oldSettingsVersion = 0;
-bool _settingsRewritten = false;
 bool _settingsRewriteNeeded = false;
 bool _settingsWriteAllowed = false;
 
@@ -92,10 +90,6 @@ enum class WriteMapWhen {
 	Fast,
 	Soon,
 };
-
-bool _working() {
-	return !_basePath.isEmpty();
-}
 
 bool CheckStreamStatus(QDataStream &stream) {
 	if (stream.status() != QDataStream::Ok) {
@@ -132,6 +126,10 @@ bool CheckStreamStatus(QDataStream &stream) {
 void applyReadContext(ReadSettingsContext &&context) {
 	ApplyReadFallbackConfig(context);
 
+	DEBUG_LOG(("Theme: applying context, legacy: %1, day: %2, night: %3"
+		).arg(context.themeKeyLegacy
+		).arg(context.themeKeyDay
+		).arg(context.themeKeyNight));
 	_themeKeyLegacy = context.themeKeyLegacy;
 	_themeKeyDay = context.themeKeyDay;
 	_themeKeyNight = context.themeKeyNight;
@@ -338,8 +336,13 @@ bool _readOldMtpData(bool remove, ReadSettingsContext &context) {
 
 } // namespace
 
+void sync() {
+	Storage::details::Sync();
+}
+
 void finish() {
 	delete base::take(_localLoader);
+	Storage::details::Finish();
 }
 
 void InitialLoadTheme();
@@ -443,7 +446,7 @@ void writeSettings() {
 	FileWriteDescriptor settings(name, _basePath);
 	if (_settingsSalt.isEmpty() || !SettingsKey) {
 		_settingsSalt.resize(LocalEncryptSaltSize);
-		memset_rand(_settingsSalt.data(), _settingsSalt.size());
+		base::RandomFill(_settingsSalt.data(), _settingsSalt.size());
 		SettingsKey = CreateLegacyLocalKey(QByteArray(), _settingsSalt);
 	}
 	settings.writeData(_settingsSalt);
@@ -461,19 +464,6 @@ void writeSettings() {
 	size += sizeof(quint32) + Serialize::bytearraySize(applicationSettings);
 	size += sizeof(quint32) + Serialize::stringSize(cDialogLastPath());
 
-	auto &proxies = Global::RefProxiesList();
-	const auto &proxy = Global::SelectedProxy();
-	auto proxyIt = ranges::find(proxies, proxy);
-	if (proxy.type != MTP::ProxyData::Type::None
-		&& proxyIt == end(proxies)) {
-		proxies.push_back(proxy);
-		proxyIt = end(proxies) - 1;
-	}
-	size += sizeof(quint32) + sizeof(qint32) + sizeof(qint32) + sizeof(qint32);
-	for (const auto &proxy : proxies) {
-		size += sizeof(qint32) + Serialize::stringSize(proxy.host) + sizeof(qint32) + Serialize::stringSize(proxy.user) + Serialize::stringSize(proxy.password);
-	}
-
 	// Theme keys and night mode.
 	size += sizeof(quint32) + sizeof(quint64) * 2 + sizeof(quint32);
 	size += sizeof(quint32) + sizeof(quint64) * 2;
@@ -486,7 +476,6 @@ void writeSettings() {
 	data.stream << quint32(dbiAutoStart) << qint32(cAutoStart());
 	data.stream << quint32(dbiStartMinimized) << qint32(cStartMinimized());
 	data.stream << quint32(dbiSendToMenu) << qint32(cSendToMenu());
-	data.stream << quint32(dbiWorkMode) << qint32(Global::WorkMode().value());
 	data.stream << quint32(dbiSeenTrayTooltip) << qint32(cSeenTrayTooltip());
 	data.stream << quint32(dbiAutoUpdate) << qint32(cAutoUpdate());
 	data.stream << quint32(dbiLastUpdateCheck) << qint32(cLastUpdateCheck());
@@ -496,17 +485,6 @@ void writeSettings() {
 	data.stream << quint32(dbiDialogLastPath) << cDialogLastPath();
 	data.stream << quint32(dbiAnimationsDisabled) << qint32(anim::Disabled() ? 1 : 0);
 
-	data.stream << quint32(dbiConnectionType) << qint32(dbictProxiesList);
-	data.stream << qint32(proxies.size());
-	data.stream << qint32(proxyIt - begin(proxies)) + 1;
-	data.stream << qint32(Global::ProxySettings());
-	data.stream << qint32(Global::UseProxyForCalls() ? 1 : 0);
-	for (const auto &proxy : proxies) {
-		data.stream << qint32(kProxyTypeShift + int(proxy.type));
-		data.stream << proxy.host << qint32(proxy.port) << proxy.user << proxy.password;
-	}
-
-	data.stream << quint32(dbiTryIPv6) << qint32(Global::TryIPv6());
 	data.stream
 		<< quint32(dbiThemeKey)
 		<< quint64(_themeKeyDay)
@@ -528,12 +506,6 @@ void writeSettings() {
 	if (_languagesKey) {
 		data.stream << quint32(dbiLanguagesKey) << quint64(_languagesKey);
 	}
-
-	auto position = cWindowPos();
-	data.stream << quint32(dbiWindowPosition) << qint32(position.x) << qint32(position.y) << qint32(position.w) << qint32(position.h);
-	data.stream << qint32(position.moncrc) << qint32(position.maximized);
-
-	DEBUG_LOG(("Window Pos: Writing to storage %1, %2, %3, %4 (maximized %5)").arg(position.x).arg(position.y).arg(position.w).arg(position.h).arg(Logs::b(position.maximized)));
 
 	settings.writeEncrypted(data, SettingsKey);
 }
@@ -578,7 +550,7 @@ const QString &readAutoupdatePrefixRaw() {
 			return AutoupdatePrefix(value);
 		}
 	}
-	return AutoupdatePrefix("https://updates.tdesktop.com");
+	return AutoupdatePrefix("https://td.telegram.org");
 }
 
 void writeAutoupdatePrefix(const QString &prefix) {
@@ -715,11 +687,13 @@ bool readBackground() {
 	const auto isOldEmptyImage = (bg.stream.status() != QDataStream::Ok);
 	if (isOldEmptyImage
 		|| Data::IsLegacy1DefaultWallPaper(*paper)
+		|| (Data::IsLegacy2DefaultWallPaper(*paper) && bg.version < 3000000)
+		|| (Data::IsLegacy3DefaultWallPaper(*paper) && bg.version < 3000000)
+		|| (Data::IsLegacy4DefaultWallPaper(*paper) && bg.version < 3000000)
 		|| Data::IsDefaultWallPaper(*paper)) {
 		_backgroundCanWrite = false;
-		if (isOldEmptyImage || bg.version < 8005) {
+		if (isOldEmptyImage || bg.version < 3000000) {
 			Window::Theme::Background()->set(Data::DefaultWallPaper());
-			Window::Theme::Background()->setTile(false);
 		} else {
 			Window::Theme::Background()->set(*paper);
 		}
@@ -767,14 +741,12 @@ bool readBackground() {
 	} else {
 		auto buffer = QBuffer(&imageData);
 		auto reader = QImageReader(&buffer);
-#ifndef OS_MAC_OLD
 		reader.setAutoTransform(true);
-#endif // OS_MAC_OLD
 		if (!reader.read(&image)) {
 			image = QImage();
 		}
 	}
-	if (!image.isNull() || paper->backgroundColor()) {
+	if (!image.isNull() || !paper->backgroundColors().empty()) {
 		_backgroundCanWrite = false;
 		Window::Theme::Background()->set(*paper, std::move(image));
 		_backgroundCanWrite = true;
@@ -902,6 +874,7 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 
 	FileReadDescriptor theme;
 	if (!ReadEncryptedFile(theme, key, _basePath, SettingsKey)) {
+		DEBUG_LOG(("Theme: Could not read file for key: %1").arg(key));
 		return {};
 	}
 
@@ -909,10 +882,11 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 	auto result = Saved();
 	auto &object = result.object;
 	auto &cache = result.cache;
+	auto field1 = qint32();
+	auto field2 = quint32();
 	theme.stream >> object.content;
 	theme.stream >> tag >> object.pathAbsolute;
 	if (tag == kThemeNewPathRelativeTag) {
-		auto creator = qint32();
 		theme.stream
 			>> object.pathRelative
 			>> object.cloud.id
@@ -920,12 +894,14 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 			>> object.cloud.slug
 			>> object.cloud.title
 			>> object.cloud.documentId
-			>> creator;
-		object.cloud.createdBy = creator;
+			>> field1;
 	} else {
 		object.pathRelative = tag;
 	}
 	if (theme.stream.status() != QDataStream::Ok) {
+		DEBUG_LOG(("Theme: Bad status for key: %1, tag: %2"
+			).arg(key
+			).arg(tag));
 		return {};
 	}
 
@@ -953,18 +929,32 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 			}
 		}
 	}
+	int32 cachePaletteChecksum = 0;
+	int32 cacheContentChecksum = 0;
+	QByteArray cacheColors;
+	QByteArray cacheBackground;
+	theme.stream
+		>> cachePaletteChecksum
+		>> cacheContentChecksum
+		>> cacheColors
+		>> cacheBackground
+		>> field2;
 	if (!ignoreCache) {
-		quint32 backgroundIsTiled = 0;
-		theme.stream
-			>> cache.paletteChecksum
-			>> cache.contentChecksum
-			>> cache.colors
-			>> cache.background
-			>> backgroundIsTiled;
-		cache.tiled = (backgroundIsTiled == 1);
 		if (theme.stream.status() != QDataStream::Ok) {
+			DEBUG_LOG(("Theme: Bad status for cache, key: %1, tag: %2"
+				).arg(key
+				).arg(tag));
 			return {};
 		}
+		cache.paletteChecksum = cachePaletteChecksum;
+		cache.contentChecksum = cacheContentChecksum;
+		cache.colors = std::move(cacheColors);
+		cache.background = std::move(cacheBackground);
+		cache.tiled = ((field2 & quint32(0xFF)) == 1);
+	}
+	if (tag == kThemeNewPathRelativeTag) {
+		object.cloud.createdBy = UserId(
+			((quint64(field2) >> 8) << 32) | quint64(quint32(field1)));
 	}
 	return result;
 }
@@ -972,8 +962,12 @@ Window::Theme::Saved readThemeUsingKey(FileKey key) {
 std::optional<QString> InitialLoadThemeUsingKey(FileKey key) {
 	auto read = readThemeUsingKey(key);
 	const auto result = read.object.pathAbsolute;
+	if (read.object.content.isEmpty()) {
+		DEBUG_LOG(("Theme: Could not read content for key: %1").arg(key));
+	}
 	if (read.object.content.isEmpty()
 		|| !Window::Theme::Initialize(std::move(read))) {
+		DEBUG_LOG(("Theme: Could not initialized for key: %1").arg(key));
 		return std::nullopt;
 	}
 	return result;
@@ -983,13 +977,23 @@ void writeTheme(const Window::Theme::Saved &saved) {
 	using namespace Window::Theme;
 
 	if (_themeKeyLegacy) {
+		DEBUG_LOG(("Theme: skipping write, because legacy: %1"
+			).arg(_themeKeyLegacy));
 		return;
 	}
 	auto &themeKey = IsNightMode()
 		? _themeKeyNight
 		: _themeKeyDay;
+	DEBUG_LOG(("Theme: writing (night: %1), key_day: %2, key_night: %3"
+		).arg(Logs::b(IsNightMode())
+		).arg(_themeKeyDay
+		).arg(_themeKeyNight));
 	if (saved.object.content.isEmpty()) {
 		if (themeKey) {
+			if (IsNightMode()) {
+				DEBUG_LOG(("Theme: cleared for night mode."));
+				SetNightModeValue(false);
+			}
 			ClearKey(themeKey, _basePath);
 			themeKey = 0;
 			writeSettings();
@@ -1017,6 +1021,11 @@ void writeTheme(const Window::Theme::Saved &saved) {
 		+ Serialize::bytearraySize(cache.colors)
 		+ Serialize::bytearraySize(cache.background)
 		+ sizeof(quint32);
+	const auto bareCreatedById = object.cloud.createdBy.bare;
+	Assert((bareCreatedById & PeerId::kChatTypeMask) == bareCreatedById);
+	const auto field1 = qint32(quint32(bareCreatedById & 0xFFFFFFFFULL));
+	const auto field2 = quint32(cache.tiled ? 1 : 0)
+		| (quint32(bareCreatedById >> 32) << 8);
 	EncryptedDescriptor data(size);
 	data.stream
 		<< object.content
@@ -1028,12 +1037,12 @@ void writeTheme(const Window::Theme::Saved &saved) {
 		<< object.cloud.slug
 		<< object.cloud.title
 		<< object.cloud.documentId
-		<< qint32(object.cloud.createdBy)
+		<< field1
 		<< cache.paletteChecksum
 		<< cache.contentChecksum
 		<< cache.colors
 		<< cache.background
-		<< quint32(cache.tiled ? 1 : 0);
+		<< field2;
 
 	FileWriteDescriptor file(themeKey, _basePath);
 	file.writeEncrypted(data, SettingsKey);
@@ -1049,17 +1058,36 @@ void InitialLoadTheme() {
 		: (Window::Theme::IsNightMode()
 			? _themeKeyNight
 			: _themeKeyDay);
+	DEBUG_LOG(("Theme: initial load (night: %1), "
+		"key_legacy: %2, key_day: %3, key_night: %4"
+		).arg(Logs::b(Window::Theme::IsNightMode())
+		).arg(_themeKeyLegacy
+		).arg(_themeKeyDay
+		).arg(_themeKeyNight));
 	if (!key) {
+		if (Window::Theme::IsNightMode()) {
+			DEBUG_LOG(("Theme: zero key for night mode."));
+			Window::Theme::SetNightModeValue(false);
+		}
 		return;
 	} else if (const auto path = InitialLoadThemeUsingKey(key)) {
+		DEBUG_LOG(("Theme: loaded with result: %1").arg(*path));
 		if (_themeKeyLegacy) {
 			Window::Theme::SetNightModeValue(*path
 				== Window::Theme::NightThemePath());
 			(Window::Theme::IsNightMode()
 				? _themeKeyNight
 				: _themeKeyDay) = base::take(_themeKeyLegacy);
+			DEBUG_LOG(("Theme: now (night: %1), "
+				"key_legacy: %2, key_day: %3, key_night: %4 (path: %5)"
+				).arg(Logs::b(Window::Theme::IsNightMode())
+				).arg(_themeKeyLegacy
+				).arg(_themeKeyDay
+				).arg(_themeKeyNight
+				).arg(*path));
 		}
 	} else {
+		DEBUG_LOG(("Theme: could not load, clearing.."));
 		clearTheme();
 	}
 }

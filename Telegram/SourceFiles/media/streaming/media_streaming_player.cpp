@@ -25,7 +25,7 @@ constexpr auto kMsFrequency = 1000; // 1000 ms per second.
 
 // If we played for 3 seconds and got stuck it looks like we're loading
 // slower than we're playing, so load full file in that case.
-constexpr auto kLoadFullIfStuckAfterPlayback = 3 * crl::time(1000);
+//constexpr auto kLoadFullIfStuckAfterPlayback = 3 * crl::time(1000);
 
 [[nodiscard]] bool FullTrackReceived(const TrackState &state) {
 	return (state.duration != kTimeUnknown)
@@ -63,6 +63,7 @@ void SaveValidVideoInformation(
 	to.size = from.size;
 	to.cover = std::move(from.cover);
 	to.rotation = from.rotation;
+	to.alpha = from.alpha;
 }
 
 void SaveValidStartInformation(Information &to, Information &&from) {
@@ -233,6 +234,10 @@ void Player::videoPlayedTill(crl::time position) {
 	trackPlayedTill(*_video, _information.video.state, position);
 }
 
+Mode Player::fileOpenMode() {
+	return _options.mode;
+}
+
 bool Player::fileReady(int headerSize, Stream &&video, Stream &&audio) {
 	_waitingForData = false;
 
@@ -348,8 +353,6 @@ void Player::fileWaitingForData() {
 bool Player::fileProcessPackets(
 		base::flat_map<int, std::vector<FFmpeg::Packet>> &packets) {
 	_waitingForData = false;
-	auto audioTill = kTimeUnknown;
-	auto videoTill = kTimeUnknown;
 	for (auto &[index, list] : packets) {
 		if (list.empty()) {
 			continue;
@@ -879,6 +882,26 @@ QImage Player::frame(
 	Expects(_video != nullptr);
 
 	return _video->frame(request, instance);
+}
+
+FrameWithInfo Player::frameWithInfo(
+		const FrameRequest &request,
+		const Instance *instance) const {
+	Expects(_video != nullptr);
+
+	return _video->frameWithInfo(request, instance);
+}
+
+FrameWithInfo Player::frameWithInfo(const Instance *instance) const {
+	Expects(_video != nullptr);
+
+	return _video->frameWithInfo(instance);
+}
+
+QImage Player::currentFrameImage() const {
+	Expects(_video != nullptr);
+
+	return _video->currentFrameImage();
 }
 
 void Player::unregisterInstance(not_null<const Instance*> instance) {

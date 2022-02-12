@@ -7,12 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_types.h"
 
-#include "data/data_document.h"
-#include "data/data_session.h"
 #include "ui/widgets/input_fields.h"
 #include "storage/cache/storage_cache_types.h"
 #include "base/openssl_help.h"
-#include "main/main_session.h"
 
 namespace Data {
 namespace {
@@ -22,11 +19,8 @@ constexpr auto kDocumentCacheMask = 0x00000000000000FFULL;
 constexpr auto kDocumentThumbCacheTag = 0x0000000000000200ULL;
 constexpr auto kDocumentThumbCacheMask = 0x00000000000000FFULL;
 constexpr auto kWebDocumentCacheTag = 0x0000020000000000ULL;
-constexpr auto kWebDocumentCacheMask = 0x000000FFFFFFFFFFULL;
 constexpr auto kUrlCacheTag = 0x0000030000000000ULL;
-constexpr auto kUrlCacheMask = 0x000000FFFFFFFFFFULL;
 constexpr auto kGeoPointCacheTag = 0x0000040000000000ULL;
-constexpr auto kGeoPointCacheMask = 0x000000FFFFFFFFFFULL;
 
 } // namespace
 
@@ -86,36 +80,13 @@ Storage::Cache::Key GeoPointCacheKey(const GeoPointLocation &location) {
 		| (uint32(location.height) & 0xFFFFU);
 	return Storage::Cache::Key{
 		Data::kGeoPointCacheTag | (uint64(zoomscale) << 32) | widthheight,
-		(uint64(std::round(std::abs(location.lat + 360.) * 1000000)) << 32)
-		| uint64(std::round(std::abs(location.lon + 360.) * 1000000))
+		(uint64(base::SafeRound(
+			std::abs(location.lat + 360.) * 1000000)) << 32)
+		| uint64(base::SafeRound(std::abs(location.lon + 360.) * 1000000))
 	};
 }
 
 } // namespace Data
-
-uint32 AudioMsgId::CreateExternalPlayId() {
-	static auto Result = uint32(0);
-	return ++Result ? Result : ++Result;
-}
-
-AudioMsgId AudioMsgId::ForVideo() {
-	auto result = AudioMsgId();
-	result._externalPlayId = CreateExternalPlayId();
-	result._type = Type::Video;
-	return result;
-}
-
-void AudioMsgId::setTypeFromAudio() {
-	if (_audio->isVoiceMessage() || _audio->isVideoMessage()) {
-		_type = Type::Voice;
-	} else if (_audio->isVideoFile()) {
-		_type = Type::Video;
-	} else if (_audio->isAudioFile()) {
-		_type = Type::Song;
-	} else {
-		_type = Type::Unknown;
-	}
-}
 
 void MessageCursor::fillFrom(not_null<const Ui::InputField*> field) {
 	const auto cursor = field->textCursor();
@@ -131,10 +102,6 @@ void MessageCursor::applyTo(not_null<Ui::InputField*> field) {
 	cursor.setPosition(position, QTextCursor::KeepAnchor);
 	field->setTextCursor(cursor);
 	field->scrollTo(scroll);
-}
-
-HistoryItem *FileClickHandler::getActionItem() const {
-	return _session->data().message(context());
 }
 
 PeerId PeerFromMessage(const MTPmessage &message) {
@@ -167,4 +134,13 @@ TimeId DateFromMessage(const MTPmessage &message) {
 	}, [](const auto &message) {
 		return message.vdate().v;
 	});
+}
+
+bool GoodStickerDimensions(int width, int height) {
+	// Show all .webp (except very large ones) as stickers,
+	// allow to open them in media viewer to see details.
+	constexpr auto kLargetsStickerSide = 2560;
+	return (width > 0)
+		&& (height > 0)
+		&& (width * height <= kLargetsStickerSide * kLargetsStickerSide);
 }

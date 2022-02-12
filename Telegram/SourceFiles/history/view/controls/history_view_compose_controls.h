@@ -34,6 +34,7 @@ namespace Data {
 struct MessagePosition;
 struct Draft;
 class DraftKey;
+enum class PreviewState : char;
 } // namespace Data
 
 namespace InlineBots {
@@ -48,6 +49,8 @@ namespace Ui {
 class SendButton;
 class IconButton;
 class EmojiButton;
+class SendAsButton;
+class SilentToggle;
 } // namespace Ui
 
 namespace Main {
@@ -67,6 +70,7 @@ namespace HistoryView {
 
 namespace Controls {
 class VoiceRecordBar;
+class TTLButton;
 } // namespace Controls
 
 class FieldHeader;
@@ -81,6 +85,7 @@ public:
 	using VoiceToSend = Controls::VoiceToSend;
 	using SendActionUpdate = Controls::SendActionUpdate;
 	using SetHistoryArgs = Controls::SetHistoryArgs;
+	using ReplyNextRequest = Controls::ReplyNextRequest;
 	using FieldHistoryAction = Ui::InputField::HistoryAction;
 
 	enum class Mode {
@@ -98,6 +103,7 @@ public:
 	[[nodiscard]] Main::Session &session() const;
 	void setHistory(SetHistoryArgs &&args);
 	void setCurrentDialogsEntryState(Dialogs::EntryState state);
+	[[nodiscard]] PeerData *sendAsPeer() const;
 
 	void finishAnimating();
 
@@ -117,10 +123,15 @@ public:
 	[[nodiscard]] rpl::producer<FileChosen> fileChosen() const;
 	[[nodiscard]] rpl::producer<PhotoChosen> photoChosen() const;
 	[[nodiscard]] rpl::producer<Data::MessagePosition> scrollRequests() const;
-	[[nodiscard]] rpl::producer<not_null<QKeyEvent*>> keyEvents() const;
 	[[nodiscard]] rpl::producer<InlineChosen> inlineResultChosen() const;
 	[[nodiscard]] rpl::producer<SendActionUpdate> sendActionUpdates() const;
 	[[nodiscard]] rpl::producer<not_null<QEvent*>> viewportEvents() const;
+	[[nodiscard]] auto scrollKeyEvents() const
+	-> rpl::producer<not_null<QKeyEvent*>>;
+	[[nodiscard]] auto editLastMessageRequests() const
+	-> rpl::producer<not_null<QKeyEvent*>>;
+	[[nodiscard]] auto replyNextRequests() const
+	-> rpl::producer<ReplyNextRequest>;
 
 	using MimeDataHook = Fn<bool(
 		not_null<const QMimeData*> data,
@@ -164,6 +175,8 @@ public:
 	void applyDraft(
 		FieldHistoryAction fieldHistoryAction = FieldHistoryAction::Clear);
 
+	Fn<void()> restoreTextCallback(const QString &insertTextOnCancel) const;
+
 private:
 	enum class TextUpdateEvent {
 		SaveDraft = (1 << 0),
@@ -184,12 +197,16 @@ private:
 	void initField();
 	void initTabbedSelector();
 	void initSendButton();
+	void initSendAsButton();
 	void initWebpageProcess();
 	void initWriteRestriction();
 	void initVoiceRecordBar();
 	void initAutocomplete();
+	void initKeyHandler();
 	void updateSubmitSettings();
 	void updateSendButtonType();
+	void updateMessagesTTLShown();
+	bool updateSendAsButton();
 	void updateHeight();
 	void updateWrappingVisibility();
 	void updateControlsVisibility();
@@ -208,8 +225,9 @@ private:
 
 	void orderControls();
 	void checkAutocomplete();
-	void updateStickersByEmoji();
+	bool updateStickersByEmoji();
 	void updateFieldPlaceholder();
+	void updateSilentBroadcast();
 	void editMessage(not_null<HistoryItem*> item);
 
 	void escape();
@@ -227,6 +245,8 @@ private:
 	void clearInlineBot();
 	void inlineBotChanged();
 
+	bool hasSilentBroadcastToggle() const;
+
 	// Look in the _field for the inline bot and query string.
 	void updateInlineBotQuery();
 
@@ -234,7 +254,7 @@ private:
 	void applyInlineBotQuery(UserData *bot, const QString &query);
 
 	void inlineBotResolveDone(const MTPcontacts_ResolvedPeer &result);
-	void inlineBotResolveFail(const RPCError &error, const QString &username);
+	void inlineBotResolveFail(const MTP::Error &error, const QString &username);
 
 	[[nodiscard]] Data::DraftKey draftKey(
 		DraftType type = DraftType::Normal) const;
@@ -254,6 +274,9 @@ private:
 		FieldHistoryAction fieldHistoryAction = FieldHistoryAction::Clear);
 	void saveFieldToHistoryLocalDraft();
 
+	void unregisterDraftSources();
+	void registerDraftSource();
+
 	const not_null<QWidget*> _parent;
 	const not_null<Window::SessionController*> _window;
 	History *_history = nullptr;
@@ -271,6 +294,9 @@ private:
 	const not_null<Ui::EmojiButton*> _tabbedSelectorToggle;
 	const not_null<Ui::InputField*> _field;
 	const not_null<Ui::IconButton*> _botCommandStart;
+	std::unique_ptr<Ui::SendAsButton> _sendAs;
+	std::unique_ptr<Ui::SilentToggle> _silent;
+	std::unique_ptr<Controls::TTLButton> _ttlInfo;
 
 	std::unique_ptr<InlineBots::Layout::Widget> _inlineResults;
 	std::unique_ptr<ChatHelpers::TabbedPanel> _tabbedPanel;
@@ -289,6 +315,10 @@ private:
 	rpl::event_stream<InlineChosen> _inlineResultChosen;
 	rpl::event_stream<SendActionUpdate> _sendActionUpdates;
 	rpl::event_stream<QString> _sendCommandRequests;
+	rpl::event_stream<not_null<QKeyEvent*>> _scrollKeyEvents;
+	rpl::event_stream<not_null<QKeyEvent*>> _editLastMessageRequests;
+	rpl::event_stream<> _attachRequests;
+	rpl::event_stream<ReplyNextRequest> _replyNextRequests;
 
 	TextUpdateEvents _textUpdateEvents = TextUpdateEvents()
 		| TextUpdateEvent::SaveDraft
@@ -307,7 +337,8 @@ private:
 	bool _botCommandShown = false;
 
 	Fn<void()> _previewCancel;
-	bool _previewCancelled = false;
+	Fn<void(Data::PreviewState)> _previewSetState;
+	Data::PreviewState _previewState = Data::PreviewState();
 
 	rpl::lifetime _uploaderSubscriptions;
 

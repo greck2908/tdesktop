@@ -11,7 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/settings_codes.h"
 #include "settings/settings_chat.h"
 #include "boxes/language_box.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "boxes/about_box.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/slide_wrap.h"
@@ -31,14 +31,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_account.h"
 #include "main/main_app_config.h"
 #include "apiwrap.h"
-#include "api/api_sensitive_content.h"
+#include "api/api_cloud_password.h"
 #include "api/api_global_privacy.h"
+#include "api/api_sensitive_content.h"
+#include "window/window_controller.h"
 #include "window/window_session_controller.h"
 #include "core/click_handler_types.h"
+#include "core/application.h"
 #include "base/call_delayed.h"
 #include "facades.h"
-#include "app.h"
 #include "styles/style_settings.h"
+#include "base/platform/base_platform_info.h"
 
 namespace Settings {
 
@@ -167,6 +170,7 @@ bool HasInterfaceScale() {
 }
 
 void SetupInterfaceScale(
+		not_null<Window::Controller*> window,
 		not_null<Ui::VerticalLayout*> container,
 		bool icon) {
 	if (!HasInterfaceScale()) {
@@ -226,7 +230,7 @@ void SetupInterfaceScale(
 			const auto confirmed = crl::guard(button, [=] {
 				cSetConfigScale(scale);
 				Local::writeSettings();
-				App::restart();
+				Core::Restart();
 			});
 			const auto cancelled = crl::guard(button, [=] {
 				base::call_delayed(
@@ -234,7 +238,7 @@ void SetupInterfaceScale(
 					button,
 					[=] { repeatSetScale(cConfigScale(), repeatSetScale); });
 			});
-			Ui::show(Box<ConfirmBox>(
+			window->show(Box<Ui::ConfirmBox>(
 				tr::lng_settings_need_restart(tr::now),
 				tr::lng_settings_restart_now(tr::now),
 				confirmed,
@@ -246,7 +250,11 @@ void SetupInterfaceScale(
 	};
 
 	const auto label = [](int scale) {
-		return QString::number(scale) + '%';
+		if constexpr (Platform::IsMac()) {
+			return QString::number(scale) + '%';
+		} else {
+			return QString::number(scale * cIntRetinaFactor()) + '%';
+		}
 	};
 	const auto scaleByIndex = [](int index) {
 		return *(ScaleValues.begin() + index);
@@ -259,6 +267,8 @@ void SetupInterfaceScale(
 	slider->sectionActivated(
 	) | rpl::map([=](int section) {
 		return scaleByIndex(section);
+	}) | rpl::filter([=](int scale) {
+		return cEvalScale(scale) != cEvalScale(cConfigScale());
 	}) | rpl::start_with_next([=](int scale) {
 		setScale(
 			(scale == cScreenScale()) ? style::kScaleAuto : scale,
@@ -319,18 +329,18 @@ void SetupHelp(
 						Ui::showPeerHistory(user, ShowAtUnreadMsgId);
 					}
 				});
-			}).fail([=](const RPCError &error) {
+			}).fail([=] {
 				*requestId = 0;
 			}).send();
 		});
-		auto box = Box<ConfirmBox>(
+		auto box = Box<Ui::ConfirmBox>(
 			tr::lng_settings_ask_sure(tr::now),
 			tr::lng_settings_ask_ok(tr::now),
 			tr::lng_settings_faq_button(tr::now),
 			sure,
 			OpenFaq);
 		box->setStrictCancel(true);
-		Ui::show(std::move(box));
+		controller->show(std::move(box));
 	});
 
 	AddSkip(container);
@@ -366,7 +376,7 @@ void Main::setupContent(not_null<Window::SessionController*> controller) {
 	if (HasInterfaceScale()) {
 		AddDivider(content);
 		AddSkip(content);
-		SetupInterfaceScale(content);
+		SetupInterfaceScale(&controller->window(), content);
 		AddSkip(content);
 	}
 	SetupHelp(controller, content);
@@ -374,7 +384,7 @@ void Main::setupContent(not_null<Window::SessionController*> controller) {
 	Ui::ResizeFitChild(this, content);
 
 	// If we load this in advance it won't jump when we open its' section.
-	controller->session().api().reloadPasswordState();
+	controller->session().api().cloudPassword().reload();
 	controller->session().api().reloadContactSignupSilent();
 	controller->session().api().sensitiveContent().reload();
 	controller->session().api().globalPrivacy().reload();

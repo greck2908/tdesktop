@@ -169,12 +169,12 @@ void VideoBubble::prepareFrame() {
 	for (; from != till; from += fromPerLine, to += toPerLine) {
 		memcpy(to, from, lineSize);
 	}
-	Images::prepareRound(
-		_frame,
+	_frame = Images::Round(
+		std::move(_frame),
 		ImageRoundRadius::Large,
 		RectPart::AllCorners,
-		QRect(QPoint(), size));
-	_frame = std::move(_frame).mirrored(true, false);
+		QRect(QPoint(), size)
+	).mirrored(true, false);
 }
 
 void VideoBubble::setState(Webrtc::VideoState state) {
@@ -209,7 +209,7 @@ void VideoBubble::updateSizeToFrame(QSize frame) {
 		size = frame.scaled((_min + _max) / 2, Qt::KeepAspectRatio);
 	} else {
 		const auto area = size.width() * size.height();
-		const auto w = int(std::round(std::max(
+		const auto w = int(base::SafeRound(std::max(
 			std::sqrt((frame.width() * float64(area)) / (frame.height() * 1.)),
 			1.)));
 		const auto h = area / w;

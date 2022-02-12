@@ -80,12 +80,12 @@ QString StateDescription(const BlobState &state, tr::phrase<> activeText) {
 		return activeText(tr::now);
 	}, [](const Loading &data) {
 		const auto percent = (data.size > 0)
-			? snap((data.already * 100) / float64(data.size), 0., 100.)
+			? std::clamp((data.already * 100) / float64(data.size), 0., 100.)
 			: 0.;
 		return tr::lng_emoji_set_loading(
 			tr::now,
 			lt_percent,
-			QString::number(int(std::round(percent))) + '%',
+			QString::number(int(base::SafeRound(percent))) + '%',
 			lt_progress,
 			Ui::FormatDownloadText(data.already, data.size));
 	}, [](const Failed &data) {
@@ -126,9 +126,6 @@ rpl::producer<BlobState> BlobLoader::state() const {
 void BlobLoader::setImplementation(
 		std::unique_ptr<MTP::DedicatedLoader> loader) {
 	_implementation = std::move(loader);
-	auto convert = [](auto value) {
-		return BlobState(value);
-	};
 	_state = _implementation->progress(
 	) | rpl::map([](const Loading &state) {
 		return BlobState(state);

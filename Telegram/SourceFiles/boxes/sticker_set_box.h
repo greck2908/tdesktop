@@ -11,13 +11,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 #include "data/stickers/data_stickers.h"
 
-class ConfirmBox;
-
 namespace Window {
 class SessionController;
 } // namespace Window
 
 namespace Ui {
+class ConfirmBox;
 class PlainShadow;
 } // namespace Ui
 
@@ -26,7 +25,7 @@ public:
 	StickerSetBox(
 		QWidget*,
 		not_null<Window::SessionController*> controller,
-		const MTPInputStickerSet &set);
+		const StickerSetIdentifier &set);
 
 	static QPointer<Ui::BoxContent> Show(
 		not_null<Window::SessionController*> controller,
@@ -38,13 +37,18 @@ protected:
 	void resizeEvent(QResizeEvent *e) override;
 
 private:
+	enum class Error {
+		NotFound,
+	};
+
 	void updateTitleAndButtons();
 	void updateButtons();
 	void addStickers();
 	void copyStickersLink();
+	void handleError(Error error);
 
 	const not_null<Window::SessionController*> _controller;
-	MTPInputStickerSet _set;
+	const StickerSetIdentifier _set;
 
 	class Inner;
 	QPointer<Inner> _inner;

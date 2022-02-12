@@ -9,14 +9,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "platform/platform_launcher.h"
 #include "platform/platform_specific.h"
+#include "platform/linux/linux_desktop_environment.h"
 #include "base/platform/base_platform_info.h"
 #include "base/platform/base_platform_file_utilities.h"
 #include "ui/main_queue_processor.h"
-#include "ui/ui_utility.h"
 #include "core/crash_reports.h"
 #include "core/update_checker.h"
 #include "core/sandbox.h"
 #include "base/concurrent_timer.h"
+#include "base/options.h"
+
+#include <QtCore/QLoggingCategory>
 
 namespace Core {
 namespace {
@@ -58,7 +61,12 @@ FilteredCommandLineArguments::FilteredCommandLineArguments(
 		pushArgument("cocoa:fontengine=freetype");
 #endif // !Q_OS_WIN
 	}
-#endif // Q_OS_WIN || Q_OS_MAC
+#elif defined Q_OS_UNIX
+	if (Platform::DesktopEnvironment::IsGnome() && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
+		pushArgument("-platform");
+		pushArgument("xcb;wayland");
+	}
+#endif // Q_OS_WIN || Q_OS_MAC || Q_OS_UNIX
 
 	pushArgument(nullptr);
 }
@@ -98,6 +106,9 @@ void ComputeDebugMode() {
 	if (cDebugMode()) {
 		Logs::SetDebugEnabled(true);
 	}
+	if (Logs::DebugEnabled()) {
+		QLoggingCategory::setFilterRules("qt.qpa.gl.debug=true");
+	}
 }
 
 void ComputeExternalUpdater() {
@@ -108,7 +119,7 @@ void ComputeExternalUpdater() {
 		while (!fileStream.atEnd()) {
 			const auto path = fileStream.readLine();
 
-			if (path == (cWorkingDir() + cExeName())) {
+			if (path == (cExeDir() + cExeName())) {
 				SetUpdaterDisabledAtStartup();
 				return;
 			}
@@ -183,16 +194,14 @@ bool MoveLegacyAlphaFolder(const QString &folder, const QString &file) {
 		const auto newFile = was + "/tdata/alpha";
 		if (QFile::exists(oldFile) && !QFile::exists(newFile)) {
 			if (!QFile(oldFile).copy(newFile)) {
-				LOG(("FATAL: Could not copy '%1' to '%2'"
-					).arg(oldFile
-					).arg(newFile));
+				LOG(("FATAL: Could not copy '%1' to '%2'").arg(
+					oldFile,
+					newFile));
 				return false;
 			}
 		}
 		if (!QDir().rename(was, now)) {
-			LOG(("FATAL: Could not rename '%1' to '%2'"
-				).arg(was
-				).arg(now));
+			LOG(("FATAL: Could not rename '%1' to '%2'").arg(was, now));
 			return false;
 		}
 	}
@@ -268,16 +277,12 @@ std::unique_ptr<Launcher> Launcher::Create(int argc, char *argv[]) {
 	return std::make_unique<Platform::Launcher>(argc, argv);
 }
 
-Launcher::Launcher(
-	int argc,
-	char *argv[],
-	const QString &deviceModel,
-	const QString &systemVersion)
+Launcher::Launcher(int argc, char *argv[])
 : _argc(argc)
 , _argv(argv)
-, _baseIntegration(_argc, _argv)
-, _deviceModel(deviceModel)
-, _systemVersion(systemVersion) {
+, _baseIntegration(_argc, _argv) {
+	crl::toggle_fp_exceptions(true);
+
 	base::Integration::Set(&_baseIntegration);
 }
 
@@ -285,26 +290,14 @@ void Launcher::init() {
 	_arguments = readArguments(_argc, _argv);
 
 	prepareSettings();
-
-	static QtMessageHandler originalMessageHandler = nullptr;
-	originalMessageHandler = qInstallMessageHandler([](
-		QtMsgType type,
-		const QMessageLogContext &context,
-		const QString &msg) {
-		if (originalMessageHandler) {
-			originalMessageHandler(type, context, msg);
-		}
-		if (Logs::DebugEnabled() || !Logs::started()) {
-			LOG((msg));
-		}
-	});
+	initQtMessageLogging();
 
 	QApplication::setApplicationName(qsl("TelegramDesktop"));
-
-#ifndef OS_MAC_OLD
 	QApplication::setAttribute(Qt::AA_DisableHighDpiScaling, true);
-#endif // OS_MAC_OLD
+	QApplication::setHighDpiScaleFactorRoundingPolicy(
+		Qt::HighDpiScaleFactorRoundingPolicy::Floor);
 
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 	// fallback session management is useless for tdesktop since it doesn't have
 	// any "are you sure you want to close this window?" dialogs
 	// but it produces bugs like https://github.com/telegramdesktop/tdesktop/issues/5022
@@ -312,6 +305,7 @@ void Launcher::init() {
 	// and https://github.com/telegramdesktop/tdesktop/issues/948
 	// more info: https://doc.qt.io/qt-5/qguiapplication.html#isFallbackSessionManagementEnabled
 	QApplication::setFallbackSessionManagementEnabled(false);
+#endif // Qt < 6.0.0
 
 	initHook();
 }
@@ -327,11 +321,27 @@ int Launcher::exec() {
 
 	// Must be started before Platform is started.
 	Logs::start(this);
+	base::options::init(cWorkingDir() + "tdata/experimental_options.json");
+
+	if (Logs::DebugEnabled()) {
+		const auto openalLogPath = QDir::toNativeSeparators(
+			cWorkingDir() + qsl("DebugLogs/last_openal_log.txt"));
+
+		qputenv("ALSOFT_LOGLEVEL", "3");
+
+#ifdef Q_OS_WIN
+		_wputenv_s(
+			L"ALSOFT_LOGFILE",
+			openalLogPath.toStdWString().c_str());
+#else // Q_OS_WIN
+		qputenv(
+			"ALSOFT_LOGFILE",
+			QFile::encodeName(openalLogPath));
+#endif // !Q_OS_WIN
+	}
 
 	// Must be started before Sandbox is created.
 	Platform::start();
-	Ui::DisableCustomScaling();
-
 	auto result = executeApplication();
 
 	DEBUG_LOG(("Telegram finished, result: %1").arg(result));
@@ -404,7 +414,7 @@ void Launcher::prepareSettings() {
 	if (!path.isEmpty()) {
 		auto info = QFileInfo(path);
 		if (info.isSymLink()) {
-			info = info.symLinkTarget();
+			info = QFileInfo(info.symLinkTarget());
 		}
 		if (info.exists()) {
 			const auto dir = info.absoluteDir().absolutePath();
@@ -419,12 +429,30 @@ void Launcher::prepareSettings() {
 	processArguments();
 }
 
-QString Launcher::deviceModel() const {
-	return _deviceModel;
-}
-
-QString Launcher::systemVersion() const {
-	return _systemVersion;
+void Launcher::initQtMessageLogging() {
+	static QtMessageHandler OriginalMessageHandler = nullptr;
+	OriginalMessageHandler = qInstallMessageHandler([](
+			QtMsgType type,
+			const QMessageLogContext &context,
+			const QString &msg) {
+		const auto InvokeOriginal = [&] {
+#ifndef _DEBUG
+			if (Logs::DebugEnabled()) {
+				return;
+			}
+#endif // _DEBUG
+			if (OriginalMessageHandler) {
+				OriginalMessageHandler(type, context, msg);
+			}
+		};
+		InvokeOriginal();
+		if (Logs::DebugEnabled() || !Logs::started()) {
+			if (!Logs::WritingEntry()) {
+				// Sometimes Qt logs something inside our own logging.
+				LOG((msg));
+			}
+		}
+	});
 }
 
 uint64 Launcher::installationTag() const {
@@ -438,18 +466,16 @@ void Launcher::processArguments() {
 		AllLeftValues,
 	};
 	auto parseMap = std::map<QByteArray, KeyFormat> {
-		{ "-testmode"       , KeyFormat::NoValues },
 		{ "-debug"          , KeyFormat::NoValues },
 		{ "-freetype"       , KeyFormat::NoValues },
-		{ "-many"           , KeyFormat::NoValues },
 		{ "-key"            , KeyFormat::OneValue },
 		{ "-autostart"      , KeyFormat::NoValues },
 		{ "-fixprevious"    , KeyFormat::NoValues },
 		{ "-cleanup"        , KeyFormat::NoValues },
 		{ "-noupdate"       , KeyFormat::NoValues },
-		{ "-externalupdater", KeyFormat::NoValues },
 		{ "-tosettings"     , KeyFormat::NoValues },
 		{ "-startintray"    , KeyFormat::NoValues },
+		{ "-quit"           , KeyFormat::NoValues },
 		{ "-sendpath"       , KeyFormat::AllLeftValues },
 		{ "-workdir"        , KeyFormat::OneValue },
 		{ "--"              , KeyFormat::OneValue },
@@ -458,7 +484,7 @@ void Launcher::processArguments() {
 	auto parseResult = QMap<QByteArray, QStringList>();
 	auto parsingKey = QByteArray();
 	auto parsingFormat = KeyFormat::NoValues;
-	for (const auto &argument : _arguments) {
+	for (const auto &argument : std::as_const(_arguments)) {
 		switch (parsingFormat) {
 		case KeyFormat::OneValue: {
 			parseResult[parsingKey] = QStringList(argument.mid(0, 8192));
@@ -478,12 +504,8 @@ void Launcher::processArguments() {
 		}
 	}
 
-	if (parseResult.contains("-externalupdater")) {
-		SetUpdaterDisabledAtStartup();
-	}
 	gUseFreeType = parseResult.contains("-freetype");
 	gDebugMode = parseResult.contains("-debug");
-	gManyInstance = parseResult.contains("-many");
 	gKeyFile = parseResult.value("-key", {}).join(QString()).toLower();
 	gKeyFile = gKeyFile.replace(QRegularExpression("[^a-z0-9\\-_]"), {});
 	gLaunchMode = parseResult.contains("-autostart") ? LaunchModeAutoStart
@@ -493,6 +515,7 @@ void Launcher::processArguments() {
 	gNoStartUpdate = parseResult.contains("-noupdate");
 	gStartToSettings = parseResult.contains("-tosettings");
 	gStartInTray = parseResult.contains("-startintray");
+	gQuit = parseResult.contains("-quit");
 	gSendPaths = parseResult.value("-sendpath", {});
 	gWorkingDir = parseResult.value("-workdir", {}).join(QString());
 	if (!gWorkingDir.isEmpty()) {

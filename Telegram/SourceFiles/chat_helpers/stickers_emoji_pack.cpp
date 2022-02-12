@@ -21,7 +21,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "base/call_delayed.h"
 #include "apiwrap.h"
-#include "app.h"
 #include "styles/style_chat.h"
 
 #include <QtCore/QBuffer>
@@ -30,6 +29,18 @@ namespace Stickers {
 namespace {
 
 constexpr auto kRefreshTimeout = 7200 * crl::time(1000);
+
+[[nodiscard]] std::optional<int> IndexFromEmoticon(const QString &emoticon) {
+	if (emoticon.size() < 2) {
+		return std::nullopt;
+	}
+	const auto first = emoticon[0].unicode();
+	return (first >= '1' && first <= '9')
+		? std::make_optional(first - '1')
+		: (first == 55357 && emoticon[1].unicode() == 56607)
+		? std::make_optional(9)
+		: std::nullopt;
+}
 
 [[nodiscard]] QSize SingleSize() {
 	const auto single = st::largeEmojiSize;
@@ -44,49 +55,24 @@ constexpr auto kRefreshTimeout = 7200 * crl::time(1000);
 	Expects(index >= 1 && index <= 5);
 
 	static const auto color1 = Lottie::ColorReplacements{
-		{
-			{ 0xf77e41U, 0xca907aU },
-			{ 0xffb139U, 0xedc5a5U },
-			{ 0xffd140U, 0xf7e3c3U },
-			{ 0xffdf79U, 0xfbefd6U },
-		},
-		1,
+		.modifier = Lottie::SkinModifier::Color1,
+		.tag = 1,
 	};
 	static const auto color2 = Lottie::ColorReplacements{
-		{
-			{ 0xf77e41U, 0xaa7c60U },
-			{ 0xffb139U, 0xc8a987U },
-			{ 0xffd140U, 0xddc89fU },
-			{ 0xffdf79U, 0xe6d6b2U },
-		},
-		2,
+		.modifier = Lottie::SkinModifier::Color2,
+		.tag = 2,
 	};
 	static const auto color3 = Lottie::ColorReplacements{
-		{
-			{ 0xf77e41U, 0x8c6148U },
-			{ 0xffb139U, 0xad8562U },
-			{ 0xffd140U, 0xc49e76U },
-			{ 0xffdf79U, 0xd4b188U },
-		},
-		3,
+		.modifier = Lottie::SkinModifier::Color3,
+		.tag = 3,
 	};
 	static const auto color4 = Lottie::ColorReplacements{
-		{
-			{ 0xf77e41U, 0x6e3c2cU },
-			{ 0xffb139U, 0x925a34U },
-			{ 0xffd140U, 0xa16e46U },
-			{ 0xffdf79U, 0xac7a52U },
-		},
-		4,
+		.modifier = Lottie::SkinModifier::Color4,
+		.tag = 4,
 	};
 	static const auto color5 = Lottie::ColorReplacements{
-		{
-			{ 0xf77e41U, 0x291c12U },
-			{ 0xffb139U, 0x472a22U },
-			{ 0xffd140U, 0x573b30U },
-			{ 0xffdf79U, 0x68493cU },
-		},
-		5,
+		.modifier = Lottie::SkinModifier::Color5,
+		.tag = 5,
 	};
 	static const auto list = std::array{
 		&color1,
@@ -208,20 +194,51 @@ std::shared_ptr<LargeEmojiImage> EmojiPack::image(EmojiPtr emoji) {
 	return result;
 }
 
+auto EmojiPack::animationsForEmoji(EmojiPtr emoji) const
+-> const base::flat_map<int, not_null<DocumentData*>> & {
+	static const auto empty = base::flat_map<int, not_null<DocumentData*>>();
+	const auto i = _animations.find(emoji);
+	return (i != end(_animations)) ? i->second : empty;
+}
+
 void EmojiPack::refresh() {
 	if (_requestId) {
 		return;
 	}
 	_requestId = _session->api().request(MTPmessages_GetStickerSet(
-		MTP_inputStickerSetAnimatedEmoji()
+		MTP_inputStickerSetAnimatedEmoji(),
+		MTP_int(0) // hash
 	)).done([=](const MTPmessages_StickerSet &result) {
 		_requestId = 0;
-		refreshDelayed();
+		refreshAnimations();
 		result.match([&](const MTPDmessages_stickerSet &data) {
 			applySet(data);
+		}, [](const MTPDmessages_stickerSetNotModified &) {
+			LOG(("API Error: Unexpected messages.stickerSetNotModified."));
 		});
-	}).fail([=](const RPCError &error) {
+	}).fail([=](const MTP::Error &error) {
 		_requestId = 0;
+		refreshDelayed();
+	}).send();
+}
+
+void EmojiPack::refreshAnimations() {
+	if (_animationsRequestId) {
+		return;
+	}
+	_animationsRequestId = _session->api().request(MTPmessages_GetStickerSet(
+		MTP_inputStickerSetAnimatedEmojiAnimations(),
+		MTP_int(0) // hash
+	)).done([=](const MTPmessages_StickerSet &result) {
+		_animationsRequestId = 0;
+		refreshDelayed();
+		result.match([&](const MTPDmessages_stickerSet &data) {
+			applyAnimationsSet(data);
+		}, [](const MTPDmessages_stickerSetNotModified &) {
+			LOG(("API Error: Unexpected messages.stickerSetNotModified."));
+		});
+	}).fail([=] {
+		_animationsRequestId = 0;
 		refreshDelayed();
 	}).send();
 }
@@ -247,9 +264,58 @@ void EmojiPack::applySet(const MTPDmessages_stickerSet &data) {
 			was.erase(i);
 		}
 	}
-	for (const auto &[emoji, Document] : was) {
+	for (const auto &[emoji, document] : was) {
 		refreshItems(emoji);
 	}
+}
+
+void EmojiPack::applyAnimationsSet(const MTPDmessages_stickerSet &data) {
+	const auto stickers = collectStickers(data.vdocuments().v);
+	const auto &packs = data.vpacks().v;
+	const auto indices = collectAnimationsIndices(packs);
+
+	_animations.clear();
+	for (const auto &pack : packs) {
+		pack.match([&](const MTPDstickerPack &data) {
+			const auto emoticon = qs(data.vemoticon());
+			if (IndexFromEmoticon(emoticon).has_value()) {
+				return;
+			}
+			const auto emoji = Ui::Emoji::Find(emoticon);
+			if (!emoji) {
+				return;
+			}
+			for (const auto &id : data.vdocuments().v) {
+				const auto i = indices.find(id.v);
+				if (i == end(indices)) {
+					continue;
+				}
+				const auto j = stickers.find(id.v);
+				if (j == end(stickers)) {
+					continue;
+				}
+				for (const auto index : i->second) {
+					_animations[emoji].emplace(index, j->second);
+				}
+			}
+		});
+	}
+}
+
+auto EmojiPack::collectAnimationsIndices(
+	const QVector<MTPStickerPack> &packs
+) const -> base::flat_map<uint64, base::flat_set<int>> {
+	auto result = base::flat_map<uint64, base::flat_set<int>>();
+	for (const auto &pack : packs) {
+		pack.match([&](const MTPDstickerPack &data) {
+			if (const auto index = IndexFromEmoticon(qs(data.vemoticon()))) {
+				for (const auto &id : data.vdocuments().v) {
+					result[id.v].emplace(*index);
+				}
+			}
+		});
+	}
+	return result;
 }
 
 void EmojiPack::refreshAll() {
@@ -260,6 +326,13 @@ void EmojiPack::refreshAll() {
 
 void EmojiPack::refreshItems(EmojiPtr emoji) {
 	const auto i = _items.find(IsolatedEmoji{ { emoji } });
+	if (!emoji->colored()) {
+		if (const auto count = emoji->variantsCount()) {
+			for (auto i = 0; i != count; ++i) {
+				refreshItems(emoji->variant(i + 1));
+			}
+		}
+	}
 	if (i == end(_items)) {
 		return;
 	}

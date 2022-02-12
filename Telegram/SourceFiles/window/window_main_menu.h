@@ -16,15 +16,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Ui {
 class IconButton;
 class FlatLabel;
-class Menu;
 class UserpicButton;
 class PopupMenu;
 class ScrollArea;
 class VerticalLayout;
+class VerticalLayoutReorder;
 class RippleButton;
 class PlainShadow;
 template <typename Widget>
 class SlideWrap;
+namespace Menu {
+class Menu;
+} // namespace Menu
 } // namespace Ui
 
 namespace Main {
@@ -35,7 +38,7 @@ namespace Window {
 
 class SessionController;
 
-class MainMenu : public Ui::LayerWidget, private base::Subscriber {
+class MainMenu final : public Ui::LayerWidget {
 public:
 	MainMenu(QWidget *parent, not_null<SessionController*> controller);
 
@@ -84,13 +87,16 @@ private:
 	not_null<Ui::SlideWrap<Ui::VerticalLayout>*> _accounts;
 	Ui::SlideWrap<Ui::RippleButton> *_addAccount = nullptr;
 	not_null<Ui::SlideWrap<Ui::PlainShadow>*> _shadow;
-	not_null<Ui::Menu*> _menu;
+	not_null<Ui::Menu::Menu*> _menu;
 	not_null<Ui::RpWidget*> _footer;
 	not_null<Ui::FlatLabel*> _telegram;
 	not_null<Ui::FlatLabel*> _version;
 	std::shared_ptr<QPointer<QAction>> _nightThemeAction;
 	base::Timer _nightThemeSwitch;
 	base::unique_qptr<Ui::PopupMenu> _contextMenu;
+
+	std::unique_ptr<Ui::VerticalLayoutReorder> _reorder;
+	int _reordering = 0;
 
 	base::binary_guard _accountSwitchGuard;
 

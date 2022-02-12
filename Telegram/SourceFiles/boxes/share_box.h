@@ -10,9 +10,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/abstract_box.h"
 #include "base/observer.h"
 #include "base/timer.h"
+#include "ui/chat/forward_options_box.h"
 #include "ui/effects/animations.h"
 #include "ui/effects/round_checkbox.h"
 #include "mtproto/sender.h"
+
+namespace style {
+struct MultiSelect;
+struct InputField;
+struct PeerList;
+} // namespace style
 
 namespace SendMenu {
 enum class Type;
@@ -35,12 +42,17 @@ class Row;
 class IndexedList;
 } // namespace Dialogs
 
+namespace Data {
+enum class ForwardOptions;
+} // namespace Data
+
 namespace Ui {
 class MultiSelect;
 class InputField;
 struct ScrollToRequest;
 template <typename Widget>
 class SlideWrap;
+class PopupMenu;
 } // namespace Ui
 
 QString AppendShareGameScoreUrl(
@@ -57,15 +69,30 @@ public:
 	using SubmitCallback = Fn<void(
 		std::vector<not_null<PeerData*>>&&,
 		TextWithTags&&,
-		Api::SendOptions)>;
+		Api::SendOptions,
+		Data::ForwardOptions option)>;
 	using FilterCallback = Fn<bool(PeerData*)>;
 
-	ShareBox(
-		QWidget*,
-		not_null<Window::SessionNavigation*> navigation,
-		CopyCallback &&copyCallback,
-		SubmitCallback &&submitCallback,
-		FilterCallback &&filterCallback);
+	struct Descriptor {
+		not_null<Main::Session*> session;
+		CopyCallback copyCallback;
+		SubmitCallback submitCallback;
+		FilterCallback filterCallback;
+		Window::SessionNavigation *navigation = nullptr;
+		Fn<void(not_null<Ui::InputField*>)> initSpellchecker;
+		Fn<void(not_null<Ui::InputField*>)> initEditLink;
+		object_ptr<Ui::RpWidget> bottomWidget = { nullptr };
+		rpl::producer<QString> copyLinkText;
+		const style::MultiSelect *stMultiSelect = nullptr;
+		const style::InputField *stComment = nullptr;
+		const style::PeerList *st = nullptr;
+		struct {
+			int messagesCount = 0;
+			bool show = false;
+			bool hasCaptions = false;
+		} forwardOptions;
+	};
+	ShareBox(QWidget*, Descriptor &&descriptor);
 
 protected:
 	void prepare() override;
@@ -102,22 +129,25 @@ private:
 	void peopleDone(
 		const MTPcontacts_Found &result,
 		mtpRequestId requestId);
-	void peopleFail(const RPCError &error, mtpRequestId requestId);
+	void peopleFail(const MTP::Error &error, mtpRequestId requestId);
 
-	const not_null<Window::SessionNavigation*> _navigation;
+	void showMenu(not_null<Ui::RpWidget*> parent);
+
+	Descriptor _descriptor;
 	MTP::Sender _api;
-
-	CopyCallback _copyCallback;
-	SubmitCallback _submitCallback;
-	FilterCallback _filterCallback;
 
 	object_ptr<Ui::MultiSelect> _select;
 	object_ptr<Ui::SlideWrap<Ui::InputField>> _comment;
+	object_ptr<Ui::RpWidget> _bottomWidget;
+
+	base::unique_qptr<Ui::PopupMenu> _menu;
+	Ui::ForwardOptions _forwardOptions;
 
 	class Inner;
 	QPointer<Inner> _inner;
 
 	bool _hasSelected = false;
+	rpl::variable<QString> _copyLinkText;
 
 	base::Timer _searchTimer;
 	QString _peopleQuery;

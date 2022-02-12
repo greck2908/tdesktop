@@ -7,8 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "platform/mac/touchbar/mac_touchbar_manager.h"
 
-#ifndef OS_OSX
-
 #include "apiwrap.h" // ApiWrap::updateStickers()
 #include "core/application.h"
 #include "data/data_peer.h" // PeerData::canWrite()
@@ -59,7 +57,8 @@ const auto kAudioItemIdentifier = @"touchbarAudio";
 	Main::Session *_session;
 	Window::Controller *_controller;
 
-	rpl::producer<bool> _canApplyMarkdown;
+	bool _canApplyMarkdownLast;
+	rpl::event_stream<bool> _canApplyMarkdown;
 	rpl::event_stream<> _touchBarSwitches;
 	rpl::lifetime _lifetime;
 }
@@ -76,7 +75,10 @@ const auto kAudioItemIdentifier = @"touchbarAudio";
 		self.defaultItemIdentifiers = @[];
 	});
 	_controller = controller;
-	_canApplyMarkdown = std::move(canApplyMarkdown);
+	_canApplyMarkdownLast = false;
+	std::move(
+		canApplyMarkdown
+	) | rpl::start_to_stream(_canApplyMarkdown, _lifetime);
 
 	auto sessionChanges = domain->activeSessionChanges(
 	) | rpl::map([=](Main::Session *session) {
@@ -138,18 +140,16 @@ const auto kAudioItemIdentifier = @"touchbarAudio";
 				init:_controller
 				touchBarSwitches:_touchBarSwitches.events()] autorelease];
 		rpl::combine(
-			rpl::single(false) | rpl::then(rpl::duplicate(_canApplyMarkdown)),
-			rpl::single(
-				false
-			) | rpl::then(
-				_controller->sessionController()->activeChatChanges(
-				) | rpl::map([](Dialogs::Key k) {
-					return k.peer() && k.history() && k.peer()->canWrite();
-				})
-			) | rpl::distinct_until_changed()
+			_canApplyMarkdown.events_starting_with_copy(
+				_canApplyMarkdownLast),
+			_controller->sessionController()->activeChatValue(
+			) | rpl::map([](Dialogs::Key k) {
+				return k.peer() && k.history() && k.peer()->canWrite();
+			}) | rpl::distinct_until_changed()
 		) | rpl::start_with_next([=](
 				bool canApplyMarkdown,
 				bool hasActiveChat) {
+			_canApplyMarkdownLast = canApplyMarkdown;
 			item.groupTouchBar.defaultItemIdentifiers = @[
 				kPinnedPanelItemIdentifier,
 				canApplyMarkdown
@@ -177,5 +177,3 @@ const auto kAudioItemIdentifier = @"touchbarAudio";
 }
 
 @end // @implementation RootTouchBar
-
-#endif // OS_OSX

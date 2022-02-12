@@ -45,23 +45,41 @@ private:
 
 };
 
+enum class StickersSetFlag {
+	Installed = (1 << 0),
+	Archived = (1 << 1),
+	Masks = (1 << 2),
+	Official = (1 << 3),
+	NotLoaded = (1 << 4),
+	Featured = (1 << 5),
+	Unread = (1 << 6),
+	Special = (1 << 7),
+	Webm = (1 << 8),
+};
+inline constexpr bool is_flag_type(StickersSetFlag) { return true; };
+using StickersSetFlags = base::flags<StickersSetFlag>;
+
+[[nodiscard]] StickersSetFlags ParseStickersSetFlags(
+	const MTPDstickerSet &data);
+
 class StickersSet final {
 public:
 	StickersSet(
 		not_null<Data::Session*> owner,
 		uint64 id,
-		uint64 access,
+		uint64 accessHash,
+		uint64 hash,
 		const QString &title,
 		const QString &shortName,
 		int count,
-		int32 hash,
-		MTPDstickerSet::Flags flags,
+		StickersSetFlags flags,
 		TimeId installDate);
 
 	[[nodiscard]] Data::Session &owner() const;
 	[[nodiscard]] Main::Session &session() const;
 
 	[[nodiscard]] MTPInputStickerSet mtpInput() const;
+	[[nodiscard]] StickerSetIdentifier identifier() const;
 
 	void setThumbnail(const ImageWithLocation &data);
 
@@ -70,17 +88,18 @@ public:
 	[[nodiscard]] bool thumbnailFailed() const;
 	void loadThumbnail();
 	[[nodiscard]] const ImageLocation &thumbnailLocation() const;
+	[[nodiscard]] Storage::Cache::Key thumbnailBigFileBaseCacheKey() const;
 	[[nodiscard]] int thumbnailByteSize() const;
 
 	[[nodiscard]] std::shared_ptr<StickersSetThumbnailView> createThumbnailView();
 	[[nodiscard]] std::shared_ptr<StickersSetThumbnailView> activeThumbnailView();
 
 	uint64 id = 0;
-	uint64 access = 0;
+	uint64 accessHash = 0;
+	uint64 hash = 0;
 	QString title, shortName;
 	int count = 0;
-	int32 hash = 0;
-	MTPDstickerSet::Flags flags;
+	StickersSetFlags flags;
 	TimeId installDate = 0;
 	StickersPack covers;
 	StickersPack stickers;
@@ -95,4 +114,7 @@ private:
 
 };
 
-} // namespace Stickers
+[[nodiscard]] MTPInputStickerSet InputStickerSet(StickerSetIdentifier id);
+[[nodiscard]] StickerSetIdentifier FromInputSet(const MTPInputStickerSet &id);
+
+} // namespace Data

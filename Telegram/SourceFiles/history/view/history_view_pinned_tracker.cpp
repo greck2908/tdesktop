@@ -31,19 +31,21 @@ PinnedTracker::PinnedTracker(not_null<History*> history)
 : _history(history->migrateToOrMe())
 , _migratedPeer(_history->peer->migrateFrom()) {
 	using namespace rpl::mappers;
-	const auto has = [&](PeerData *peer) -> rpl::producer<bool> {
+	const auto has = [&](History *history) -> rpl::producer<bool> {
 		auto &changes = _history->session().changes();
-		const auto flag = Data::PeerUpdate::Flag::PinnedMessages;
-		if (!peer) {
+		const auto flag = Data::HistoryUpdate::Flag::PinnedMessages;
+		if (!history) {
 			return rpl::single(false);
 		}
-		return changes.peerFlagsValue(peer, flag) | rpl::map([=] {
-			return peer->hasPinnedMessages();
+		return changes.historyFlagsValue(history, flag) | rpl::map([=] {
+			return history->hasPinnedMessages();
 		});
 	};
 	rpl::combine(
-		has(_history->peer),
-		has(_migratedPeer),
+		has(_history),
+		has(_migratedPeer
+			? _history->owner().history(_migratedPeer).get()
+			: nullptr),
 		_1 || _2
 	) | rpl::distinct_until_changed(
 	) | rpl::start_with_next([=](bool has) {
@@ -97,9 +99,10 @@ void PinnedTracker::refreshViewer() {
 		}
 		refreshCurrentFromSlice();
 		if (_slice.fullCount == 0) {
-			_history->peer->setHasPinnedMessages(false);
+			_history->setHasPinnedMessages(false);
 			if (_migratedPeer) {
-				_migratedPeer->setHasPinnedMessages(false);
+				const auto to = _history->owner().history(_migratedPeer);
+				to->setHasPinnedMessages(false);
 			}
 		}
 	}, _dataLifetime);
@@ -107,7 +110,7 @@ void PinnedTracker::refreshViewer() {
 
 void PinnedTracker::refreshCurrentFromSlice() {
 	const auto proj1 = [](FullMsgId id) {
-		return id.channel ? id.msg : (id.msg - ServerMaxMsgId);
+		return peerIsChannel(id.peer) ? id.msg : (id.msg - ServerMaxMsgId);
 	};
 	const auto proj2 = [](FullMsgId id) {
 		return id.msg;
@@ -115,7 +118,6 @@ void PinnedTracker::refreshCurrentFromSlice() {
 	const auto i = _migratedPeer
 		? ranges::lower_bound(_slice.ids, _aroundId, ranges::less(), proj1)
 		: ranges::lower_bound(_slice.ids, _aroundId, ranges::less(), proj2);
-	const auto empty = _slice.ids.empty();
 	const auto before = int(i - begin(_slice.ids));
 	const auto after = int(end(_slice.ids) - i);
 	const auto haveValidData = (before > 0 || _slice.skippedBefore == 0)
@@ -151,7 +153,7 @@ void PinnedTracker::clear() {
 	_current = PinnedId();
 }
 
-void PinnedTracker::trackAround(MsgId messageId) {
+void PinnedTracker::trackAround(UniversalMsgId messageId) {
 	if (_aroundId == messageId) {
 		return;
 	}

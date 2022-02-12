@@ -18,6 +18,7 @@ namespace Ui {
 class VerticalLayout;
 class FlatLabel;
 class SettingsButton;
+class AbstractButton;
 } // namespace Ui
 
 namespace Window {
@@ -35,10 +36,12 @@ enum class Type {
 	Information,
 	Notifications,
 	PrivacySecurity,
+	Sessions,
 	Advanced,
 	Chat,
 	Folders,
 	Calls,
+	Experimental,
 };
 
 using Button = Ui::SettingsButton;
@@ -70,12 +73,18 @@ void AddDivider(not_null<Ui::VerticalLayout*> container);
 void AddDividerText(
 	not_null<Ui::VerticalLayout*> container,
 	rpl::producer<QString> text);
+not_null<Ui::RpWidget*> AddButtonIcon(
+	not_null<Ui::AbstractButton*> button,
+	const style::icon *leftIcon,
+	int iconLeft,
+	const style::color *leftIconOver);
 object_ptr<Button> CreateButton(
 	not_null<QWidget*> parent,
 	rpl::producer<QString> text,
 	const style::SettingsButton &st,
 	const style::icon *leftIcon = nullptr,
-	int iconLeft = 0);
+	int iconLeft = 0,
+	const style::color *leftIconOver = nullptr);
 not_null<Button*> AddButton(
 	not_null<Ui::VerticalLayout*> container,
 	rpl::producer<QString> text,
@@ -100,7 +109,8 @@ not_null<Ui::FlatLabel*> AddSubsectionTitle(
 
 using MenuCallback = Fn<QAction*(
 	const QString &text,
-	Fn<void()> handler)>;
+	Fn<void()> handler,
+	const style::icon *icon)>;
 
 void FillMenu(
 	not_null<Window::SessionController*> controller,

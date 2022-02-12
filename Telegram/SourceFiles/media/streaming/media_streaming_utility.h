@@ -51,6 +51,7 @@ struct Stream {
 
 [[nodiscard]] bool GoodForRequest(
 	const QImage &image,
+	bool hasAlpha,
 	int rotation,
 	const FrameRequest &request);
 [[nodiscard]] QImage ConvertFrame(
@@ -58,6 +59,7 @@ struct Stream {
 	AVFrame *frame,
 	QSize resize,
 	QImage storage);
+[[nodiscard]] FrameYUV420 ExtractYUV420(Stream &stream, AVFrame *frame);
 [[nodiscard]] QImage PrepareByRequest(
 	const QImage &original,
 	bool alpha,

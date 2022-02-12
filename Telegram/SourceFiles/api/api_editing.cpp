@@ -10,14 +10,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "api/api_media.h"
 #include "api/api_text_entities.h"
-#include "boxes/confirm_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "data/data_scheduled_messages.h"
 #include "data/data_session.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
-#include "mtproto/mtproto_rpc_sender.h"
+#include "mtproto/mtproto_response.h"
 
 namespace Api {
 namespace {
@@ -51,6 +51,10 @@ mtpRequestId EditMessage(
 		textWithEntities.entities,
 		ConvertOption::SkipLocal);
 	const auto media = item->media();
+
+	const auto updateRecentStickers = inputMedia.has_value()
+		? Api::HasAttachedStickers(*inputMedia)
+		: false;
 
 	const auto emptyFlag = MTPmessages_EditMessage::Flag(0);
 	const auto flags = emptyFlag
@@ -97,6 +101,10 @@ mtpRequestId EditMessage(
 		} else {
 			apply();
 		}
+
+		if (updateRecentStickers) {
+			api->requestRecentStickersForce(true);
+		}
 	}).fail(
 		fail
 	).send();
@@ -131,7 +139,7 @@ void EditMessageWithUploadedMedia(
 			item->setIsLocalUpdateMedia(false);
 		}
 	};
-	const auto fail = [=](const RPCError &error) {
+	const auto fail = [=](const MTP::Error &error) {
 		const auto err = error.type();
 		const auto session = &item->history()->session();
 		const auto notModified = (err == u"MESSAGE_NOT_MODIFIED"_q);
@@ -141,7 +149,8 @@ void EditMessageWithUploadedMedia(
 			session->data().sendHistoryChangeNotifications();
 			if (mediaInvalid) {
 				Ui::show(
-					Box<InformBox>(tr::lng_edit_media_invalid_file(tr::now)),
+					Box<Ui::InformBox>(
+						tr::lng_edit_media_invalid_file(tr::now)),
 					Ui::LayerOption::KeepOther);
 			}
 		} else {
@@ -157,31 +166,34 @@ void EditMessageWithUploadedMedia(
 void RescheduleMessage(
 		not_null<HistoryItem*> item,
 		SendOptions options) {
-	const auto empty = [](const auto &r) {};
+	const auto empty = [] {};
 	EditMessage(item, options, empty, empty);
 }
 
 void EditMessageWithUploadedDocument(
 		HistoryItem *item,
-		const MTPInputFile &file,
-		const std::optional<MTPInputFile> &thumb,
+		RemoteFileInfo info,
 		SendOptions options) {
 	if (!item || !item->media() || !item->media()->document()) {
 		return;
 	}
-	const auto media = PrepareUploadedDocument(item, file, thumb);
-	EditMessageWithUploadedMedia(item, options, media);
+	EditMessageWithUploadedMedia(
+		item,
+		options,
+		PrepareUploadedDocument(item, std::move(info)));
 }
 
 void EditMessageWithUploadedPhoto(
 		HistoryItem *item,
-		const MTPInputFile &file,
+		RemoteFileInfo info,
 		SendOptions options) {
 	if (!item || !item->media() || !item->media()->photo()) {
 		return;
 	}
-	const auto media = PrepareUploadedPhoto(file);
-	EditMessageWithUploadedMedia(item, options, media);
+	EditMessageWithUploadedMedia(
+		item,
+		options,
+		PrepareUploadedPhoto(std::move(info)));
 }
 
 mtpRequestId EditCaption(
@@ -189,7 +201,7 @@ mtpRequestId EditCaption(
 		const TextWithEntities &caption,
 		SendOptions options,
 		Fn<void(const MTPUpdates &)> done,
-		Fn<void(const RPCError &)> fail) {
+		Fn<void(const MTP::Error &)> fail) {
 	return EditMessage(item, caption, options, done, fail);
 }
 
@@ -198,7 +210,7 @@ mtpRequestId EditTextMessage(
 		const TextWithEntities &caption,
 		SendOptions options,
 		Fn<void(const MTPUpdates &, mtpRequestId requestId)> done,
-		Fn<void(const RPCError &, mtpRequestId requestId)> fail) {
+		Fn<void(const MTP::Error &, mtpRequestId requestId)> fail) {
 	const auto callback = [=](
 			const auto &result,
 			Fn<void()> applyUpdates,

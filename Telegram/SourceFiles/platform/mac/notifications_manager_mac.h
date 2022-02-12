@@ -26,12 +26,15 @@ protected:
 		const QString &title,
 		const QString &subtitle,
 		const QString &msg,
-		bool hideNameAndPhoto,
-		bool hideReplyButton) override;
+		DisplayOptions options) override;
 	void doClearAllFast() override;
+	void doClearFromItem(not_null<HistoryItem*> item) override;
 	void doClearFromHistory(not_null<History*> history) override;
 	void doClearFromSession(not_null<Main::Session*> session) override;
 	QString accountNameSeparator() override;
+	bool doSkipAudio() const override;
+	bool doSkipToast() const override;
+	bool doSkipFlashBounce() const override;
 
 private:
 	class Private;

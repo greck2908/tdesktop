@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_peer.h"
 #include "data/data_drafts.h"
 #include "dialogs/dialogs_entry.h"
+#include "dialogs/ui/dialogs_message_view.h"
 #include "history/view/history_view_send_action.h"
 #include "base/observer.h"
 #include "base/timer.h"
@@ -23,6 +24,15 @@ class HistoryBlock;
 class HistoryItem;
 class HistoryMessage;
 class HistoryService;
+struct HistoryMessageMarkupData;
+class HistoryMainElementDelegateMixin;
+
+namespace HistoryUnreadThings {
+enum class AddType;
+struct All;
+class Proxy;
+class ConstProxy;
+} // namespace HistoryUnreadThings
 
 namespace Main {
 class Session;
@@ -33,6 +43,24 @@ struct Draft;
 class Session;
 class Folder;
 class ChatFilter;
+struct SponsoredFrom;
+
+enum class ForwardOptions {
+	PreserveInfo,
+	NoSenderNames,
+	NoNamesAndCaptions,
+};
+
+struct ForwardDraft {
+	MessageIdsList ids;
+	ForwardOptions options = ForwardOptions::PreserveInfo;
+};
+
+struct ResolvedForwardDraft {
+	HistoryItemsList items;
+	ForwardOptions options = ForwardOptions::PreserveInfo;
+};
+
 } // namespace Data
 
 namespace Dialogs {
@@ -50,9 +78,20 @@ enum class NewMessageType {
 	Existing,
 };
 
-enum class UnreadMentionType {
-	New, // when new message is added to history
-	Existing, // when some messages slice was received
+enum class ItemNotificationType {
+	Message,
+	Reaction,
+};
+struct ItemNotification {
+	not_null<HistoryItem*> item;
+	UserData *reactionSender = nullptr;
+	ItemNotificationType type = ItemNotificationType::Message;
+
+	friend inline bool operator==(ItemNotification a, ItemNotification b) {
+		return (a.item == b.item)
+			&& (a.reactionSender == b.reactionSender)
+			&& (a.type == b.type);
+	}
 };
 
 class History final : public Dialogs::Entry {
@@ -64,15 +103,18 @@ public:
 	History &operator=(const History &) = delete;
 	~History();
 
-	ChannelId channelId() const;
-	bool isChannel() const;
-	bool isMegagroup() const;
+	[[nodiscard]] auto delegateMixin() const
+			-> not_null<HistoryMainElementDelegateMixin*> {
+		return _delegateMixin.get();
+	}
+
 	not_null<History*> migrateToOrMe() const;
 	History *migrateFrom() const;
 	MsgRange rangeForDifferenceRequest() const;
 	void checkLocalMessages();
 	void removeJoinedMessage();
 
+	void reactionsEnabledChanged(bool enabled);
 
 	bool isEmpty() const;
 	bool isDisplayedEmpty() const;
@@ -82,8 +124,8 @@ public:
 	Element *findLastDisplayed() const;
 	bool hasOrphanMediaGroupPart() const;
 	bool removeOrphanMediaGroupPart();
-	QVector<MsgId> collectMessagesFromUserToDelete(
-		not_null<UserData*> user) const;
+	[[nodiscard]] std::vector<MsgId> collectMessagesFromParticipantToDelete(
+		not_null<PeerData*> participant) const;
 
 	enum class ClearType {
 		Unload,
@@ -113,28 +155,37 @@ public:
 					std::forward<Args>(args)...)).get());
 	}
 	void destroyMessage(not_null<HistoryItem*> item);
+	void destroyMessagesByDates(TimeId minDate, TimeId maxDate);
 
 	void unpinAllMessages();
 
-	HistoryItem *addNewMessage(
+	not_null<HistoryItem*> addNewMessage(
+		MsgId id,
 		const MTPMessage &msg,
-		MTPDmessage_ClientFlags clientFlags,
+		MessageFlags localFlags,
 		NewMessageType type);
-	HistoryItem *addToHistory(
-		const MTPMessage &msg,
-		MTPDmessage_ClientFlags clientFlags);
 	not_null<HistoryItem*> addNewLocalMessage(
 		MsgId id,
-		MTPDmessage::Flags flags,
-		MTPDmessage_ClientFlags clientFlags,
+		MessageFlags flags,
+		UserId viaBotId,
+		MsgId replyTo,
 		TimeId date,
 		PeerId from,
 		const QString &postAuthor,
-		not_null<HistoryMessage*> forwardOriginal);
+		const TextWithEntities &text,
+		const MTPMessageMedia &media,
+		HistoryMessageMarkupData &&markup,
+		uint64 groupedId = 0);
 	not_null<HistoryItem*> addNewLocalMessage(
 		MsgId id,
-		MTPDmessage::Flags flags,
-		MTPDmessage_ClientFlags clientFlags,
+		MessageFlags flags,
+		TimeId date,
+		PeerId from,
+		const QString &postAuthor,
+		not_null<HistoryItem*> forwardOriginal);
+	not_null<HistoryItem*> addNewLocalMessage(
+		MsgId id,
+		MessageFlags flags,
 		UserId viaBotId,
 		MsgId replyTo,
 		TimeId date,
@@ -142,11 +193,10 @@ public:
 		const QString &postAuthor,
 		not_null<DocumentData*> document,
 		const TextWithEntities &caption,
-		const MTPReplyMarkup &markup);
+		HistoryMessageMarkupData &&markup);
 	not_null<HistoryItem*> addNewLocalMessage(
 		MsgId id,
-		MTPDmessage::Flags flags,
-		MTPDmessage_ClientFlags clientFlags,
+		MessageFlags flags,
 		UserId viaBotId,
 		MsgId replyTo,
 		TimeId date,
@@ -154,23 +204,27 @@ public:
 		const QString &postAuthor,
 		not_null<PhotoData*> photo,
 		const TextWithEntities &caption,
-		const MTPReplyMarkup &markup);
+		HistoryMessageMarkupData &&markup);
 	not_null<HistoryItem*> addNewLocalMessage(
 		MsgId id,
-		MTPDmessage::Flags flags,
-		MTPDmessage_ClientFlags clientFlags,
+		MessageFlags flags,
 		UserId viaBotId,
 		MsgId replyTo,
 		TimeId date,
 		PeerId from,
 		const QString &postAuthor,
 		not_null<GameData*> game,
-		const MTPReplyMarkup &markup);
+		HistoryMessageMarkupData &&markup);
+	not_null<HistoryItem*> addNewLocalMessage(
+		MsgId id,
+		Data::SponsoredFrom from,
+		const TextWithEntities &textWithEntities); // sponsored
 
 	// Used only internally and for channel admin log.
-	HistoryItem *createItem(
+	not_null<HistoryItem*> createItem(
+		MsgId id,
 		const MTPMessage &message,
-		MTPDmessage_ClientFlags clientFlags,
+		MessageFlags localFlags,
 		bool detachExistingItem);
 	std::vector<not_null<HistoryItem*>> createItems(
 		const QVector<MTPMessage> &data);
@@ -180,9 +234,9 @@ public:
 
 	void newItemAdded(not_null<HistoryItem*> item);
 
-	void registerLocalMessage(not_null<HistoryItem*> item);
-	void unregisterLocalMessage(not_null<HistoryItem*> item);
-	[[nodiscard]] auto localMessages()
+	void registerClientSideMessage(not_null<HistoryItem*> item);
+	void unregisterClientSideMessage(not_null<HistoryItem*> item);
+	[[nodiscard]] auto clientSideMessages()
 		-> const base::flat_set<not_null<HistoryItem*>> &;
 	[[nodiscard]] HistoryItem *latestSendingMessage() const;
 
@@ -251,7 +305,7 @@ public:
 		bool promoted,
 		const QString &type,
 		const QString &message);
-	[[nodiscard]] QStringRef topPromotionType() const;
+	[[nodiscard]] QStringView topPromotionType() const;
 	[[nodiscard]] QString topPromotionMessage() const;
 	[[nodiscard]] bool topPromotionAboutShown() const;
 	void markTopPromotionAboutShown();
@@ -259,7 +313,7 @@ public:
 	MsgId minMsgId() const;
 	MsgId maxMsgId() const;
 	MsgId msgIdForRead() const;
-	HistoryItem *lastSentMessage() const;
+	HistoryItem *lastEditableMessage() const;
 
 	void resizeToWidth(int newWidth);
 	void forceFullResize();
@@ -268,10 +322,11 @@ public:
 	void itemRemoved(not_null<HistoryItem*> item);
 	void itemVanished(not_null<HistoryItem*> item);
 
-	HistoryItem *currentNotification();
+	[[nodiscard]] std::optional<ItemNotification> currentNotification() const;
 	bool hasNotification() const;
 	void skipNotification();
-	void popNotification(HistoryItem *item);
+	void pushNotification(ItemNotification notification);
+	void popNotification(ItemNotification notification);
 
 	bool hasPendingResizedItems() const;
 	void setHasPendingResizedItems();
@@ -283,25 +338,11 @@ public:
 
 	void clearLastKeyboard();
 
-	int getUnreadMentionsLoadedCount() const {
-		return _unreadMentions.size();
-	}
-	MsgId getMinLoadedUnreadMention() const {
-		return _unreadMentions.empty() ? 0 : _unreadMentions.front();
-	}
-	MsgId getMaxLoadedUnreadMention() const {
-		return _unreadMentions.empty() ? 0 : _unreadMentions.back();
-	}
-	int getUnreadMentionsCount(int notLoadedValue = -1) const {
-		return _unreadMentionsCount ? *_unreadMentionsCount : notLoadedValue;
-	}
-	bool hasUnreadMentions() const {
-		return (getUnreadMentionsCount() > 0);
-	}
-	void setUnreadMentionsCount(int count);
-	bool addToUnreadMentions(MsgId msgId, UnreadMentionType type);
-	void eraseFromUnreadMentions(MsgId msgId);
-	void addUnreadMentionsSlice(const MTPmessages_Messages &result);
+	void setUnreadThingsKnown();
+	[[nodiscard]] HistoryUnreadThings::Proxy unreadMentions();
+	[[nodiscard]] HistoryUnreadThings::ConstProxy unreadMentions() const;
+	[[nodiscard]] HistoryUnreadThings::Proxy unreadReactions();
+	[[nodiscard]] HistoryUnreadThings::ConstProxy unreadReactions() const;
 
 	Data::Draft *draft(Data::DraftKey key) const;
 	void setDraft(Data::DraftKey key, std::unique_ptr<Data::Draft> &&draft);
@@ -339,18 +380,20 @@ public:
 	}
 	void clearDrafts();
 	Data::Draft *createCloudDraft(const Data::Draft *fromDraft);
-	bool skipCloudDraft(const QString &text, MsgId replyTo, TimeId date) const;
-	void setSentDraftText(const QString &text);
-	void clearSentDraftText(const QString &text);
+	bool skipCloudDraftUpdate(TimeId date) const;
+	void startSavingCloudDraft();
+	void finishSavingCloudDraft(TimeId savedAt);
 	void takeLocalDraft(not_null<History*> from);
 	void applyCloudDraft();
 	void draftSavedToCloud();
 
-	const MessageIdsList &forwardDraft() const {
+	[[nodiscard]] const Data::ForwardDraft &forwardDraft() const {
 		return _forwardDraft;
 	}
-	HistoryItemsList validateForwardDraft();
-	void setForwardDraft(MessageIdsList &&items);
+	[[nodiscard]] Data::ResolvedForwardDraft resolveForwardDraft(
+		const Data::ForwardDraft &draft) const;
+	[[nodiscard]] Data::ResolvedForwardDraft resolveForwardDraft();
+	void setForwardDraft(Data::ForwardDraft &&draft);
 
 	History *migrateSibling() const;
 	[[nodiscard]] bool useTopPromotion() const;
@@ -365,6 +408,7 @@ public:
 	bool chatListMessageKnown() const override;
 	void requestChatListMessage() override;
 	const QString &chatListName() const override;
+	const QString &chatListNameSortKey() const override;
 	const base::flat_set<QString> &chatListNameWords() const override;
 	const base::flat_set<QChar> &chatListFirstLetters() const override;
 	void loadUserpic() override;
@@ -375,8 +419,14 @@ public:
 		int y,
 		int size) const override;
 
+	void refreshChatListNameSortKey();
+
 	void setFakeChatListMessageFrom(const MTPmessages_Messages &data);
 	void checkChatListMessageRemoved(not_null<HistoryItem*> item);
+
+	void applyChatListGroup(
+		PeerId dataPeerId,
+		const MTPmessages_Messages &data);
 
 	void forgetScrollState() {
 		scrollTopItem = nullptr;
@@ -388,7 +438,7 @@ public:
 
 	[[nodiscard]] std::pair<Element*, int> findItemAndOffset(int top) const;
 
-	MsgId nextNonHistoryEntryId();
+	[[nodiscard]] MsgId nextNonHistoryEntryId();
 
 	bool folderKnown() const override;
 	Data::Folder *folder() const override;
@@ -400,6 +450,9 @@ public:
 	// Interface for Data::Histories.
 	void setInboxReadTill(MsgId upTo);
 	std::optional<int> countStillUnreadLocal(MsgId readTillId) const;
+
+	[[nodiscard]] bool hasPinnedMessages() const;
+	void setHasPinnedMessages(bool has);
 
 	// Still public data.
 	std::deque<std::unique_ptr<HistoryBlock>> blocks;
@@ -425,12 +478,14 @@ public:
 	mtpRequestId sendRequestId = 0;
 
 	Ui::Text::String cloudDraftTextCache;
+	Dialogs::Ui::MessageView lastItemDialogsView;
 
 private:
 	friend class HistoryBlock;
 
 	enum class Flag {
-		f_has_pending_resized_items = (1 << 0),
+		HasPendingResizedItems = (1 << 0),
+		UnreadThingsKnown = (1 << 1),
 	};
 	using Flags = base::flags<Flag>;
 	friend inline constexpr auto is_flag_type(Flag) {
@@ -480,6 +535,9 @@ private:
 	bool isBuildingFrontBlock() const {
 		return _buildingFrontBlock != nullptr;
 	}
+
+	void addCreatedOlderSlice(
+		const std::vector<not_null<HistoryItem*>> &items);
 
 	void checkForLoadedAtTop(not_null<HistoryItem*> added);
 	void mainViewRemoved(
@@ -535,9 +593,11 @@ private:
 	void createLocalDraftFromCloud();
 
 	HistoryService *insertJoinedMessage();
-	void insertLocalMessage(not_null<HistoryItem*> item);
+	void insertMessageToBlocks(not_null<HistoryItem*> item);
 
 	void setFolderPointer(Data::Folder *folder);
+
+	const std::unique_ptr<HistoryMainElementDelegateMixin> _delegateMixin;
 
 	Flags _flags = 0;
 	bool _mute = false;
@@ -554,20 +614,22 @@ private:
 	std::optional<MsgId> _inboxReadBefore;
 	std::optional<MsgId> _outboxReadBefore;
 	std::optional<int> _unreadCount;
-	std::optional<int> _unreadMentionsCount;
-	base::flat_set<MsgId> _unreadMentions;
 	std::optional<HistoryItem*> _lastMessage;
 	std::optional<HistoryItem*> _lastServerMessage;
-	base::flat_set<not_null<HistoryItem*>> _localMessages;
+	base::flat_set<not_null<HistoryItem*>> _clientSideMessages;
 	std::unordered_set<std::unique_ptr<HistoryItem>> _messages;
+	std::unique_ptr<HistoryUnreadThings::All> _unreadThings;
 
 	// This almost always is equal to _lastMessage. The only difference is
 	// for a group that migrated to a supergroup. Then _lastMessage can
 	// be a migrate message, but _chatListMessage should be the one before.
 	std::optional<HistoryItem*> _chatListMessage;
 
+	QString _chatListNameSortKey;
+
 	bool _unreadMark = false;
 	bool _fakeUnreadWhileOpened = false;
+	bool _hasPinnedMessages = false;
 
 	// A pointer to the block that is currently being built.
 	// We hold this pointer so we can destroy it while building
@@ -579,16 +641,16 @@ private:
 	std::unique_ptr<BuildingBlock> _buildingFrontBlock;
 
 	Data::HistoryDrafts _drafts;
-	std::optional<QString> _lastSentDraftText;
-	TimeId _lastSentDraftTime = 0;
-	MessageIdsList _forwardDraft;
+	TimeId _acceptCloudDraftsAfter = 0;
+	int _savingCloudDraftRequests = 0;
+	Data::ForwardDraft _forwardDraft;
 
 	QString _topPromotedMessage;
 	QString _topPromotedType;
 
 	HistoryView::SendActionPainter _sendActionPainter;
 
-	std::deque<not_null<HistoryItem*>> _notifications;
+	std::deque<ItemNotification> _notifications;
 
  };
 
