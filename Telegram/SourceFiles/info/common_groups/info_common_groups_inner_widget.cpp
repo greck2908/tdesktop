@@ -172,6 +172,7 @@ InnerWidget::InnerWidget(
 	not_null<Controller*> controller,
 	not_null<UserData*> user)
 : RpWidget(parent)
+, _show(controller->uiShow())
 , _controller(controller)
 , _user(user)
 , _listController(std::make_unique<ListController>(controller, _user))
@@ -280,6 +281,19 @@ void InnerWidget::peerListSetDescription(
 	description.destroy();
 }
 
+void InnerWidget::peerListShowBox(
+		object_ptr<Ui::BoxContent> content,
+		Ui::LayerOptions options) {
+	_show->showBox(std::move(content), options);
+}
+
+void InnerWidget::peerListHideLayer() {
+	_show->hideLayer();
+}
+
+std::shared_ptr<Main::SessionShow> InnerWidget::peerListUiShow() {
+	return _show;
+}
+
 } // namespace CommonGroups
 } // namespace Info
-

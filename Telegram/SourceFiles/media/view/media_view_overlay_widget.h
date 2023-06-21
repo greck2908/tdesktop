@@ -20,6 +20,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/view/media_view_playback_controls.h"
 #include "media/view/media_view_open_common.h"
 
+class History;
+
 namespace Data {
 class PhotoMedia;
 class DocumentMedia;
@@ -29,11 +31,18 @@ namespace Ui {
 class PopupMenu;
 class LinkButton;
 class RoundButton;
-namespace GL {
-struct ChosenRenderer;
-struct Capabilities;
-} // namespace GL
+class RpWindow;
 } // namespace Ui
+
+namespace Ui::GL {
+class Window;
+struct ChosenRenderer;
+enum class Backend;
+} // namespace Ui::GL
+
+namespace Platform {
+class OverlayWidgetHelper;
+} // namespace Platform
 
 namespace Window {
 namespace Theme {
@@ -71,11 +80,15 @@ public:
 		None,
 	};
 
+	[[nodiscard]] bool isActive() const;
 	[[nodiscard]] bool isHidden() const;
+	[[nodiscard]] bool isMinimized() const;
+	[[nodiscard]] bool isFullScreen() const;
 	[[nodiscard]] not_null<QWidget*> widget() const;
 	void hide();
 	void setCursor(style::cursor cursor);
 	void setFocus();
+	[[nodiscard]] bool takeFocusFrom(not_null<QWidget*> window) const;
 	void activate();
 
 	void show(OpenRequest request);
@@ -91,6 +104,9 @@ public:
 
 	void activateControls();
 	void close();
+	void minimize();
+	void toggleFullScreen();
+	void toggleFullScreen(bool fullscreen);
 
 	void notifyFileDialogShown(bool shown);
 
@@ -114,7 +130,6 @@ private:
 		OverNone,
 		OverLeftNav,
 		OverRightNav,
-		OverClose,
 		OverHeader,
 		OverName,
 		OverDate,
@@ -129,7 +144,8 @@ private:
 			v::null_t,
 			not_null<PhotoData*>,
 			not_null<DocumentData*>> data;
-		HistoryItem *item;
+		HistoryItem *item = nullptr;
+		MsgId topicRootId = 0;
 	};
 	enum class SavePhotoVideo {
 		None,
@@ -139,6 +155,17 @@ private:
 	struct ContentGeometry {
 		QRectF rect;
 		qreal rotation = 0.;
+		qreal controlsOpacity = 0.;
+	};
+	struct StartStreaming {
+		StartStreaming() : continueStreaming(false), startTime(0) {
+		}
+		StartStreaming(bool continueStreaming, crl::time startTime)
+		: continueStreaming(continueStreaming)
+		, startTime(startTime) {
+		}
+		const bool continueStreaming = false;
+		const crl::time startTime = 0;
 	};
 
 	[[nodiscard]] not_null<QWindow*> window() const;
@@ -148,9 +175,12 @@ private:
 	void update(const QRegion &region);
 
 	[[nodiscard]] Ui::GL::ChosenRenderer chooseRenderer(
-		Ui::GL::Capabilities capabilities);
+		Ui::GL::Backend backend);
 	void paint(not_null<Renderer*> renderer);
 
+	void setupWindow();
+	void orderWidgets();
+	void showAndActivate();
 	void handleMousePress(QPoint position, Qt::MouseButton button);
 	void handleMouseRelease(QPoint position, Qt::MouseButton button);
 	void handleMouseMove(QPoint position);
@@ -175,7 +205,7 @@ private:
 	void playbackControlsVolumeToggled() override;
 	void playbackControlsVolumeChangeFinished() override;
 	void playbackControlsSpeedChanged(float64 speed) override;
-	float64 playbackControlsCurrentSpeed() override;
+	float64 playbackControlsCurrentSpeed(bool lastNonDefault) override;
 	void playbackControlsToFullScreen() override;
 	void playbackControlsFromFullScreen() override;
 	void playbackControlsToPictureInPicture() override;
@@ -213,8 +243,12 @@ private:
 	void assignMediaPointer(not_null<PhotoData*> photo);
 
 	void updateOver(QPoint mpos);
-	void moveToScreen();
-	void updateGeometry();
+	void initFullScreen();
+	void initNormalGeometry();
+	void savePosition();
+	void moveToScreen(bool inMove = false);
+	void updateGeometry(bool inMove = false);
+	void updateGeometryToScreen(bool inMove = false);
 	bool moveToNext(int delta);
 	void preloadData(int delta);
 
@@ -229,9 +263,14 @@ private:
 	Entity entityByIndex(int index) const;
 	Entity entityForItemId(const FullMsgId &itemId) const;
 	bool moveToEntity(const Entity &entity, int preloadDelta = 0);
+
+	struct ItemContext {
+		not_null<HistoryItem*> item;
+		MsgId topicRootId = 0;
+	};
 	void setContext(std::variant<
 		v::null_t,
-		not_null<HistoryItem*>,
+		ItemContext,
 		not_null<PeerData*>> context);
 
 	void refreshLang();
@@ -282,12 +321,13 @@ private:
 
 	void resizeCenteredControls();
 	void resizeContentByScreenSize();
+	void recountSkipTop();
 
 	void displayPhoto(not_null<PhotoData*> photo);
 	void displayDocument(
 		DocumentData *document,
 		const Data::CloudTheme &cloud = Data::CloudTheme(),
-		bool continueStreaming = false);
+		const StartStreaming &startStreaming = StartStreaming());
 	void displayFinished();
 	void redisplayContent();
 	void findCurrent();
@@ -303,8 +343,9 @@ private:
 	void refreshClipControllerGeometry();
 	void refreshCaptionGeometry();
 
-	bool initStreaming(bool continueStreaming = false);
-	void startStreamingPlayer();
+	bool initStreaming(
+		const StartStreaming &startStreaming = StartStreaming());
+	void startStreamingPlayer(const StartStreaming &startStreaming);
 	void initStreamingThumbnail();
 	void streamingReady(Streaming::Information &&info);
 	[[nodiscard]] bool createStreamingObjects();
@@ -316,8 +357,8 @@ private:
 	void destroyThemePreview();
 	void updateThemePreviewGeometry();
 
-	void documentUpdated(DocumentData *doc);
-	void changingMsgId(not_null<HistoryItem*> row, MsgId oldId);
+	void documentUpdated(not_null<DocumentData*> document);
+	void changingMsgId(FullMsgId newId, MsgId oldId);
 
 	[[nodiscard]] int finalContentRotation() const;
 	[[nodiscard]] QRect finalContentRect() const;
@@ -378,7 +419,10 @@ private:
 		QRect clip,
 		float64 opacity);
 
-	void updateSaveMsgState();
+	[[nodiscard]] float64 controlOpacity(
+		float64 progress,
+		bool nonbright = false) const;
+	[[nodiscard]] bool isSaveMsgShown() const;
 
 	void updateOverRect(OverState state);
 	bool updateOverState(OverState newState);
@@ -390,8 +434,8 @@ private:
 	void validatePhotoImage(Image *image, bool blurred);
 	void validatePhotoCurrentImage();
 
-	[[nodiscard]] bool hasCopyRestriction() const;
-	[[nodiscard]] bool showCopyRestriction();
+	[[nodiscard]] bool hasCopyMediaRestriction() const;
+	[[nodiscard]] bool showCopyMediaRestriction();
 
 	[[nodiscard]] QSize flipSizeByRotation(QSize size) const;
 
@@ -415,15 +459,27 @@ private:
 	void clearStreaming(bool savePosition = true);
 	bool canInitStreaming() const;
 
+	[[nodiscard]] bool topShadowOnTheRight() const;
 	void applyHideWindowWorkaround();
 
 	Window::SessionController *findWindow(bool switchTo = true) const;
 
 	bool _opengl = false;
+	const std::unique_ptr<Ui::GL::Window> _wrap;
+	const not_null<Ui::RpWindow*> _window;
+	const std::unique_ptr<Platform::OverlayWidgetHelper> _helper;
+	const not_null<Ui::RpWidget*> _body;
+	const std::unique_ptr<Ui::RpWidget> _titleBugWorkaround;
 	const std::unique_ptr<Ui::RpWidgetWrap> _surface;
 	const not_null<QWidget*> _widget;
+	QRect _normalGeometry;
+	bool _wasWindowedMode = false;
+	bool _fullscreenInited = false;
+	bool _normalGeometryInited = false;
+	bool _fullscreen = true;
+	bool _windowed = false;
 
-	base::weak_ptr<Window::Controller> _window;
+	base::weak_ptr<Window::Controller> _openedFrom;
 	Main::Session *_session = nullptr;
 	rpl::lifetime _sessionLifetime;
 	PhotoData *_photo = nullptr;
@@ -441,10 +497,12 @@ private:
 	std::unique_ptr<Collage> _collage;
 	std::optional<WebPageCollage> _collageData;
 
-	QRect _closeNav, _closeNavIcon;
-	QRect _leftNav, _leftNavIcon, _rightNav, _rightNavIcon;
+	QRect _leftNav, _leftNavOver, _leftNavIcon;
+	QRect _rightNav, _rightNavOver, _rightNavIcon;
 	QRect _headerNav, _nameNav, _dateNav;
-	QRect _rotateNav, _rotateNavIcon, _saveNav, _saveNavIcon, _moreNav, _moreNavIcon;
+	QRect _rotateNav, _rotateNavOver, _rotateNavIcon;
+	QRect _saveNav, _saveNavOver, _saveNavIcon;
+	QRect _moreNav, _moreNavOver, _moreNavIcon;
 	bool _leftNavVisible = false;
 	bool _rightNavVisible = false;
 	bool _saveVisible = false;
@@ -468,6 +526,8 @@ private:
 
 	int _width = 0;
 	int _height = 0;
+	int _skipTop = 0;
+	int _availableHeight = 0;
 	int _x = 0, _y = 0, _w = 0, _h = 0;
 	int _xStart = 0, _yStart = 0;
 	int _zoom = 0; // < 0 - out, 0 - none, > 0 - in
@@ -479,6 +539,7 @@ private:
 	QImage _staticContent;
 	bool _staticContentTransparent = false;
 	bool _blurred = true;
+	bool _reShow = false;
 
 	ContentGeometry _oldGeometry;
 	Ui::Animations::Simple _geometryAnimation;
@@ -501,11 +562,16 @@ private:
 	object_ptr<Ui::LinkButton> _docSaveAs;
 	object_ptr<Ui::LinkButton> _docCancel;
 
+	QRect _bottomShadowRect;
+	QRect _topShadowRect;
+	rpl::variable<bool> _topShadowRight = false;
+
 	QRect _photoRadialRect;
 	Ui::RadialAnimation _radial;
 
 	History *_migrated = nullptr;
 	History *_history = nullptr; // if conversation photos or files overview
+	MsgId _topicRootId = 0;
 	PeerData *_peer = nullptr;
 	UserData *_user = nullptr; // if user profile photos overview
 
@@ -542,7 +608,7 @@ private:
 	ControlsState _controlsState = ControlsShown;
 	crl::time _controlsAnimStarted = 0;
 	base::Timer _controlsHideTimer;
-	anim::value _controlsOpacity;
+	anim::value _controlsOpacity = { 1. };
 	bool _mousePressed = false;
 
 	base::unique_qptr<Ui::PopupMenu> _menu;
@@ -558,13 +624,13 @@ private:
 	QPoint _touchStart;
 
 	QString _saveMsgFilename;
-	crl::time _saveMsgStarted = 0;
-	anim::value _saveMsgOpacity;
 	QRect _saveMsg;
 	QImage _saveMsgImage;
-	base::Timer _saveMsgUpdater;
 	Ui::Text::String _saveMsgText;
 	SavePhotoVideo _savePhotoVideoWhenLoaded = SavePhotoVideo::None;
+	// _saveMsgAnimation -> _saveMsgTimer -> _saveMsgAnimation.
+	Ui::Animations::Simple _saveMsgAnimation;
+	base::Timer _saveMsgTimer;
 
 	base::flat_map<OverState, crl::time> _animations;
 	base::flat_map<OverState, anim::value> _animationOpacities;

@@ -21,6 +21,7 @@ class VerticalLayout;
 namespace Settings {
 
 void SetupLanguageButton(
+	not_null<Window::Controller*> window,
 	not_null<Ui::VerticalLayout*> container,
 	bool icon = true);
 bool HasInterfaceScale();
@@ -32,9 +33,11 @@ void SetupFaq(
 	not_null<Ui::VerticalLayout*> container,
 	bool icon = true);
 
-class Main : public Section {
+class Main : public Section<Main> {
 public:
 	Main(QWidget *parent, not_null<Window::SessionController*> controller);
+
+	[[nodiscard]] rpl::producer<QString> title() override;
 
 	rpl::producer<Type> sectionShowOther() override;
 

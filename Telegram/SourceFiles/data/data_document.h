@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/file_location.h"
 #include "ui/image/image.h"
 
+enum class ChatRestriction;
 class mtpFileLoader;
 
 namespace Images {
@@ -36,6 +37,7 @@ namespace Data {
 class Session;
 class DocumentMedia;
 class ReplyPreview;
+enum class StickersType : uchar;
 } // namespace Data
 
 namespace Main {
@@ -73,12 +75,12 @@ struct StickerData : public DocumentAdditionalData {
 	QString alt;
 	StickerSetIdentifier set;
 	StickerType type = StickerType::Webp;
+	Data::StickersType setType = Data::StickersType();
 };
 
 struct SongData : public DocumentAdditionalData {
 	int32 duration = 0;
 	QString title, performer;
-
 };
 
 struct VoiceData : public DocumentAdditionalData {
@@ -88,6 +90,8 @@ struct VoiceData : public DocumentAdditionalData {
 	VoiceWaveform waveform;
 	char wavemax = 0;
 };
+
+using RoundData = VoiceData;
 
 namespace Serialize {
 class Document;
@@ -116,11 +120,14 @@ public:
 		bool autoLoading = false);
 	void cancel();
 	[[nodiscard]] bool cancelled() const;
+	void resetCancelled();
 	[[nodiscard]] float64 progress() const;
-	[[nodiscard]] int loadOffset() const;
+	[[nodiscard]] int64 loadOffset() const;
 	[[nodiscard]] bool uploading() const;
 	[[nodiscard]] bool loadedInMediaCache() const;
 	void setLoadedInMediaCache(bool loaded);
+
+	[[nodiscard]] ChatRestriction requiredSendRight() const;
 
 	void setWaitingForAlbum();
 	[[nodiscard]] bool waitingForAlbum() const;
@@ -133,13 +140,15 @@ public:
 	bool saveFromDataSilent();
 	[[nodiscard]] QString filepath(bool check = false) const;
 
+	void forceToCache(bool force);
 	[[nodiscard]] bool saveToCache() const;
 
 	[[nodiscard]] Image *getReplyPreview(
 		Data::FileOrigin origin,
-		not_null<PeerData*> context);
+		not_null<PeerData*> context,
+		bool spoiler);
 	[[nodiscard]] Image *getReplyPreview(not_null<HistoryItem*> item);
-	[[nodiscard]] bool replyPreviewLoaded() const;
+	[[nodiscard]] bool replyPreviewLoaded(bool spoiler) const;
 
 	[[nodiscard]] StickerData *sticker() const;
 	[[nodiscard]] Data::FileOrigin stickerSetOrigin() const;
@@ -149,7 +158,10 @@ public:
 	[[nodiscard]] const SongData *song() const;
 	[[nodiscard]] VoiceData *voice();
 	[[nodiscard]] const VoiceData *voice() const;
+	[[nodiscard]] RoundData *round();
+	[[nodiscard]] const RoundData *round() const;
 
+	void forceIsStreamedAnimation();
 	[[nodiscard]] bool isVoiceMessage() const;
 	[[nodiscard]] bool isVideoMessage() const;
 	[[nodiscard]] bool isSong() const;
@@ -171,6 +183,9 @@ public:
 	[[nodiscard]] bool isPatternWallPaper() const;
 	[[nodiscard]] bool isPatternWallPaperPNG() const;
 	[[nodiscard]] bool isPatternWallPaperSVG() const;
+	[[nodiscard]] bool isPremiumSticker() const;
+	[[nodiscard]] bool isPremiumEmoji() const;
+	[[nodiscard]] bool emojiUsesTextColor() const;
 
 	[[nodiscard]] bool hasThumbnail() const;
 	[[nodiscard]] bool thumbnailLoading() const;
@@ -189,7 +204,8 @@ public:
 	void updateThumbnails(
 		const InlineImageLocation &inlineThumbnail,
 		const ImageWithLocation &thumbnail,
-		const ImageWithLocation &videoThumbnail);
+		const ImageWithLocation &videoThumbnail,
+		bool isPremiumSticker);
 
 	[[nodiscard]] QByteArray inlineThumbnailBytes() const {
 		return _inlineThumbnailBytes;
@@ -238,7 +254,7 @@ public:
 
 	[[nodiscard]] QString filename() const;
 	[[nodiscard]] QString mimeString() const;
-	[[nodiscard]] bool hasMimeType(QLatin1String mime) const;
+	[[nodiscard]] bool hasMimeType(const QString &mime) const;
 	void setMimeString(const QString &mime);
 
 	[[nodiscard]] bool hasAttachedStickers() const;
@@ -258,25 +274,28 @@ public:
 	[[nodiscard]] bool inappPlaybackFailed() const;
 
 	DocumentId id = 0;
-	DocumentType type = FileDocument;
+	int64 size = 0;
 	QSize dimensions;
 	int32 date = 0;
-	int32 size = 0;
-
+	DocumentType type = FileDocument;
 	FileStatus status = FileReady;
 
 	std::unique_ptr<Data::UploadState> uploadingData;
 
 private:
-	enum class Flag : uchar {
-		StreamingMaybeYes = 0x01,
-		StreamingMaybeNo = 0x02,
-		StreamingPlaybackFailed = 0x04,
-		ImageType = 0x08,
-		DownloadCancelled = 0x10,
-		LoadedInMediaCache = 0x20,
-		HasAttachedStickers = 0x40,
-		InlineThumbnailIsPath = 0x80,
+	enum class Flag : ushort {
+		StreamingMaybeYes = 0x001,
+		StreamingMaybeNo = 0x002,
+		StreamingPlaybackFailed = 0x004,
+		ImageType = 0x008,
+		DownloadCancelled = 0x010,
+		LoadedInMediaCache = 0x020,
+		HasAttachedStickers = 0x040,
+		InlineThumbnailIsPath = 0x080,
+		ForceToCache = 0x100,
+		PremiumSticker = 0x200,
+		PossibleCoverThumbnail = 0x400,
+		UseTextColor = 0x800,
 	};
 	using Flags = base::flags<Flag>;
 	friend constexpr bool is_flag_type(Flag) { return true; };
@@ -317,6 +336,8 @@ private:
 	void destroyLoader();
 
 	bool saveFromDataChecked();
+
+	void refreshPossibleCoverThumbnail();
 
 	const not_null<Data::Session*> _owner;
 

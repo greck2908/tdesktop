@@ -184,7 +184,8 @@ public:
 	std::unique_ptr<PeerListState> saveState() const override;
 	void restoreState(std::unique_ptr<PeerListState> state) override;
 
-	rpl::producer<int> onlineCountValue() const override;
+	[[nodiscard]] rpl::producer<int> onlineCountValue() const;
+	[[nodiscard]] rpl::producer<int> fullCountValue() const;
 
 protected:
 	// Allow child controllers not providing navigation.
@@ -221,12 +222,16 @@ private:
 		Role role,
 		not_null<ParticipantsAdditionalData*> additional);
 
+	QPointer<Ui::BoxContent> showBox(object_ptr<Ui::BoxContent> box) const;
+
 	void prepareChatRows(not_null<ChatData*> chat);
 	void rebuildChatRows(not_null<ChatData*> chat);
 	void rebuildChatParticipants(not_null<ChatData*> chat);
 	void rebuildChatAdmins(not_null<ChatData*> chat);
 	void chatListReady();
 	void rebuildRowTypes();
+	void rebuild();
+	void unload();
 
 	void addNewItem();
 	void addNewParticipants();
@@ -264,6 +269,7 @@ private:
 	void migrate(not_null<ChatData*> chat, not_null<ChannelData*> channel);
 	void subscribeToCreatorChange(not_null<ChannelData*> channel);
 	void fullListRefresh();
+	void refreshRows();
 
 	// It may be nullptr in subclasses of this controller.
 	Window::SessionNavigation *_navigation = nullptr;
@@ -276,6 +282,8 @@ private:
 	bool _allLoaded = false;
 	ParticipantsAdditionalData _additional;
 	std::unique_ptr<ParticipantsOnlineSorter> _onlineSorter;
+	rpl::variable<int> _onlineCountValue;
+	rpl::variable<int> _fullCountValue;
 	Ui::BoxPointer _editBox;
 	Ui::BoxPointer _addBox;
 	QPointer<Ui::BoxContent> _editParticipantBox;

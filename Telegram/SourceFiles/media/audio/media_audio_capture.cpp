@@ -130,8 +130,12 @@ void Instance::check() {
 }
 
 Instance::~Instance() {
-	InvokeQueued(_inner.get(), [copy = base::take(_inner)] {
-	});
+	// Send _inner to it's thread for destruction.
+	if (const auto context = _inner.get()) {
+		InvokeQueued(context, [copy = base::take(_inner)]{});
+	}
+
+	// And wait for it to finish.
 	_thread.quit();
 	_thread.wait();
 }
@@ -147,8 +151,9 @@ struct Instance::Inner::Private {
 	AVIOContext *ioContext = nullptr;
 	AVFormatContext *fmtContext = nullptr;
 	AVStream *stream = nullptr;
-	AVCodec *codec = nullptr;
+	const AVCodec *codec = nullptr;
 	AVCodecContext *codecContext = nullptr;
+	int channels = 0;
 	bool opened = false;
 	bool processing = false;
 
@@ -172,12 +177,12 @@ struct Instance::Inner::Private {
 	uint16 waveformPeak = 0;
 	QVector<uchar> waveform;
 
-	static int _read_data(void *opaque, uint8_t *buf, int buf_size) {
+	static int ReadData(void *opaque, uint8_t *buf, int buf_size) {
 		auto l = reinterpret_cast<Private*>(opaque);
 
 		int32 nbytes = qMin(l->data.size() - l->dataPos, int32(buf_size));
 		if (nbytes <= 0) {
-			return 0;
+			return AVERROR_EOF;
 		}
 
 		memcpy(buf, l->data.constData() + l->dataPos, nbytes);
@@ -185,7 +190,7 @@ struct Instance::Inner::Private {
 		return nbytes;
 	}
 
-	static int _write_data(void *opaque, uint8_t *buf, int buf_size) {
+	static int WriteData(void *opaque, uint8_t *buf, int buf_size) {
 		auto l = reinterpret_cast<Private*>(opaque);
 
 		if (buf_size <= 0) return 0;
@@ -195,7 +200,7 @@ struct Instance::Inner::Private {
 		return buf_size;
 	}
 
-	static int64_t _seek_data(void *opaque, int64_t offset, int whence) {
+	static int64_t SeekData(void *opaque, int64_t offset, int whence) {
 		auto l = reinterpret_cast<Private*>(opaque);
 
 		int32 newPos = -1;
@@ -256,13 +261,13 @@ void Instance::Inner::start(Fn<void(Update)> updated, Fn<void()> error) {
 
 	d->ioBuffer = (uchar*)av_malloc(FFmpeg::kAVBlockSize);
 
-	d->ioContext = avio_alloc_context(d->ioBuffer, FFmpeg::kAVBlockSize, 1, static_cast<void*>(d.get()), &Private::_read_data, &Private::_write_data, &Private::_seek_data);
+	d->ioContext = avio_alloc_context(d->ioBuffer, FFmpeg::kAVBlockSize, 1, static_cast<void*>(d.get()), &Private::ReadData, &Private::WriteData, &Private::SeekData);
 	int res = 0;
 	char err[AV_ERROR_MAX_STRING_SIZE] = { 0 };
 	const AVOutputFormat *fmt = nullptr;
 	void *i = nullptr;
 	while ((fmt = av_muxer_iterate(&i))) {
-		if (fmt->name == qstr("opus")) {
+		if (fmt->name == u"opus"_q) {
 			break;
 		}
 	}
@@ -306,9 +311,14 @@ void Instance::Inner::start(Fn<void(Update)> updated, Fn<void()> error) {
 
 	d->codecContext->sample_fmt = AV_SAMPLE_FMT_FLTP;
 	d->codecContext->bit_rate = 32000;
+#if DA_FFMPEG_NEW_CHANNEL_LAYOUT
+	d->codecContext->ch_layout = AV_CHANNEL_LAYOUT_MONO;
+	d->channels = d->codecContext->ch_layout.nb_channels;
+#else // DA_FFMPEG_NEW_CHANNEL_LAYOUT
 	d->codecContext->channel_layout = AV_CH_LAYOUT_MONO;
+	d->channels = d->codecContext->channels = 1;
+#endif // DA_FFMPEG_NEW_CHANNEL_LAYOUT
 	d->codecContext->sample_rate = kCaptureFrequency;
-	d->codecContext->channels = 1;
 
 	if (d->fmtContext->oformat->flags & AVFMT_GLOBALHEADER) {
 		d->codecContext->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -333,32 +343,47 @@ void Instance::Inner::start(Fn<void(Update)> updated, Fn<void()> error) {
 	// Using _captured directly
 
 	// Prepare resampling
-	d->swrContext = swr_alloc();
-	if (!d->swrContext) {
-		fprintf(stderr, "Could not allocate resampler context\n");
-		exit(1);
-	}
-
-	av_opt_set_int(d->swrContext, "in_channel_count", d->codecContext->channels, 0);
-	av_opt_set_int(d->swrContext, "in_sample_rate", d->codecContext->sample_rate, 0);
-	av_opt_set_sample_fmt(d->swrContext, "in_sample_fmt", AV_SAMPLE_FMT_S16, 0);
-	av_opt_set_int(d->swrContext, "out_channel_count", d->codecContext->channels, 0);
-	av_opt_set_int(d->swrContext, "out_sample_rate", d->codecContext->sample_rate, 0);
-	av_opt_set_sample_fmt(d->swrContext, "out_sample_fmt", d->codecContext->sample_fmt, 0);
-
-	if ((res = swr_init(d->swrContext)) < 0) {
+#if DA_FFMPEG_NEW_CHANNEL_LAYOUT
+	res = swr_alloc_set_opts2(
+		&d->swrContext,
+		&d->codecContext->ch_layout,
+		d->codecContext->sample_fmt,
+		d->codecContext->sample_rate,
+		&d->codecContext->ch_layout,
+		AV_SAMPLE_FMT_S16,
+		d->codecContext->sample_rate,
+		0,
+		nullptr);
+#else // DA_FFMPEG_NEW_CHANNEL_LAYOUT
+	d->swrContext = swr_alloc_set_opts(
+		d->swrContext,
+		d->codecContext->channel_layout,
+		d->codecContext->sample_fmt,
+		d->codecContext->sample_rate,
+		d->codecContext->channel_layout,
+		AV_SAMPLE_FMT_S16,
+		d->codecContext->sample_rate,
+		0,
+		nullptr);
+	res = 0;
+#endif // DA_FFMPEG_NEW_CHANNEL_LAYOUT
+	if (res < 0 || !d->swrContext) {
+		LOG(("Audio Error: Unable to swr_alloc_set_opts2 for capture, error %1, %2").arg(res).arg(av_make_error_string(err, sizeof(err), res)));
+		fail();
+		return;
+	} else if ((res = swr_init(d->swrContext)) < 0) {
 		LOG(("Audio Error: Unable to swr_init for capture, error %1, %2").arg(res).arg(av_make_error_string(err, sizeof(err), res)));
 		fail();
 		return;
 	}
 
 	d->maxDstSamples = d->srcSamples;
-	if ((res = av_samples_alloc_array_and_samples(&d->dstSamplesData, 0, d->codecContext->channels, d->maxDstSamples, d->codecContext->sample_fmt, 0)) < 0) {
+	if ((res = av_samples_alloc_array_and_samples(&d->dstSamplesData, 0, d->channels, d->maxDstSamples, d->codecContext->sample_fmt, 0)) < 0) {
 		LOG(("Audio Error: Unable to av_samples_alloc_array_and_samples for capture, error %1, %2").arg(res).arg(av_make_error_string(err, sizeof(err), res)));
 		fail();
 		return;
 	}
-	d->dstSamplesSize = av_samples_get_buffer_size(0, d->codecContext->channels, d->maxDstSamples, d->codecContext->sample_fmt, 0);
+	d->dstSamplesSize = av_samples_get_buffer_size(0, d->channels, d->maxDstSamples, d->codecContext->sample_fmt, 0);
 
 	if ((res = avcodec_parameters_from_context(d->stream->codecpar, d->codecContext)) < 0) {
 		LOG(("Audio Error: Unable to avcodec_parameters_from_context for capture, error %1, %2").arg(res).arg(av_make_error_string(err, sizeof(err), res)));
@@ -421,7 +446,7 @@ void Instance::Inner::stop(Fn<void(Result&&)> callback) {
 				memset(_captured.data() + s, 0, _captured.size() - s);
 			}
 
-			int32 framesize = d->srcSamples * d->codecContext->channels * sizeof(short), encoded = 0;
+			int32 framesize = d->srcSamples * d->channels * sizeof(short), encoded = 0;
 			while (_captured.size() >= encoded + framesize) {
 				if (!processFrame(encoded, framesize)) {
 					break;
@@ -592,7 +617,7 @@ void Instance::Inner::process() {
 			d->levelMax = 0;
 		}
 		// Write frames
-		int32 framesize = d->srcSamples * d->codecContext->channels * sizeof(short), encoded = 0;
+		int32 framesize = d->srcSamples * d->channels * sizeof(short), encoded = 0;
 		while (uint32(_captured.size()) >= encoded + framesize + fadeSamples * sizeof(short)) {
 			if (!processFrame(encoded, framesize)) {
 				return;
@@ -661,12 +686,12 @@ bool Instance::Inner::processFrame(int32 offset, int32 framesize) {
 	if (d->dstSamples > d->maxDstSamples) {
 		d->maxDstSamples = d->dstSamples;
 		av_freep(&d->dstSamplesData[0]);
-		if ((res = av_samples_alloc(d->dstSamplesData, 0, d->codecContext->channels, d->dstSamples, d->codecContext->sample_fmt, 1)) < 0) {
+		if ((res = av_samples_alloc(d->dstSamplesData, 0, d->channels, d->dstSamples, d->codecContext->sample_fmt, 1)) < 0) {
 			LOG(("Audio Error: Unable to av_samples_alloc for capture, error %1, %2").arg(res).arg(av_make_error_string(err, sizeof(err), res)));
 			fail();
 			return false;
 		}
-		d->dstSamplesSize = av_samples_get_buffer_size(0, d->codecContext->channels, d->maxDstSamples, d->codecContext->sample_fmt, 0);
+		d->dstSamplesSize = av_samples_get_buffer_size(0, d->channels, d->maxDstSamples, d->codecContext->sample_fmt, 0);
 	}
 
 	if ((res = swr_convert(d->swrContext, d->dstSamplesData, d->dstSamples, (const uint8_t **)srcSamplesData, d->srcSamples)) < 0) {
@@ -680,13 +705,17 @@ bool Instance::Inner::processFrame(int32 offset, int32 framesize) {
 	AVFrame *frame = av_frame_alloc();
 
 	frame->format = d->codecContext->sample_fmt;
+#if DA_FFMPEG_NEW_CHANNEL_LAYOUT
+	av_channel_layout_copy(&frame->ch_layout, &d->codecContext->ch_layout);
+#else // DA_FFMPEG_NEW_CHANNEL_LAYOUT
 	frame->channels = d->codecContext->channels;
 	frame->channel_layout = d->codecContext->channel_layout;
+#endif // DA_FFMPEG_NEW_CHANNEL_LAYOUT
 	frame->sample_rate = d->codecContext->sample_rate;
 	frame->nb_samples = d->dstSamples;
 	frame->pts = av_rescale_q(d->fullSamples, AVRational { 1, d->codecContext->sample_rate }, d->codecContext->time_base);
 
-	avcodec_fill_audio_frame(frame, d->codecContext->channels, d->codecContext->sample_fmt, d->dstSamplesData[0], d->dstSamplesSize, 0);
+	avcodec_fill_audio_frame(frame, d->channels, d->codecContext->sample_fmt, d->dstSamplesData[0], d->dstSamplesSize, 0);
 
 	if (!writeFrame(frame)) {
 		return false;

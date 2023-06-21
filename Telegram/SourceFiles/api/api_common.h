@@ -9,7 +9,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class History;
 
+namespace Data {
+class Thread;
+} // namespace Data
+
 namespace Api {
+
+inline constexpr auto kScheduledUntilOnlineTimestamp = TimeId(0x7FFFFFFE);
 
 struct SendOptions {
 	PeerData *sendAs = nullptr;
@@ -17,7 +23,9 @@ struct SendOptions {
 	bool silent = false;
 	bool handleSupportSwitch = false;
 	bool removeWebPageId = false;
+	bool hideViaBot = false;
 };
+[[nodiscard]] SendOptions DefaultSendWhenOnlineOptions();
 
 enum class SendType {
 	Normal,
@@ -27,15 +35,13 @@ enum class SendType {
 
 struct SendAction {
 	explicit SendAction(
-		not_null<History*> history,
-		SendOptions options = SendOptions())
-	: history(history)
-	, options(options) {
-	}
+		not_null<Data::Thread*> thread,
+		SendOptions options = SendOptions());
 
 	not_null<History*> history;
 	SendOptions options;
 	MsgId replyTo = 0;
+	MsgId topicRootId = 0;
 	bool clearDraft = true;
 	bool generateLocal = true;
 	MsgId replaceMediaOf = 0;

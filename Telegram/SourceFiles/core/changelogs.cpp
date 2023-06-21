@@ -23,61 +23,108 @@ namespace {
 std::map<int, const char*> BetaLogs() {
 	return {
 	{
-		3002006,
-		"- Try out the new audio player with playlist shuffle and repeat.\n"
+		4005004,
+		"- Allow wide range of interface scale options.\n"
 
-		"- Give a custom name to your desktop session "
-		"to distinguish it in the sessions list.\n"
+		"- Show opened chat name in the window title.\n"
+
+		"- Bug fixes and other minor improvements.\n"
+
+		"- Fix updating on macOS older than 10.14.\n"
 	},
 	{
-		3002007,
-		"- Active sessions list redesign.\n"
+		4005006,
+		"- Try enabling non-fractional scale "
+		"High DPI support on Windows and Linux.\n"
 
-		"- Fix disappearing emoji selector button.\n"
+		"- Experimental setting for fractional scale "
+		"High DPI support on Windows and Linux.\n"
 
-		"- Fix a crash in archived stickers loading.\n"
+		"- Fix navigation to bottom problems in groups you didn't join.\n"
+
+		"- Fix a crash in chat export settings changes.\n"
+
+		"- Fix a crash in sending some of JPEG images.\n"
+
+		"- Fix CJK fonts on Windows.\n"
+	},
+	{
+		4005007,
+		"- Fix glitches after moving window to another screen.\n",
+	},
+	{
+		4005008,
+		"- Allow opening another account in a new window "
+		"(see Settings > Advanced > Experimental Settings).\n"
+
+		"- A lot of bugfixes for working with more than one window.\n"
+	},
+	{
+		4006004,
+		"- Allow media viewer to exit fullscreen and become a normal window."
+	},
+	{
+		4006006,
+		"- Confirmation window before starting a call.\n"
+
+		"- New \"Battery and Animations\" settings section.\n"
+
+		"- \"Save Power on Low Battery\" option for laptops.\n"
+
+		"- Improved windowed mode support for media viewer.\n"
+
+		"- Hardware accelerated video playback fix on macOS.\n"
+
+		"- New application icon on macOS following the system guidelines.\n"
+	},
+	{
+		4006007,
+		"- Fix crash when accepting incoming calls.\n"
+
+		"- Remove sound when cancelling an unconfirmed call.\n"
+	},
+	{
+		4006008,
+		"- Improve quality of voice messages with changed playback speed.\n"
+
+		"- Show when your message was read in small groups.\n"
+
+		"- Fix pasting images from Firefox on Windows.\n"
+
+		"- Improve memory usage for custom emoji.\n"
+	},
+	{
+		4006010,
+		"- Suggest sending an invite link if user forbids "
+		"inviting him to groups.\n"
+
+		"- Show when a reaction was left on your message in small groups.\n"
+
+		"- Fix a crash in video chats on Windows.\n"
+
+		"- Fix a crash in audio speed change.\n"
+	},
+	{
+		4006011,
+		"- Allow larger interface scale values on high-dpi screens.\n"
+
+		"- Implement new voice and video speed change interface (up to 2.5x).\n"
+
+		"- Support global Fn+F shortcut to toggle fullscreen on macOS.\n"
+
+		"- Silent notification sound in Focus Mode on macOS.\n"
+
+		"- Fix media viewer on macOS with several screens.\n"
 		
-		"- Fix a crash in calls to old Telegram versions.\n"
+		"- Fix a crash in connection type box.\n"
+
+		"- Fix possible crash on quit.\n"
 	},
 	{
-		3003001,
-		"- Switch between contacts list sorting modes.\n"
+		4006012,
+		"- Fix several possible crashes.\n"
 
-		"- Sort contacts list by last seen time by default.\n"
-
-		"- Fix disappearing Send As Channel button after message editing.\n"
-
-		"- Fix file upload cancelling.\n"
-
-		"- Fix crash in video capture on macOS.\n"
-
-		"- Fix labels in the About box.\n"
-
-		"- Use Qt 6.2.2 for macOS and Linux builds.\n"
-
-		"- Allow installing x64 Windows version on Windows ARM.\n"
-	},
-	{
-		3003002,
-		"- Select text when typing and choose 'Formatting > Spoiler' in the "
-		"context menu to hide some or all of the contents of a message.\n"
-
-		"- Click on the spoiler in chat to reveal its hidden text.\n"
-
-		"- Spoiler formatting hides text in chat, "
-		"as well as in the chat list and notifications.\n"
-	},
-	{
-		3004005,
-		"- Fix crash in monospace blocks processing.\n"
-
-		"- Fix reaction animations stopping after an hour uptime.\n"
-	},
-	{
-		3004006,
-		"- Add snap layouts support on Windows 11.\n"
-		
-		"- Fix crash in drafts after accounts switching.\n"
+		"- Deprecate macOS 10.12, Ubuntu 18.04 and CentOS 7 in July.\n"
 	}
 	};
 };
@@ -182,7 +229,7 @@ void Changelogs::addBetaLog(int changeVersion, const char *changes) {
 		return result.replace(simple, separator);
 	}();
 	const auto version = FormatVersionDisplay(changeVersion);
-	const auto log = qsl("New in version %1 beta:\n\n").arg(version) + text;
+	const auto log = u"New in version %1 beta:\n\n"_q.arg(version) + text;
 	addLocalLog(log);
 }
 

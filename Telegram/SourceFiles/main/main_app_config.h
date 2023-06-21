@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "mtproto/sender.h"
+#include "base/algorithm.h"
 
 namespace Main {
 
@@ -23,11 +24,15 @@ public:
 	[[nodiscard]] Type get(const QString &key, Type fallback) const {
 		if constexpr (std::is_same_v<Type, double>) {
 			return getDouble(key, fallback);
+		} else if constexpr (std::is_same_v<Type, int>) {
+			return int(base::SafeRound(getDouble(key, double(fallback))));
 		} else if constexpr (std::is_same_v<Type, QString>) {
 			return getString(key, fallback);
 		} else if constexpr (std::is_same_v<Type, std::vector<QString>>) {
 			return getStringArray(key, std::move(fallback));
-		} else if constexpr (std::is_same_v<Type, std::vector<std::map<QString, QString>>>) {
+		} else if constexpr (std::is_same_v<
+				Type,
+				std::vector<std::map<QString, QString>>>) {
 			return getStringMapArray(key, std::move(fallback));
 		} else if constexpr (std::is_same_v<Type, bool>) {
 			return getBool(key, fallback);
@@ -71,6 +76,7 @@ private:
 	const not_null<Account*> _account;
 	std::optional<MTP::Sender> _api;
 	mtpRequestId _requestId = 0;
+	int32 _hash = 0;
 	base::flat_map<QString, MTPJSONValue> _data;
 	rpl::event_stream<> _refreshed;
 	base::flat_set<QString> _dismissedSuggestions;

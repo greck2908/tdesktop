@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/widgets/buttons.h"
 #include "ui/effects/radial_animation.h"
+#include "ui/painter.h"
 #include "ui/ui_utility.h"
 #include "mtproto/mtp_instance.h"
 #include "mtproto/facade.h"
@@ -53,7 +54,7 @@ Progress::Progress(QWidget *parent)
 }
 
 void Progress::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 
 	p.fillRect(e->rect(), st::windowBg);
 	const auto &st = st::connectingRadial;
@@ -156,7 +157,7 @@ void ConnectionState::Widget::ProxyIcon::refreshCacheImages() {
 		image.setDevicePixelRatio(cRetinaFactor());
 		image.fill(st::windowBg->c);
 		{
-			Painter p(&image);
+			auto p = QPainter(&image);
 			icon.paint(
 				p,
 				(width() - icon.width()) / 2,
@@ -187,7 +188,7 @@ void ConnectionState::Widget::ProxyIcon::setOpacity(float64 opacity) {
 }
 
 void ConnectionState::Widget::ProxyIcon::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 	p.setOpacity(_opacity);
 	p.drawPixmap(0, 0, _toggled ? _cacheOn : _cacheOff);
 }
@@ -222,7 +223,7 @@ ConnectionState::ConnectionState(
 	if (!Core::UpdaterDisabled()) {
 		Core::UpdateChecker checker;
 		rpl::merge(
-			rpl::single(rpl::empty_value()),
+			rpl::single(rpl::empty),
 			checker.ready()
 		) | rpl::start_with_next([=] {
 			refreshState();
@@ -243,11 +244,12 @@ void ConnectionState::createWidget() {
 
 	rpl::combine(
 		visibility(),
-		_parent->heightValue()
-	) | rpl::start_with_next([=](float64 visible, int height) {
+		_parent->heightValue(),
+		_bottomSkip.value()
+	) | rpl::start_with_next([=](float64 visible, int height, int skip) {
 		_widget->moveToLeft(0, anim::interpolate(
 			height - st::connectingMargin.top(),
-			height - _widget->height(),
+			height - _widget->height() - skip,
 			visible));
 	}, _widget->lifetime());
 
@@ -279,6 +281,10 @@ void ConnectionState::setForceHidden(bool hidden) {
 	if (_widget) {
 		_widget->setVisible(!hidden);
 	}
+}
+
+void ConnectionState::setBottomSkip(int skip) {
+	_bottomSkip = skip;
 }
 
 void ConnectionState::refreshState() {

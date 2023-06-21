@@ -75,9 +75,7 @@ namespace {
 	) | rpl::map([](const QByteArray &code) {
 		return Qr::Encode(code, Qr::Redundancy::Quartile);
 	});
-	auto palettes = rpl::single(
-		rpl::empty_value()
-	) | rpl::then(
+	auto palettes = rpl::single(rpl::empty) | rpl::then(
 		style::PaletteChanged()
 	);
 	auto result = Ui::CreateChild<Ui::RpWidget>(parent.get());
@@ -191,7 +189,11 @@ QrWidget::QrWidget(
 	}, lifetime());
 
 	setupControls();
-	refreshCode();
+	account->mtp().mainDcIdValue(
+	) | rpl::start_with_next([=] {
+		api().request(base::take(_requestId)).cancel();
+		refreshCode();
+	}, lifetime());
 }
 
 int QrWidget::errorTop() const {
@@ -345,7 +347,7 @@ void QrWidget::handleTokenResult(const MTPauth_LoginToken &result) {
 
 void QrWidget::showTokenError(const MTP::Error &error) {
 	_requestId = 0;
-	if (error.type() == qstr("SESSION_PASSWORD_NEEDED")) {
+	if (error.type() == u"SESSION_PASSWORD_NEEDED"_q) {
 		sendCheckPasswordRequest();
 	} else if (base::take(_forceRefresh)) {
 		refreshCode();
@@ -373,18 +375,7 @@ void QrWidget::importTo(MTP::DcId dcId, const QByteArray &token) {
 }
 
 void QrWidget::done(const MTPauth_Authorization &authorization) {
-	authorization.match([&](const MTPDauth_authorization &data) {
-		if (data.vuser().type() != mtpc_user
-			|| !data.vuser().c_user().is_self()) {
-			showError(rpl::single(Lang::Hard::ServerError()));
-			return;
-		}
-		finish(data.vuser());
-	}, [&](const MTPDauth_authorizationSignUpRequired &data) {
-		_requestId = 0;
-		LOG(("API Error: Unexpected auth.authorizationSignUpRequired."));
-		showError(rpl::single(Lang::Hard::ServerError()));
-	});
+	finish(authorization);
 }
 
 void QrWidget::sendCheckPasswordRequest() {
@@ -396,15 +387,16 @@ void QrWidget::sendCheckPasswordRequest() {
 				LOG(("API Error: No current password received on login."));
 				goReplace<QrWidget>(Animate::Forward);
 				return;
-			} else if (!getData()->pwdState.request) {
+			} else if (!getData()->pwdState.hasPassword) {
 				const auto callback = [=](Fn<void()> &&close) {
 					Core::UpdateApplication();
 					close();
 				};
-				Ui::show(Box<Ui::ConfirmBox>(
-					tr::lng_passport_app_out_of_date(tr::now),
-					tr::lng_menu_update(tr::now),
-					callback));
+				Ui::show(Ui::MakeConfirmBox({
+					.text = tr::lng_passport_app_out_of_date(),
+					.confirmed = callback,
+					.confirmText = tr::lng_menu_update(),
+				}));
 				return;
 			}
 			goReplace<PasswordCheckWidget>(Animate::Forward);

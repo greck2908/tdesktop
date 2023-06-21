@@ -26,6 +26,142 @@ GroupCallUserpics {
 	align: align;
 }
 
+msgMaxWidth: 430px;
+msgFont: font(fsize);
+msgNameFont: semiboldFont;
+msgNameStyle: semiboldTextStyle;
+msgServiceFont: semiboldFont;
+msgServiceNameFont: semiboldFont;
+msgServicePhotoWidth: 100px;
+msgDateFont: font(13px);
+msgMinWidth: 160px;
+msgPhotoSize: 33px;
+msgPhotoSkip: 40px;
+msgPadding: margins(13px, 7px, 13px, 8px);
+msgMargin: margins(16px, 6px, 56px, 2px);
+msgMarginTopAttached: 0px;
+msgShadow: 2px;
+
+msgReplyPadding: margins(6px, 6px, 11px, 6px);
+msgReplyBarPos: point(1px, 0px);
+msgReplyBarSize: size(2px, 36px);
+msgReplyBarSkip: 10px;
+msgServicePadding: margins(12px, 3px, 12px, 4px);
+msgServiceMargin: margins(10px, 10px, 10px, 2px);
+
+msgDateSpace: 12px;
+msgDateDelta: point(2px, 5px);
+
+msgDateImgDelta: 4px;
+msgDateImgPadding: point(8px, 2px);
+
+messageTextStyle: defaultTextStyle;
+msgDateTextStyle: defaultTextStyle;
+serviceTextPalette: TextPalette(defaultTextPalette) {
+	linkFg: msgServiceFg;
+	monoFg: msgServiceFg;
+	spoilerFg: msgServiceFg;
+	selectBg: msgServiceBgSelected;
+	selectFg: msgServiceFg;
+	selectLinkFg: msgServiceFg;
+	selectMonoFg: msgServiceFg;
+	selectSpoilerFg: msgServiceFg;
+	selectOverlay: msgServiceBgSelected;
+}
+serviceTextStyle: TextStyle(defaultTextStyle) {
+	font: msgServiceFont;
+	linkFont: msgServiceFont;
+	linkFontOver: font(fsize semibold underline);
+}
+inTextPalette: TextPalette(defaultTextPalette) {
+	linkFg: historyLinkInFg;
+	monoFg: msgInMonoFg;
+	spoilerFg: msgInDateFg;
+	selectBg: msgInBgSelected;
+	selectFg: historyTextInFgSelected;
+	selectLinkFg: historyLinkInFgSelected;
+	selectMonoFg: msgInMonoFgSelected;
+	selectSpoilerFg: msgInDateFgSelected;
+	selectOverlay: msgSelectOverlay;
+}
+inTextPaletteSelected: TextPalette(inTextPalette) {
+	linkFg: historyLinkInFgSelected;
+	monoFg: msgInMonoFgSelected;
+	spoilerFg: msgInDateFgSelected;
+}
+outTextPalette: TextPalette(defaultTextPalette) {
+	linkFg: historyLinkOutFg;
+	monoFg: msgOutMonoFg;
+	spoilerFg: msgOutDateFg;
+	selectBg: msgOutBgSelected;
+	selectFg: historyTextOutFgSelected;
+	selectLinkFg: historyLinkOutFgSelected;
+	selectMonoFg: msgOutMonoFgSelected;
+	selectSpoilerFg: msgOutDateFgSelected;
+	selectOverlay: msgSelectOverlay;
+}
+outTextPaletteSelected: TextPalette(outTextPalette) {
+	linkFg: historyLinkOutFgSelected;
+	monoFg: msgOutMonoFgSelected;
+	spoilerFg: msgOutDateFgSelected;
+}
+fwdTextStyle: TextStyle(semiboldTextStyle) {
+	linkFontOver: semiboldFont;
+}
+inFwdTextPalette: TextPalette(defaultTextPalette) {
+	linkFg: msgInServiceFg;
+}
+outFwdTextPalette: TextPalette(defaultTextPalette) {
+	linkFg: msgOutServiceFg;
+}
+inFwdTextPaletteSelected: TextPalette(defaultTextPalette) {
+	linkFg: msgInServiceFgSelected;
+}
+outFwdTextPaletteSelected: TextPalette(defaultTextPalette) {
+	linkFg: msgOutServiceFgSelected;
+}
+inReplyTextPalette: TextPalette(inTextPalette) {
+	linkFg: msgInDateFg;
+}
+inReplyTextPaletteSelected: TextPalette(inTextPaletteSelected) {
+	linkFg: msgInDateFgSelected;
+}
+outReplyTextPalette: TextPalette(outTextPalette) {
+	linkFg: msgOutDateFg;
+}
+outReplyTextPaletteSelected: TextPalette(outTextPaletteSelected) {
+	linkFg: msgOutDateFgSelected;
+}
+imgReplyTextPalette: TextPalette(defaultTextPalette) {
+	linkFg: msgImgReplyBarColor;
+}
+inSemiboldPalette: TextPalette(inTextPalette) {
+	linkFg: msgInServiceFg;
+	selectFg: msgInServiceFgSelected;
+	selectLinkFg: msgInServiceFgSelected;
+}
+outSemiboldPalette: TextPalette(outTextPalette) {
+	linkFg: msgOutServiceFg;
+	selectFg: msgOutServiceFgSelected;
+	selectLinkFg: msgOutServiceFgSelected;
+}
+historyComposeAreaPalette: TextPalette(defaultTextPalette) {
+	linkFg: historyComposeAreaFgService;
+}
+
+mediaCaptionSkip: 5px;
+mediaInBubbleSkip: 5px;
+mediaUnreadSize: 7px;
+mediaUnreadSkip: 5px;
+mediaUnreadTop: 6px;
+
+mediaInPalette: TextPalette(defaultTextPalette) {
+	linkFg: mediaInFg;
+}
+mediaInPaletteSelected: TextPalette(defaultTextPalette) {
+	linkFg: mediaInFgSelected;
+}
+
 defaultMessageBar: MessageBar {
 	title: semiboldTextStyle;
 	titleFg: windowActiveTextFg;
@@ -36,7 +172,6 @@ defaultMessageBar: MessageBar {
 }
 
 minPhotoSize: 100px;
-minVideoSize: 160px;
 maxMediaSize: 430px;
 maxStickerSize: 224px;
 maxAnimatedEmojiSize: 112px;
@@ -46,6 +181,9 @@ maxSignatureSize: 144px;
 maxWallPaperWidth: 160px;
 maxWallPaperHeight: 240px;
 historyThemeSize: size(272px, 176px);
+
+extendedPreviewButtonPadding: margins(20px, 10px, 20px, 10px);
+extendedPreviewButtonMargin: 20px;
 
 historyMinimalWidth: 380px;
 
@@ -74,6 +212,22 @@ historyScroll: ScrollArea(defaultScrollArea) {
 historyResizeWidth: 6px;
 
 historyPaddingBottom: 8px;
+
+historyPremiumToast: Toast(defaultToast) {
+	minWidth: msgMinWidth;
+	maxWidth: 380px;
+	padding: margins(19px, 13px, 19px, 12px);
+}
+historyPremiumViewSet: RoundButton(defaultActiveButton) {
+	width: -24px;
+	height: 44px;
+	textTop: 13px;
+	textFg: mediaviewTextLinkFg;
+	textFgOver: mediaviewTextLinkFg;
+	textBg: transparent;
+	textBgOver: transparent;
+	ripple: emptyRippleAnimation;
+}
 
 historyToDownPosition: point(12px, 10px);
 historyToDownAbove: icon {{ "history_down_arrow", historyToDownFg }};
@@ -166,10 +320,10 @@ historyFileOutPlay: icon {{ "history_file_play", historyFileOutIconFg }};
 historyFileOutPlaySelected: icon {{ "history_file_play", historyFileOutIconFgSelected }};
 historyFileInPlay: icon {{ "history_file_play", historyFileInIconFg }};
 historyFileInPlaySelected: icon {{ "history_file_play", historyFileInIconFgSelected }};
-historyFileOutWaiting: icon {{ "mediaview_save_check", historyFileOutIconFg }};
-historyFileOutWaitingSelected: icon {{ "mediaview_save_check", historyFileOutIconFgSelected }};
-historyFileInWaiting: icon {{ "mediaview_save_check", historyFileInIconFg }};
-historyFileInWaitingSelected: icon {{ "mediaview_save_check", historyFileInIconFgSelected }};
+historyFileOutWaiting: icon {{ "mediaview/save_check", historyFileOutIconFg }};
+historyFileOutWaitingSelected: icon {{ "mediaview/save_check", historyFileOutIconFgSelected }};
+historyFileInWaiting: icon {{ "mediaview/save_check", historyFileInIconFg }};
+historyFileInWaitingSelected: icon {{ "mediaview/save_check", historyFileInIconFgSelected }};
 
 historyFileThumbPause: icon {{ "history_file_pause", historyFileThumbIconFg }};
 historyFileThumbPauseSelected: icon {{ "history_file_pause", historyFileThumbIconFgSelected }};
@@ -179,8 +333,8 @@ historyFileThumbCancel: icon {{ "history_file_cancel", historyFileThumbIconFg }}
 historyFileThumbCancelSelected: icon {{ "history_file_cancel", historyFileThumbIconFgSelected }};
 historyFileThumbPlay: icon {{ "history_file_play", historyFileThumbIconFg }};
 historyFileThumbPlaySelected: icon {{ "history_file_play", historyFileThumbIconFgSelected }};
-historyFileThumbWaiting: icon {{ "mediaview_save_check", historyFileThumbIconFg }};
-historyFileThumbWaitingSelected: icon {{ "mediaview_save_check", historyFileThumbIconFgSelected }};
+historyFileThumbWaiting: icon {{ "mediaview/save_check", historyFileThumbIconFg }};
+historyFileThumbWaitingSelected: icon {{ "mediaview/save_check", historyFileThumbIconFgSelected }};
 
 historySendStateSpace: 24px;
 historySendStatePosition: point(-17px, -19px);
@@ -190,8 +344,6 @@ historySentInvertedIcon: icon {{ "history_sent", historyIconFgInverted, point(2p
 historyReceivedIcon: icon {{ "history_received", historyOutIconFg, point(2px, 4px) }};
 historyReceivedSelectedIcon: icon {{ "history_received", historyOutIconFgSelected, point(2px, 4px) }};
 historyReceivedInvertedIcon: icon {{ "history_received", historyIconFgInverted, point(2px, 4px) }};
-
-historyScheduledUntilOnlineStateSpace: 17px;
 
 historyViewsSpace: 8px;
 historyViewsWidth: 20px;
@@ -239,6 +391,13 @@ historyComposeFieldMaxHeight: 224px;
 
 historySendPadding: 9px;
 historySendRight: 2px;
+historyBotMenuSkip: 8px;
+historyBotMenuMaxWidth: 160px;
+historyBotMenuButton: RoundButton(defaultActiveButton) {
+	width: -24px;
+	height: 30px;
+	textTop: 6px;
+}
 
 historyComposeButton: FlatButton {
 	color: windowActiveTextFg;
@@ -259,10 +418,6 @@ historyComposeButton: FlatButton {
 		color: historyComposeButtonBgRipple;
 	}
 }
-historyComposeButtonLabel: FlatLabel(defaultFlatLabel) {
-	textFg: windowActiveTextFg;
-	style: semiboldTextStyle;
-}
 historyUnblock: FlatButton(historyComposeButton) {
 	color: attentionButtonFg;
 	overColor: attentionButtonFgOver;
@@ -281,6 +436,10 @@ historyContactStatusBlock: FlatButton(historyContactStatusButton) {
 }
 historyContactStatusLabel: FlatLabel(defaultFlatLabel) {
 	minWidth: 240px;
+}
+historyEmojiStatusInfoLabel: FlatLabel(historyContactStatusLabel) {
+	align: align(top);
+	textFg: windowSubTextFg;
 }
 historyContactStatusMinSkip: 16px;
 
@@ -311,25 +470,40 @@ historyAttachEmoji: IconButton(historyAttach) {
 	icon: icon {{ "chat/input_smile_face", historyComposeIconFg }};
 	iconOver: icon {{ "chat/input_smile_face", historyComposeIconFgOver }};
 }
-historyMessagesTTL: IconButton(historyAttach) {
-	icon: icon {{ "chat/input_autodelete_1d", historyComposeIconFg }};
-	iconOver: icon {{ "chat/input_autodelete_1d", historyComposeIconFgOver }};
+historyMessagesTTL: IconButtonWithText {
+	iconButton: IconButton(historyAttach) {
+		icon: icon {{ "chat/input_autodelete", historyComposeIconFg }};
+		iconOver: icon {{ "chat/input_autodelete", historyComposeIconFgOver }};
+	}
+	textFg: historyComposeIconFg;
+	textFgOver: historyComposeIconFgOver;
+	textPadding: margins(21px, 20px, 3px, 7px);
+	textAlign: align(left);
+
+	font: font(10px semibold);
 }
-historyMessagesTTL2Icon: icon {{ "chat/input_autodelete_7d", historyComposeIconFg }};
-historyMessagesTTL2IconOver: icon {{ "chat/input_autodelete_7d", historyComposeIconFgOver }};
-historyMessagesTTL3Icon: icon {{ "chat/input_autodelete_30d", historyComposeIconFg }};
-historyMessagesTTL3IconOver: icon {{ "chat/input_autodelete_30d", historyComposeIconFgOver }};
-historyAttachEmojiFgActive: windowBgActive;
-historyAttachEmojiActive: icon {{ "chat/input_smile_face", historyAttachEmojiFgActive }};
-historyAttachEmojiTooltipDelta: 4px;
+historyReplaceMedia: IconButton(historyAttach) {
+	icon: icon {{ "chat/input_replace", windowBgActive }};
+	iconOver: icon {{ "chat/input_replace", windowBgActive }};
+	ripple: RippleAnimation(defaultRippleAnimation) {
+		color: lightButtonBgOver;
+	}
+}
+historyEditMediaBg: videoPlayIconBg;
+historyEditMedia: icon{{ "chat/input_draw", videoPlayIconFg }};
+historyMessagesTTLPickerHeight: 200px;
+historyMessagesTTLPickerItemHeight: 40px;
+historyMessagesTTLLabel: FlatLabel(defaultFlatLabel) {
+	minWidth: 200px;
+	align: align(topleft);
+	textFg: windowSubTextFg;
+}
+
+historyAttachEmojiActive: icon {{ "chat/input_smile_face", windowBgActive }};
 historyEmojiCircle: size(20px, 20px);
-historyEmojiCirclePeriod: 1500;
-historyEmojiCircleDuration: 500;
-historyEmojiCircleTop: 13px;
-historyEmojiCircleLine: 2px;
+historyEmojiCircleLine: 1.5;
 historyEmojiCircleFg: historyComposeIconFg;
 historyEmojiCircleFgOver: historyComposeIconFgOver;
-historyEmojiCirclePart: 3.5;
 historyBotKeyboardShow: IconButton(historyAttach) {
 	icon: icon {{ "chat/input_bot_keyboard", historyComposeIconFg }};
 	iconOver: icon {{ "chat/input_bot_keyboard", historyComposeIconFgOver }};
@@ -410,8 +584,8 @@ historyRecordLockArrow: icon {{ "voice_lock/voice_arrow", historyToDownFg }};
 historyRecordLockRippleMargin: margins(6px, 6px, 6px, 6px);
 
 historyRecordDelete: IconButton(historyAttach) {
-	icon: icon {{ "info_media_delete", historyComposeIconFg }};
-	iconOver: icon {{ "info_media_delete", historyComposeIconFgOver }};
+	icon: icon {{ "info/info_media_delete", historyComposeIconFg }};
+	iconOver: icon {{ "info/info_media_delete", historyComposeIconFgOver }};
 	iconPosition: point(10px, 11px);
 }
 historyRecordWaveformRightSkip: 10px;
@@ -428,20 +602,12 @@ historySilentToggle: IconButton(historyBotKeyboardShow) {
 	icon: icon {{ "chat/input_silent", historyComposeIconFg }};
 	iconOver: icon {{ "chat/input_silent", historyComposeIconFgOver }};
 }
-
-historySilentToggleCrossLine: CrossLineAnimation {
-	fg: historyComposeIconFg;
-	icon: icon {{ "chat/input_silent", historyComposeIconFg }};
-	startPosition: point(13px, 11px);
-	endPosition: point(29px, 26px);
-	stroke: 2px;
-}
+historySilentToggleOn: icon {{ "chat/input_silent_on", historyComposeIconFg }};
+historySilentToggleOnOver: icon {{ "chat/input_silent_on", historyComposeIconFgOver }};
 
 historyReplySkip: 51px;
 historyReplyNameFg: windowActiveTextFg;
 historyReplyHeight: 49px;
-historyReplyTop: 8px;
-historyReplyBottom: 6px;
 historyReplyIconPosition: point(5px, 5px);
 historyReplyIcon: icon {{ "chat/input_reply", historyReplyIconFg }};
 historyForwardIcon: icon {{ "chat/input_forward", historyReplyIconFg }};
@@ -464,15 +630,27 @@ historyPinnedShowAll: IconButton(historyReplyCancel) {
 	icon: icon {{ "pinned_show_all", historyReplyCancelFg }};
 	iconOver: icon {{ "pinned_show_all", historyReplyCancelFgOver }};
 }
+historyPinnedBotButton: RoundButton(defaultActiveButton) {
+	width: -34px;
+	height: 30px;
+	textTop: 6px;
+	padding: margins(2px, 10px, 10px, 9px);
+}
+historyPinnedBotButtonMaxWidth: 150px;
 
-msgBotKbDuration: 200;
-msgBotKbFont: semiboldFont;
-msgBotKbIconPadding: 2px;
+topicButtonSkip: 3px;
+topicButtonPadding: margins(6px, 3px, 8px, 3px);
+topicButtonArrowSkip: 8px;
+topicButtonArrowPosition: point(3px, 3px);
+topicButtonArrow: icon{{ "dialogs/dialogs_topic_arrow", historyReplyIconFg }};
+
+msgBotKbIconPadding: 4px;
 msgBotKbUrlIcon: icon {{ "inline_button_url", msgBotKbIconFg }};
 msgBotKbSwitchPmIcon: icon {{ "inline_button_switch", msgBotKbIconFg }};
 msgBotKbPaymentIcon: icon {{ "inline_button_card", msgBotKbIconFg }};
+msgBotKbWebviewIcon: icon {{ "inline_button_web", msgBotKbIconFg }};
 msgBotKbButton: BotKeyboardButton {
-	margin: 5px;
+	margin: 2px;
 	padding: 10px;
 	height: 36px;
 	textTop: 8px;
@@ -518,9 +696,11 @@ historyInfoToast: Toast(defaultToast) {
 	iconPosition: point(13px, 13px);
 }
 
+bubbleRadiusSmall: roundRadiusLarge;
+bubbleRadiusLarge: 16px;
+
 historyPhotoLeft: 14px;
 historyPhotoBubbleMinWidth: 200px;
-historyMessageRadius: roundRadiusLarge;
 historyBubbleTailInLeft: icon {{ "bubble_tail", msgInBg }};
 historyBubbleTailInLeftSelected: icon {{ "bubble_tail", msgInBgSelected }};
 historyBubbleTailOutLeft: icon {{ "bubble_tail", msgOutBg }};
@@ -581,58 +761,74 @@ HistoryFileLayout {
 	statusTop: pixels;
 	linkTop: pixels;
 	thumbSize: pixels;
+	thumbSkip: pixels;
 }
 
+msgFileThumbRadiusSmall: 4px;
+msgFileThumbRadiusLarge: 12px;
 msgFileLayout: HistoryFileLayout {
-	padding: margins(14px, 10px, 11px, 10px);
-	nameTop: 16px;
-	statusTop: 37px;
+	padding: margins(12px, 8px, 10px, 8px);
+	nameTop: 12px;
+	statusTop: 34px;
 	thumbSize: 44px;
+	thumbSkip: 11px;
 }
 msgFileThumbLayout: HistoryFileLayout {
-	padding: margins(10px, 10px, 14px, 10px);
-	nameTop: 12px;
-	statusTop: 32px;
-	linkTop: 60px;
+	padding: margins(6px, 6px, 10px, 6px);
+	nameTop: 11px;
+	statusTop: 31px;
+	linkTop: 55px;
 	thumbSize: 72px;
+	thumbSkip: 14px;
 }
 msgFileLayoutGrouped: HistoryFileLayout(msgFileLayout) {
-	padding: margins(14px, 7px, 11px, 7px);
-	nameTop: 13px;
-	statusTop: 34px;
+	padding: margins(12px, 5px, 10px, 5px);
+	nameTop: 9px;
+	statusTop: 31px;
 }
 msgFileThumbLayoutGrouped: HistoryFileLayout(msgFileThumbLayout) {
-	padding: margins(10px, 7px, 14px, 7px);
-	nameTop: 9px;
-	statusTop: 29px;
-	linkTop: 57px;
+	padding: margins(6px, 3px, 10px, 3px);
+	nameTop: 8px;
+	statusTop: 28px;
+	linkTop: 52px;
 }
 attachPreviewLayout: HistoryFileLayout {
-	padding: margins(0px, 0px, 11px, 0px);
+	padding: margins(0px, 0px, 0px, 0px);
 	nameTop: 6px;
 	statusTop: 27px;
 	thumbSize: 44px;
+	thumbSkip: 11px;
 }
 attachPreviewThumbLayout: HistoryFileLayout {
-	padding: margins(0px, 0px, 10px, 0px);
+	padding: margins(0px, 0px, 0px, 0px);
 	nameTop: 7px;
 	statusTop: 37px;
 	thumbSize: 64px;
+	thumbSkip: 10px;
 }
 
-msgFileMenuSize: size(36px, 36px);
 msgFileMinWidth: 268px;
 msgFileTopMinus: 6px;
 
 msgFileOverDuration: 200;
 msgFileRadialLine: 3px;
 
-msgVideoSize: size(320px, 240px);
-
 msgWaveformBar: 2px;
 msgWaveformSkip: 1px;
-msgWaveformMin: 2px;
-msgWaveformMax: 20px;
+msgWaveformMin: 3px;
+msgWaveformMax: 17px;
+
+historyTranscribeSkip: 10px;
+historyTranscribeSize: size(28px, 22px);
+historyTranscribeRadius: 4px;
+historyTranscribeInIcon: icon {{ "chat/voice_to_text", msgFileInBg }};
+historyTranscribeInIconSelected: icon {{ "chat/voice_to_text", msgFileInBgSelected }};
+historyTranscribeOutIcon: icon {{ "chat/voice_to_text", msgFileOutBg }};
+historyTranscribeOutIconSelected: icon {{ "chat/voice_to_text", msgFileOutBgSelected }};
+historyTranscribeInHide: icon {{ "chat/voice_to_text_collapse", msgFileInBg }};
+historyTranscribeInHideSelected: icon {{ "chat/voice_to_text_collapse", msgFileInBgSelected }};
+historyTranscribeOutHide: icon {{ "chat/voice_to_text_collapse", msgFileOutBg }};
+historyTranscribeOutHideSelected: icon {{ "chat/voice_to_text_collapse", msgFileOutBgSelected }};
 
 historyVideoMessageMute: icon {{ "volume_mute", historyFileThumbIconFg }};
 historyVideoMessageMuteSelected: icon {{ "volume_mute", historyFileThumbIconFgSelected }};
@@ -641,21 +837,6 @@ historyVideoMessageProgressOpacity: 0.72;
 
 historyAdminLogEmptyWidth: 260px;
 historyAdminLogEmptyPadding: margins(10px, 12px, 10px, 12px);
-historyAdminLogSearchField: FlatInput(defaultFlatInput) {
-	textColor: windowFg;
-	bgColor: topBarBg;
-	bgActive: topBarBg;
-
-	font: font(fsize);
-
-	borderWidth: 0px;
-	borderColor: topBarBg;
-	borderActive: topBarBg;
-
-	width: 100px;
-	height: 32px;
-	textMrg: margins(0px, 0px, 0px, 0px);
-}
 historyAdminLogCancelSearch: CrossButton {
 	width: 40px;
 	height: 54px;
@@ -663,7 +844,7 @@ historyAdminLogCancelSearch: CrossButton {
 	cross: CrossAnimation {
 		size: 32px;
 		skip: 10px;
-		stroke: 2px;
+		stroke: 1.5;
 		minScale: 0.3;
 	}
 	crossFg: menuIconFg;
@@ -685,6 +866,7 @@ historyFastShareBottom: 5px;
 historyFastShareIcon: icon {{ "fast_share", msgServiceFg }};
 historyGoToOriginalIcon: icon {{ "fast_to_original", msgServiceFg }};
 historyFastCommentsIcon: icon {{ "fast_comments", msgServiceFg }};
+historyFastTranscribeIcon: icon {{ "chat/voice_to_text", msgServiceFg }};
 
 historySavedFont: font(semibold 14px);
 
@@ -707,7 +889,6 @@ webPageTitleFont: semiboldFont;
 webPageTitleStyle: semiboldTextStyle;
 webPageDescriptionFont: normalFont;
 webPageDescriptionStyle: defaultTextStyle;
-webPagePhotoSize: 100px;
 webPagePhotoDelta: 8px;
 
 historyPollQuestionFont: semiboldFont;
@@ -766,7 +947,6 @@ historyPollInChosenSelected: icon {{ "poll_select_check", historyFileInIconFgSel
 
 historyViewButtonHeight: 42px;
 historyViewButtonMargins: margins(13px, 5px, 13px, 5px);
-historyViewButtonOutline: margins(2px, 2px, 2px, 2px);
 historyViewButtonTextStyle: semiboldTextStyle;
 
 historyCommentsButtonHeight: 40px;
@@ -887,6 +1067,16 @@ ttlDividerLabelPadding: margins(22px, 10px, 22px, 19px);
 ttlItemPadding: margins(0px, 4px, 0px, 4px);
 ttlItemTimerFont: font(12px);
 
+expandedMenuSeparator: MenuSeparator(defaultMenuSeparator) {
+	padding: margins(0px, 4px, 0px, 4px);
+	width: 6px;
+}
+popupMenuExpandedSeparator: PopupMenu(popupMenuWithIcons) {
+	menu: Menu(menuWithIcons) {
+		separator: expandedMenuSeparator;
+	}
+}
+
 WhoRead {
 	userpics: GroupCallUserpics;
 	photoLeft: pixels;
@@ -910,22 +1100,31 @@ defaultWhoRead: WhoRead {
 	iconPosition: point(15px, 7px);
 	itemPadding: margins(44px, 9px, 17px, 7px);
 }
-whoReadMenu: PopupMenu(popupMenuWithIcons) {
+whoReadMenu: PopupMenu(popupMenuExpandedSeparator) {
 	scrollPadding: margins(0px, 6px, 0px, 4px);
 	maxHeight: 400px;
-	menu: Menu(menuWithIcons) {
-		separatorPadding: margins(0px, 4px, 0px, 4px);
-		separatorWidth: 6px;
-	}
 }
-whoReadChecks: icon{{ "menu/read_ticks", menuSubmenuArrowFg }};
-whoReadChecksOver: icon{{ "menu/read_ticks", menuSubmenuArrowFg }};
+whoReadNameWithDateTop: 3px;
+whoReadDateTop: 20px;
+whoReadDateSkip: 15px;
+whoReadDateChecks: icon{{ "menu/read_ticks_s", windowSubTextFg }};
+whoReadDateChecksOver: icon{{ "menu/read_ticks_s", windowSubTextFgOver }};
+whoLikedDateHeart: icon{{ "menu/read_react_s", windowSubTextFg }};
+whoLikedDateHeartOver: icon{{ "menu/read_react_s", windowSubTextFgOver }};
+whoReadDateChecksPosition: point(-7px, -4px);
+whoReadDateStyle: TextStyle(defaultTextStyle) {
+	font: font(12px);
+	linkFont: font(12px);
+	linkFontOver: font(12px underline);
+}
+whoReadChecks: icon{{ "menu/read_ticks", windowBoldFg }};
+whoReadChecksOver: icon{{ "menu/read_ticks", windowBoldFg }};
 whoReadChecksDisabled: icon{{ "menu/read_ticks", menuFgDisabled }};
-whoReadPlayed: icon{{ "menu/read_audio", menuSubmenuArrowFg }};
-whoReadPlayedOver: icon{{ "menu/read_audio", menuSubmenuArrowFg }};
+whoReadPlayed: icon{{ "menu/read_audio", windowBoldFg }};
+whoReadPlayedOver: icon{{ "menu/read_audio", windowBoldFg }};
 whoReadPlayedDisabled: icon {{ "menu/read_audio", menuFgDisabled }};
-whoReadReactions: icon{{ "menu/read_reactions", menuSubmenuArrowFg }};
-whoReadReactionsOver: icon{{ "menu/read_reactions", menuSubmenuArrowFg }};
+whoReadReactions: icon{{ "menu/read_reactions", windowBoldFg }};
+whoReadReactionsOver: icon{{ "menu/read_reactions", windowBoldFg }};
 whoReadReactionsDisabled: icon{{ "menu/read_reactions", menuFgDisabled }};
 
 reactionsTabAll: icon {{ "menu/read_reactions", windowFg }};
@@ -965,21 +1164,21 @@ sendAsButton: SendAsButton {
 	cross: CrossAnimation {
 		size: 28px;
 		skip: 10px;
-		stroke: 2px;
+		stroke: 1.5;
 		minScale: 0.3;
 	}
 	duration: 150;
 }
 
 reactionInlinePadding: margins(5px, 2px, 7px, 2px);
-reactionInlineSize: 16px;
-reactionInlineImage: 28px;
+reactionInlineSize: 18px;
+reactionInlineImage: 32px;
 reactionInlineSkip: 3px;
 reactionInlineBetween: 4px;
 reactionInlineInBubbleLeft: -3px;
 reactionInlineUserpicsPadding: margins(1px, 1px, 1px, 1px);
 reactionInlineUserpics: GroupCallUserpics {
-	size: 18px;
+	size: 20px;
 	shift: 7px;
 	stroke: 1px;
 	align: align(left);
@@ -1007,3 +1206,123 @@ reactionAppearStartSkip: 2px;
 reactionMainAppearShift: 20px;
 reactionCollapseFadeThreshold: 40px;
 reactionFlyUp: 50px;
+
+reactionPremiumLocked: icon{
+	{ "chat/reactions_premium_bg", historyPeerArchiveUserpicBg },
+	{ "chat/reactions_premium_star", historyPeerUserpicFg },
+};
+reactionExpandPanel: icon{
+	{ "chat/reactions_round_big", windowBgRipple },
+	{ "chat/reactions_expand_panel", windowSubTextFg },
+};
+reactionsExpandDropdown: icon{
+	{ "chat/reactions_round_small", windowBgRipple },
+	{ "chat/reactions_expand_panel", windowSubTextFg },
+};
+
+searchInChatMultiSelectItem: MultiSelectItem(defaultMultiSelectItem) {
+	maxWidth: 200px;
+}
+searchInChatMultiSelect: MultiSelect(defaultMultiSelect) {
+	item: searchInChatMultiSelectItem;
+}
+searchInChatPeerListItem: PeerListItem(defaultPeerListItem) {
+	height: dialogsRowHeight;
+}
+searchInChatPeerList: PeerList(defaultPeerList) {
+	item: searchInChatPeerListItem;
+}
+
+msgServiceGiftBoxSize: size(206px, 231px); // Plus msgServiceGiftBoxTopSkip.
+msgServiceGiftBoxRadius: 12px;
+msgServiceGiftBoxTopSkip: 4px;
+msgServiceGiftBoxButtonHeight: 32px;
+msgServiceGiftBoxButtonPadding: margins(2px, 0px, 2px, 0px);
+msgServiceGiftBoxButtonMargins: margins(0px, 13px, 0px, 17px);
+msgServiceGiftBoxTitlePadding: margins(0px, 5px, 0px, 2px);
+msgServiceGiftBoxStickerTop: -19px;
+msgServiceGiftBoxStickerSize: size(140px, 140px);
+
+historySponsorInfoItem: FlatLabel(defaultFlatLabel) {
+	style: TextStyle(defaultTextStyle) {
+		font: font(12px);
+	}
+	minWidth: 136px;
+	maxHeight: 120px;
+}
+historyHasCustomEmoji: FlatLabel(defaultFlatLabel) {
+	style: TextStyle(defaultTextStyle) {
+		font: font(11px);
+		linkFont: font(11px underline);
+		linkFontOver: font(11px underline);
+	}
+	minWidth: 80px;
+}
+historyHasCustomEmojiPosition: point(12px, 4px);
+
+historyTranslateLabel: FlatLabel(defaultFlatLabel) {
+	style: semiboldTextStyle;
+	textFg: windowActiveTextFg;
+	minWidth: 80px;
+}
+historyTranslateIcon: icon{{ "menu/translate", windowActiveTextFg }};
+historyTranslateBarHeight: 36px;
+historyTranslateSettings: IconButton(defaultIconButton) {
+	width: 46px;
+	height: 36px;
+	icon: icon{{ "menu/customize", windowActiveTextFg }};
+	iconOver: icon{{ "menu/customize", windowActiveTextFg }};
+	rippleAreaPosition: point(6px, 2px);
+	rippleAreaSize: 32px;
+	ripple: RippleAnimation(defaultRippleAnimation) {
+		color: lightButtonBgOver;
+	}
+}
+historyTranslateMenuPosition: point(-6px, 30px);
+
+historySponsoredAboutMenuLabelPosition: point(54px, 4px);
+
+historySendDisabled: FlatLabel(defaultFlatLabel) {
+	minWidth: 10px;
+	maxHeight: 20px;
+	textFg: placeholderFg;
+}
+historySendDisabledIcon: icon {{ "emoji/premium_lock", placeholderFgActive }};
+historySendDisabledIconSkip: 20px;
+historySendDisabledPosition: point(0px, 0px);
+
+moreChatsBarHeight: 48px;
+moreChatsBarTextPosition: point(12px, 4px);
+moreChatsBarStatusPosition: point(12px, 24px);
+moreChatsBarClose: IconButton(defaultIconButton) {
+	width: 48px;
+	height: 48px;
+
+	icon: boxTitleCloseIcon;
+	iconOver: boxTitleCloseIconOver;
+	iconPosition: point(12px, -1px);
+
+	rippleAreaPosition: point(0px, 4px);
+	rippleAreaSize: 40px;
+	ripple: RippleAnimation(defaultRippleAnimation) {
+		color: windowBgOver;
+	}
+}
+
+backgroundSwitchToDark: IconButton(defaultIconButton) {
+	width: 48px;
+	height: 48px;
+
+	icon: icon {{ "menu/header_mode_night", boxTitleCloseFg }};
+	iconOver: icon {{ "menu/header_mode_night", boxTitleCloseFgOver }};
+
+	rippleAreaPosition: point(4px, 4px);
+	rippleAreaSize: 40px;
+	ripple: RippleAnimation(defaultRippleAnimation) {
+		color: windowBgOver;
+	}
+}
+backgroundSwitchToLight: IconButton(backgroundSwitchToDark) {
+	icon: icon {{ "menu/header_mode_day", boxTitleCloseFg }};
+	iconOver: icon {{ "menu/header_mode_day", boxTitleCloseFgOver }};
+}

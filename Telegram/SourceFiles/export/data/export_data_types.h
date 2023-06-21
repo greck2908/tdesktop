@@ -68,7 +68,7 @@ struct File {
 		DateLimits,
 	};
 	FileLocation location;
-	int size = 0;
+	int64 size = 0;
 	QByteArray content;
 
 	QString suggestedPath;
@@ -340,6 +340,12 @@ struct ParseMediaContext {
 	UserId botId = 0;
 };
 
+Document ParseDocument(
+	ParseMediaContext &context,
+	const MTPDocument &data,
+	const QString &suggestedFolder,
+	TimeId date);
+
 Media ParseMedia(
 	ParseMediaContext &context,
 	const MTPMessageMedia &data,
@@ -401,6 +407,8 @@ struct ActionGameScore {
 struct ActionPaymentSent {
 	Utf8String currency;
 	uint64 amount = 0;
+	bool recurringInit = false;
+	bool recurringUsed = false;
 };
 
 struct ActionPhoneCall {
@@ -423,7 +431,10 @@ struct ActionCustomAction {
 };
 
 struct ActionBotAllowed {
+	uint64 appId = 0;
+	Utf8String app;
 	Utf8String domain;
+	bool attachMenu = false;
 };
 
 struct ActionSecureValuesSent {
@@ -482,6 +493,40 @@ struct ActionSetChatTheme {
 struct ActionChatJoinedByRequest {
 };
 
+struct ActionWebViewDataSent {
+	Utf8String text;
+};
+
+struct ActionGiftPremium {
+	Utf8String cost;
+	int months;
+};
+
+struct ActionTopicCreate {
+	Utf8String title;
+};
+
+struct ActionTopicEdit {
+	Utf8String title;
+	std::optional<uint64> iconEmojiId = 0;
+};
+
+struct ActionSuggestProfilePhoto {
+	Photo photo;
+};
+
+struct ActionSetChatWallPaper {
+	// #TODO wallpapers
+};
+
+struct ActionSetSameChatWallPaper {
+};
+
+struct ActionRequestedPeer {
+	PeerId peerId = 0;
+	int buttonId = 0;
+};
+
 struct ServiceAction {
 	std::variant<
 		v::null_t,
@@ -512,7 +557,15 @@ struct ServiceAction {
 		ActionSetMessagesTTL,
 		ActionGroupCallScheduled,
 		ActionSetChatTheme,
-		ActionChatJoinedByRequest> content;
+		ActionChatJoinedByRequest,
+		ActionWebViewDataSent,
+		ActionGiftPremium,
+		ActionTopicCreate,
+		ActionTopicEdit,
+		ActionSuggestProfilePhoto,
+		ActionRequestedPeer,
+		ActionSetChatWallPaper,
+		ActionSetSameChatWallPaper> content;
 };
 
 ServiceAction ParseServiceAction(
@@ -542,10 +595,15 @@ struct TextPart {
 		Blockquote,
 		BankCard,
 		Spoiler,
+		CustomEmoji,
 	};
 	Type type = Type::Text;
 	Utf8String text;
 	Utf8String additional;
+
+	[[nodiscard]] static Utf8String UnavailableEmoji() {
+		return "(unavailable)";
+	}
 };
 
 struct MessageId {
@@ -605,6 +663,7 @@ struct FileOrigin {
 	int split = 0;
 	MTPInputPeer peer;
 	int32 messageId = 0;
+	uint64 customEmojiId = 0;
 };
 
 Message ParseMessage(
@@ -702,6 +761,7 @@ bool SkipMessageByDate(const Message &message, const Settings &settings);
 Utf8String FormatPhoneNumber(const Utf8String &phoneNumber);
 Utf8String FormatDateTime(
 	TimeId date,
+	bool hasTimeZone = false,
 	QChar dateSeparator = QChar('.'),
 	QChar timeSeparator = QChar(':'),
 	QChar separator = QChar(' '));

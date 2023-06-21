@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/attach/attach_prepare.h"
 #include "ui/text/format_song_name.h"
 #include "ui/text/format_values.h"
+#include "ui/painter.h"
 #include "styles/style_chat.h"
 
 namespace Ui {
@@ -47,9 +48,7 @@ ItemSingleFilePreview::ItemSingleFilePreview(
 	_documentMedia = document->createMediaView();
 	_documentMedia->thumbnailWanted(item->fullId());
 
-	rpl::single(
-		rpl::empty_value()
-	) | rpl::then(
+	rpl::single(rpl::empty) | rpl::then(
 		document->session().downloaderTaskFinished()
 	) | rpl::start_with_next([=] {
 		if (_documentMedia->thumbnail()) {
@@ -104,7 +103,6 @@ void ItemSingleFilePreview::preparePreview(not_null<DocumentData*> document) {
 
 		data.name = Text::FormatSongName(filename, songTitle, songPerformer)
 			.string();
-		data.statusText = FormatSizeText(document->size);
 	} else {
 		data.name = document->filename();
 	}

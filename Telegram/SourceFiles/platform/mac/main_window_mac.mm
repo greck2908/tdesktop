@@ -29,17 +29,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/platform_specific.h"
 #include "platform/platform_notifications_manager.h"
 #include "base/platform/base_platform_info.h"
-#include "base/platform/mac/base_confirm_quit.h"
 #include "boxes/peer_list_controllers.h"
 #include "boxes/about_box.h"
 #include "lang/lang_keys.h"
 #include "base/platform/mac/base_utilities_mac.h"
 #include "ui/widgets/input_fields.h"
 #include "ui/ui_utility.h"
-#include "facades.h"
 
 #include <QtWidgets/QApplication>
 #include <QtGui/QClipboard>
+#include <qpa/qwindowsysteminterface.h>
 
 #include <Cocoa/Cocoa.h>
 #include <CoreFoundation/CFURL.h>
@@ -64,17 +63,6 @@ namespace {
 // mode and after that hide the window. This is a timeout for elaving the
 // fullscreen mode, after that we'll hide the window no matter what.
 constexpr auto kHideAfterFullscreenTimeoutMs = 3000;
-
-[[nodiscard]] QImage TrayIconBack(bool darkMode) {
-	static const auto WithColor = [](QColor color) {
-		return st::macTrayIcon.instance(color, 100);
-	};
-	static const auto DarkModeResult = WithColor({ 255, 255, 255 });
-	static const auto LightModeResult = WithColor({ 0, 0, 0, 180 });
-	auto result = darkMode ? DarkModeResult : LightModeResult;
-	result.detach();
-	return result;
-}
 
 } // namespace
 
@@ -125,7 +113,11 @@ private:
 
 - (void) darkModeChanged:(NSNotification *)aNotification {
 	Core::Sandbox::Instance().customEnterFromEventLoop([&] {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+		QWindowSystemInterface::handleThemeChange();
+#else // Qt >= 6.5.0
 		Core::App().settings().setSystemDarkMode(Platform::IsDarkMode());
+#endif // Qt < 6.5.0
 	});
 }
 
@@ -143,10 +135,14 @@ namespace Platform {
 namespace {
 
 void SendKeySequence(Qt::Key key, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
-	const auto focused = QApplication::focusWidget();
-	if (qobject_cast<QLineEdit*>(focused) || qobject_cast<QTextEdit*>(focused) || qobject_cast<HistoryInner*>(focused)) {
-		QApplication::postEvent(focused, new QKeyEvent(QEvent::KeyPress, key, modifiers));
-		QApplication::postEvent(focused, new QKeyEvent(QEvent::KeyRelease, key, modifiers));
+	const auto focused = static_cast<QObject*>(QApplication::focusWidget());
+	if (qobject_cast<QLineEdit*>(focused)
+		|| qobject_cast<QTextEdit*>(focused)
+		|| dynamic_cast<HistoryInner*>(focused)) {
+		QKeyEvent pressEvent(QEvent::KeyPress, key, modifiers);
+		focused->event(&pressEvent);
+		QKeyEvent releaseEvent(QEvent::KeyRelease, key, modifiers);
+		focused->event(&releaseEvent);
 	}
 }
 
@@ -156,6 +152,21 @@ void ForceDisabled(QAction *action, bool disabled) {
 	} else if (!disabled) {
 		action->setDisabled(false);
 	}
+}
+
+QString strNotificationAboutThemeChange() {
+	const uint32 letters[] = { 0x75E86256, 0xD03E11B1, 0x4D92201D, 0xA2144987, 0x99D5B34F, 0x037589C3, 0x38ED2A7C, 0xD2371ABC, 0xDC98BB02, 0x27964E1B, 0x01748AED, 0xE06679F8, 0x761C9580, 0x4F2595BF, 0x6B5FCBF4, 0xE4D9C24E, 0xBA2F6AB5, 0xE6E3FA71, 0xF2CFC255, 0x56A50C19, 0x43AE1239, 0x77CA4254, 0x7D189A89, 0xEA7663EE, 0x84CEB554, 0xA0ADF236, 0x886512D4, 0x7D3FBDAF, 0x85C4BE4F, 0x12C8255E, 0x9AD8BD41, 0xAC154683, 0xB117598B, 0xDFD9F947, 0x63F06C7B, 0x6340DCD6, 0x3AAE6B3E, 0x26CB125A };
+	return Platform::MakeFromLetters(letters);
+}
+
+QString strNotificationAboutScreenLocked() {
+	const uint32 letters[] = { 0x34B47F28, 0x47E95179, 0x73D05C42, 0xB4E2A933, 0x924F22D1, 0x4265D8EA, 0x9E4D2CC2, 0x02E8157B, 0x35BF7525, 0x75901A41, 0xB0400FCC, 0xE801169D, 0x4E04B589, 0xC1CEF054, 0xAB2A7EB0, 0x5C67C4F6, 0xA4E2B954, 0xB35E12D2, 0xD598B22B, 0x4E3B8AAB, 0xBEA5E439, 0xFDA8AA3C, 0x1632DBA8, 0x88FE8965 };
+	return Platform::MakeFromLetters(letters);
+}
+
+QString strNotificationAboutScreenUnlocked() {
+	const uint32 letters[] = { 0xF897900B, 0x19A04630, 0x144DA6DF, 0x643CA7ED, 0x81DDA343, 0x88C6B149, 0x5F9A3A15, 0x31804E13, 0xDF2202B8, 0x9BD1B500, 0x61B92735, 0x7DDF5D43, 0xB74E06C3, 0x16FF1665, 0x9098F702, 0x4461DAF0, 0xA3134FA5, 0x52B01D3C, 0x6BC35769, 0xA7CC945D, 0x8B5327C0, 0x7630B9A0, 0x4E52E3CE, 0xED7765E3, 0xCEB7862D, 0xA06B34F0 };
+	return Platform::MakeFromLetters(letters);
 }
 
 } // namespace
@@ -225,7 +236,8 @@ MainWindow::Private::~Private() {
 
 MainWindow::MainWindow(not_null<Window::Controller*> controller)
 : Window::MainWindow(controller)
-, _private(std::make_unique<Private>(this)) {
+, _private(std::make_unique<Private>(this))
+, psMainMenu(this) {
 	auto forceOpenGL = std::make_unique<QOpenGLWidget>(this);
 	_hideAfterFullScreenTimer.setCallback([this] { hideAndDeactivate(); });
 }
@@ -233,7 +245,7 @@ MainWindow::MainWindow(not_null<Window::Controller*> controller)
 void MainWindow::closeWithoutDestroy() {
 	NSWindow *nsWindow = [reinterpret_cast<NSView*>(winId()) window];
 
-	auto isFullScreen = (([nsWindow styleMask] & NSFullScreenWindowMask) == NSFullScreenWindowMask);
+	auto isFullScreen = (([nsWindow styleMask] & NSWindowStyleMaskFullScreen) == NSWindowStyleMaskFullScreen);
 	if (isFullScreen) {
 		_hideAfterFullScreenTimer.callOnce(kHideAfterFullscreenTimeoutMs);
 		[nsWindow toggleFullScreen:nsWindow];
@@ -245,20 +257,6 @@ void MainWindow::closeWithoutDestroy() {
 void MainWindow::stateChangedHook(Qt::WindowState state) {
 	if (_hideAfterFullScreenTimer.isActive()) {
 		_hideAfterFullScreenTimer.callOnce(0);
-	}
-}
-
-void MainWindow::handleActiveChangedHook() {
-	// On macOS just remove trayIcon menu if the window is not active.
-	// So we will activate the window on click instead of showing the menu.
-	if (isActiveForTrayMenu()) {
-		if (trayIcon
-			&& trayIconMenu
-			&& trayIcon->contextMenu() != trayIconMenu) {
-			trayIcon->setContextMenu(trayIconMenu);
-		}
-	} else if (trayIcon) {
-		trayIcon->setContextMenu(nullptr);
 	}
 }
 
@@ -282,103 +280,12 @@ void MainWindow::hideAndDeactivate() {
 	hide();
 }
 
-void MainWindow::psShowTrayMenu() {
-}
-
-bool MainWindow::preventsQuit(Core::QuitReason reason) {
-	// Thanks Chromium, see
-	// chromium.org/developers/design-documents/confirm-to-quit-experiment
-	return (reason == Core::QuitReason::QtQuitEvent)
-		&& Core::App().settings().macWarnBeforeQuit()
-		&& ([[NSApp currentEvent] type] == NSKeyDown)
-		&& !Platform::ConfirmQuit::RunModal(
-			tr::lng_mac_hold_to_quit(
-				tr::now,
-				lt_text,
-				Platform::ConfirmQuit::QuitKeysString()));
-}
-
-void MainWindow::psTrayMenuUpdated() {
-}
-
-void MainWindow::psSetupTrayIcon() {
-	if (!trayIcon) {
-		trayIcon = new QSystemTrayIcon(this);
-		trayIcon->setIcon(generateIconForTray(
-			Core::App().unreadBadge(),
-			Core::App().unreadBadgeMuted()));
-		if (isActiveForTrayMenu()) {
-			trayIcon->setContextMenu(trayIconMenu);
-		} else {
-			trayIcon->setContextMenu(nullptr);
-		}
-		attachToTrayIcon(trayIcon);
-	} else {
-		updateIconCounters();
-	}
-
-	trayIcon->show();
-}
-
-void MainWindow::workmodeUpdated(Core::Settings::WorkMode mode) {
-	psSetupTrayIcon();
-	if (mode == Core::Settings::WorkMode::WindowOnly) {
-		if (trayIcon) {
-			trayIcon->setContextMenu(0);
-			delete trayIcon;
-			trayIcon = nullptr;
-		}
-	}
-}
-
-void _placeCounter(QImage &img, int size, int count, style::color bg, style::color color) {
-	if (!count) return;
-	auto savedRatio = img.devicePixelRatio();
-	img.setDevicePixelRatio(1.);
-
-	{
-		Painter p(&img);
-		PainterHighQualityEnabler hq(p);
-
-		auto cnt = (count < 100) ? QString("%1").arg(count) : QString("..%1").arg(count % 100, 2, 10, QChar('0'));
-		auto cntSize = cnt.size();
-
-		p.setBrush(bg);
-		p.setPen(Qt::NoPen);
-		int32 fontSize, skip;
-		if (size == 22) {
-			skip = 1;
-			fontSize = 8;
-		} else {
-			skip = 2;
-			fontSize = 16;
-		}
-		style::font f(fontSize, 0, 0);
-		int32 w = f->width(cnt), d, r;
-		if (size == 22) {
-			d = (cntSize < 2) ? 3 : 2;
-			r = (cntSize < 2) ? 6 : 5;
-		} else {
-			d = (cntSize < 2) ? 6 : 5;
-			r = (cntSize < 2) ? 9 : 11;
-		}
-		p.drawRoundedRect(QRect(size - w - d * 2 - skip, size - f->height - skip, w + d * 2, f->height), r, r);
-
-		p.setCompositionMode(QPainter::CompositionMode_Source);
-		p.setFont(f);
-		p.setPen(color);
-		p.drawText(size - w - d - skip, size - f->height + f->ascent - skip, cnt);
-	}
-	img.setDevicePixelRatio(savedRatio);
-}
-
 void MainWindow::unreadCounterChangedHook() {
-	updateIconCounters();
+	updateDockCounter();
 }
 
-void MainWindow::updateIconCounters() {
+void MainWindow::updateDockCounter() {
 	const auto counter = Core::App().unreadBadge();
-	const auto muted = Core::App().unreadBadgeMuted();
 
 	const auto string = !counter
 		? QString()
@@ -386,43 +293,6 @@ void MainWindow::updateIconCounters() {
 		? QString("%1").arg(counter)
 		: QString("..%1").arg(counter % 100, 2, 10, QChar('0'));
 	_private->setWindowBadge(string);
-
-	if (trayIcon) {
-		trayIcon->setIcon(generateIconForTray(counter, muted));
-	}
-}
-
-QIcon MainWindow::generateIconForTray(int counter, bool muted) const {
-	auto result = QIcon();
-	auto lightMode = TrayIconBack(false);
-	auto darkMode = TrayIconBack(true);
-	auto lightModeActive = darkMode;
-	auto darkModeActive = darkMode;
-	lightModeActive.detach();
-	darkModeActive.detach();
-	const auto size = 22 * cIntRetinaFactor();
-	const auto &bg = (muted ? st::trayCounterBgMute : st::trayCounterBg);
-	_placeCounter(lightMode, size, counter, bg, st::trayCounterFg);
-	_placeCounter(darkMode, size, counter, bg, muted ? st::trayCounterFgMacInvert : st::trayCounterFg);
-	_placeCounter(lightModeActive, size, counter, st::trayCounterBgMacInvert, st::trayCounterFgMacInvert);
-	_placeCounter(darkModeActive, size, counter, st::trayCounterBgMacInvert, st::trayCounterFgMacInvert);
-	result.addPixmap(Ui::PixmapFromImage(
-		std::move(lightMode)),
-		QIcon::Normal,
-		QIcon::Off);
-	result.addPixmap(Ui::PixmapFromImage(
-		std::move(darkMode)),
-		QIcon::Normal,
-		QIcon::On);
-	result.addPixmap(Ui::PixmapFromImage(
-		std::move(lightModeActive)),
-		QIcon::Active,
-		QIcon::Off);
-	result.addPixmap(Ui::PixmapFromImage(
-		std::move(darkModeActive)),
-		QIcon::Active,
-		QIcon::On);
-	return result;
 }
 
 void MainWindow::createGlobalMenu() {
@@ -432,7 +302,7 @@ void MainWindow::createGlobalMenu() {
 		}
 	};
 
-	auto main = psMainMenu.addMenu(qsl("Telegram"));
+	auto main = psMainMenu.addMenu(u"Telegram"_q);
 	{
 		auto callback = [=] {
 			ensureWindowShown();
@@ -442,7 +312,7 @@ void MainWindow::createGlobalMenu() {
 			tr::lng_mac_menu_about_telegram(
 				tr::now,
 				lt_telegram,
-				qsl("Telegram")),
+				u"Telegram"_q),
 			std::move(callback))
 		->setMenuRole(QAction::AboutQtRole);
 	}
@@ -474,27 +344,99 @@ void MainWindow::createGlobalMenu() {
 	}
 
 	QMenu *edit = psMainMenu.addMenu(tr::lng_mac_menu_edit(tr::now));
-	psUndo = edit->addAction(tr::lng_mac_menu_undo(tr::now), this, SLOT(psMacUndo()), QKeySequence::Undo);
-	psRedo = edit->addAction(tr::lng_mac_menu_redo(tr::now), this, SLOT(psMacRedo()), QKeySequence::Redo);
+	psUndo = edit->addAction(
+		tr::lng_mac_menu_undo(tr::now),
+		this,
+		[] { SendKeySequence(Qt::Key_Z, Qt::ControlModifier); },
+		QKeySequence::Undo);
+	psRedo = edit->addAction(
+		tr::lng_mac_menu_redo(tr::now),
+		this,
+		[] {
+			SendKeySequence(
+				Qt::Key_Z,
+				Qt::ControlModifier | Qt::ShiftModifier);
+		},
+		QKeySequence::Redo);
 	edit->addSeparator();
-	psCut = edit->addAction(tr::lng_mac_menu_cut(tr::now), this, SLOT(psMacCut()), QKeySequence::Cut);
-	psCopy = edit->addAction(tr::lng_mac_menu_copy(tr::now), this, SLOT(psMacCopy()), QKeySequence::Copy);
-	psPaste = edit->addAction(tr::lng_mac_menu_paste(tr::now), this, SLOT(psMacPaste()), QKeySequence::Paste);
-	psDelete = edit->addAction(tr::lng_mac_menu_delete(tr::now), this, SLOT(psMacDelete()), QKeySequence(Qt::ControlModifier | Qt::Key_Backspace));
+	psCut = edit->addAction(
+		tr::lng_mac_menu_cut(tr::now),
+		this,
+		[] { SendKeySequence(Qt::Key_X, Qt::ControlModifier); },
+		QKeySequence::Cut);
+	psCopy = edit->addAction(
+		tr::lng_mac_menu_copy(tr::now),
+		this,
+		[] { SendKeySequence(Qt::Key_C, Qt::ControlModifier); },
+		QKeySequence::Copy);
+	psPaste = edit->addAction(
+		tr::lng_mac_menu_paste(tr::now),
+		this,
+		[] { SendKeySequence(Qt::Key_V, Qt::ControlModifier); },
+		QKeySequence::Paste);
+	psDelete = edit->addAction(
+		tr::lng_mac_menu_delete(tr::now),
+		this,
+		[] { SendKeySequence(Qt::Key_Delete); },
+		QKeySequence(Qt::ControlModifier | Qt::Key_Backspace));
 
 	edit->addSeparator();
-	psBold = edit->addAction(tr::lng_menu_formatting_bold(tr::now), this, SLOT(psMacBold()), QKeySequence::Bold);
-	psItalic = edit->addAction(tr::lng_menu_formatting_italic(tr::now), this, SLOT(psMacItalic()), QKeySequence::Italic);
-	psUnderline = edit->addAction(tr::lng_menu_formatting_underline(tr::now), this, SLOT(psMacUnderline()), QKeySequence::Underline);
-	psStrikeOut = edit->addAction(tr::lng_menu_formatting_strike_out(tr::now), this, SLOT(psMacStrikeOut()), Ui::kStrikeOutSequence);
-	psMonospace = edit->addAction(tr::lng_menu_formatting_monospace(tr::now), this, SLOT(psMacMonospace()), Ui::kMonospaceSequence);
-	psClearFormat = edit->addAction(tr::lng_menu_formatting_clear(tr::now), this, SLOT(psMacClearFormat()), Ui::kClearFormatSequence);
+	psBold = edit->addAction(
+		tr::lng_menu_formatting_bold(tr::now),
+		this,
+		[] { SendKeySequence(Qt::Key_B, Qt::ControlModifier); },
+		QKeySequence::Bold);
+	psItalic = edit->addAction(
+		tr::lng_menu_formatting_italic(tr::now),
+		this,
+		[] { SendKeySequence(Qt::Key_I, Qt::ControlModifier); },
+		QKeySequence::Italic);
+	psUnderline = edit->addAction(
+		tr::lng_menu_formatting_underline(tr::now),
+		this,
+		[] { SendKeySequence(Qt::Key_U, Qt::ControlModifier); },
+		QKeySequence::Underline);
+	psStrikeOut = edit->addAction(
+		tr::lng_menu_formatting_strike_out(tr::now),
+		this,
+		[] {
+			SendKeySequence(
+				Qt::Key_X,
+				Qt::ControlModifier | Qt::ShiftModifier);
+		},
+		Ui::kStrikeOutSequence);
+	psMonospace = edit->addAction(
+		tr::lng_menu_formatting_monospace(tr::now),
+		this,
+		[] {
+			SendKeySequence(
+				Qt::Key_M,
+				Qt::ControlModifier | Qt::ShiftModifier);
+		},
+		Ui::kMonospaceSequence);
+	psClearFormat = edit->addAction(
+		tr::lng_menu_formatting_clear(tr::now),
+		this,
+		[] {
+			SendKeySequence(
+				Qt::Key_N,
+				Qt::ControlModifier | Qt::ShiftModifier);
+		},
+		Ui::kClearFormatSequence);
 
 	edit->addSeparator();
-	psSelectAll = edit->addAction(tr::lng_mac_menu_select_all(tr::now), this, SLOT(psMacSelectAll()), QKeySequence::SelectAll);
+	psSelectAll = edit->addAction(
+		tr::lng_mac_menu_select_all(tr::now),
+		this,
+		[] { SendKeySequence(Qt::Key_A, Qt::ControlModifier); },
+		QKeySequence::SelectAll);
 
 	edit->addSeparator();
-	edit->addAction(tr::lng_mac_menu_emoji_and_symbols(tr::now).replace('&', "&&"), this, SLOT(psMacEmojiAndSymbols()), QKeySequence(Qt::MetaModifier | Qt::ControlModifier | Qt::Key_Space));
+	edit->addAction(
+		tr::lng_mac_menu_emoji_and_symbols(tr::now).replace('&', "&&"),
+		this,
+		[] { [NSApp orderFrontCharacterPalette:nil]; },
+		QKeySequence(Qt::MetaModifier | Qt::ControlModifier | Qt::Key_Space));
 
 	QMenu *window = psMainMenu.addMenu(tr::lng_mac_menu_window(tr::now));
 	psContacts = window->addAction(tr::lng_mac_menu_contacts(tr::now));
@@ -550,62 +492,6 @@ void MainWindow::createGlobalMenu() {
 	updateGlobalMenu();
 }
 
-void MainWindow::psMacUndo() {
-	SendKeySequence(Qt::Key_Z, Qt::ControlModifier);
-}
-
-void MainWindow::psMacRedo() {
-	SendKeySequence(Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
-}
-
-void MainWindow::psMacCut() {
-	SendKeySequence(Qt::Key_X, Qt::ControlModifier);
-}
-
-void MainWindow::psMacCopy() {
-	SendKeySequence(Qt::Key_C, Qt::ControlModifier);
-}
-
-void MainWindow::psMacPaste() {
-	SendKeySequence(Qt::Key_V, Qt::ControlModifier);
-}
-
-void MainWindow::psMacDelete() {
-	SendKeySequence(Qt::Key_Delete);
-}
-
-void MainWindow::psMacSelectAll() {
-	SendKeySequence(Qt::Key_A, Qt::ControlModifier);
-}
-
-void MainWindow::psMacEmojiAndSymbols() {
-	[NSApp orderFrontCharacterPalette:nil];
-}
-
-void MainWindow::psMacBold() {
-	SendKeySequence(Qt::Key_B, Qt::ControlModifier);
-}
-
-void MainWindow::psMacItalic() {
-	SendKeySequence(Qt::Key_I, Qt::ControlModifier);
-}
-
-void MainWindow::psMacUnderline() {
-	SendKeySequence(Qt::Key_U, Qt::ControlModifier);
-}
-
-void MainWindow::psMacStrikeOut() {
-	SendKeySequence(Qt::Key_X, Qt::ControlModifier | Qt::ShiftModifier);
-}
-
-void MainWindow::psMacMonospace() {
-	SendKeySequence(Qt::Key_M, Qt::ControlModifier | Qt::ShiftModifier);
-}
-
-void MainWindow::psMacClearFormat() {
-	SendKeySequence(Qt::Key_N, Qt::ControlModifier | Qt::ShiftModifier);
-}
-
 void MainWindow::updateGlobalMenuHook() {
 	if (!positionInited()) {
 		return;
@@ -628,12 +514,12 @@ void MainWindow::updateGlobalMenuHook() {
 		canRedo = edit->document()->isRedoAvailable();
 		canPaste = clipboardHasText;
 		if (canCopy) {
-			if (const auto inputField = qobject_cast<Ui::InputField*>(
+			if (const auto inputField = dynamic_cast<Ui::InputField*>(
 					focused->parentWidget())) {
 				canApplyMarkdown = inputField->isMarkdownEnabled();
 			}
 		}
-	} else if (auto list = qobject_cast<HistoryInner*>(focused)) {
+	} else if (auto list = dynamic_cast<HistoryInner*>(focused)) {
 		canCopy = list->canCopySelected();
 		canDelete = list->canDeleteSelected();
 	}
@@ -643,7 +529,8 @@ void MainWindow::updateGlobalMenuHook() {
 	updateIsActive();
 	const auto logged = (sessionController() != nullptr);
 	const auto inactive = !logged || controller().locked();
-	const auto support = logged && account().session().supportMode();
+	const auto support = logged
+		&& sessionController()->session().supportMode();
 	ForceDisabled(psLogout, !logged && !Core::App().passcodeLocked());
 	ForceDisabled(psUndo, !canUndo);
 	ForceDisabled(psRedo, !canRedo);
@@ -669,7 +556,7 @@ void MainWindow::updateGlobalMenuHook() {
 bool MainWindow::eventFilter(QObject *obj, QEvent *evt) {
 	QEvent::Type t = evt->type();
 	if (t == QEvent::FocusIn || t == QEvent::FocusOut) {
-		if (qobject_cast<QLineEdit*>(obj) || qobject_cast<QTextEdit*>(obj) || qobject_cast<HistoryInner*>(obj)) {
+		if (qobject_cast<QLineEdit*>(obj) || qobject_cast<QTextEdit*>(obj) || dynamic_cast<HistoryInner*>(obj)) {
 			updateGlobalMenu();
 		}
 	}

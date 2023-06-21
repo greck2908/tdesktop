@@ -26,6 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/layers/generic_box.h"
+#include "ui/painter.h"
 #include "lottie/lottie_icon.h"
 #include "core/application.h"
 #include "core/core_settings.h"
@@ -76,7 +77,8 @@ public:
 
 	QString generateName() override;
 	QString generateShortName() override;
-	PaintRoundImageCallback generatePaintUserpicCallback() override;
+	PaintRoundImageCallback generatePaintUserpicCallback(
+		bool forceRound) override;
 
 	int elementsCount() const override;
 	QRect elementGeometry(int element, int outerWidth) const override;
@@ -216,29 +218,43 @@ void RenameBox(not_null<Ui::GenericBox*> box) {
 	return Type::Other;
 }
 
-[[nodiscard]] style::color ColorForType(Type type) {
-	switch (type) {
-	case Type::Windows:
-	case Type::Mac:
-	case Type::Other:
-		return st::historyPeer4UserpicBg; // blue
-	case Type::Ubuntu:
-		return st::historyPeer8UserpicBg; // orange
-	case Type::Linux:
-		return st::historyPeer5UserpicBg; // purple
-	case Type::iPhone:
-	case Type::iPad:
-		return st::historyPeer7UserpicBg; // sea
-	case Type::Android:
-		return st::historyPeer2UserpicBg; // green
-	case Type::Web:
-	case Type::Chrome:
-	case Type::Edge:
-	case Type::Firefox:
-	case Type::Safari:
-		return st::historyPeer6UserpicBg; // pink
-	}
-	Unexpected("Type in ColorForType.");
+[[nodiscard]] QBrush GradientForType(Type type, int size) {
+	const auto colors = [&]() -> std::pair<style::color, style::color> {
+		switch (type) {
+		case Type::Windows:
+		case Type::Mac:
+		case Type::Other:
+			// Blue.
+			return { st::historyPeer4UserpicBg, st::historyPeer4UserpicBg2 };
+		case Type::Ubuntu:
+			// Orange.
+			return { st::historyPeer8UserpicBg, st::historyPeer8UserpicBg2 };
+		case Type::Linux:
+			// Purple.
+			return { st::historyPeer5UserpicBg, st::historyPeer5UserpicBg2 };
+		case Type::iPhone:
+		case Type::iPad:
+			// Sea.
+			return { st::historyPeer7UserpicBg, st::historyPeer7UserpicBg2 };
+		case Type::Android:
+			// Green.
+			return { st::historyPeer2UserpicBg, st::historyPeer2UserpicBg2 };
+		case Type::Web:
+		case Type::Chrome:
+		case Type::Edge:
+		case Type::Firefox:
+		case Type::Safari:
+			// Pink.
+			return { st::historyPeer6UserpicBg, st::historyPeer6UserpicBg2 };
+		}
+		Unexpected("Type in GradientForType.");
+	}();
+	auto gradient = QLinearGradient(0, 0, 0, size);
+	gradient.setStops({
+		{ 0.0, colors.first->c },
+		{ 1.0, colors.second->c },
+	});
+	return QBrush(std::move(gradient));
 }
 
 [[nodiscard]] const style::icon &IconForType(Type type) {
@@ -289,7 +305,7 @@ void RenameBox(not_null<Ui::GenericBox*> box) {
 		Unexpected("Type in LottieForType.");
 	}();
 	const auto size = st::sessionBigLottieSize;
-	return std::make_unique<Lottie::Icon>(Lottie::IconDescriptor{
+	return Lottie::MakeIcon({
 		.path = u":/icons/settings/devices/"_q + path + u".lottie"_q,
 		.sizeOverride = QSize(size, size),
 	});
@@ -306,7 +322,7 @@ void RenameBox(not_null<Ui::GenericBox*> box) {
 
 	auto p = QPainter(&result);
 	auto hq = PainterHighQualityEnabler(p);
-	p.setBrush(ColorForType(type));
+	p.setBrush(GradientForType(type, size));
 	p.setPen(Qt::NoPen);
 	p.drawEllipse(rect);
 	IconForType(type).paintInCenter(p, rect);
@@ -342,7 +358,7 @@ void RenameBox(not_null<Ui::GenericBox*> box) {
 
 	auto p = QPainter(&state->background);
 	auto hq = PainterHighQualityEnabler(p);
-	p.setBrush(ColorForType(type));
+	p.setBrush(GradientForType(type, size));
 	p.setPen(Qt::NoPen);
 	p.drawEllipse(rect);
 	if (const auto icon = IconBigForType(type)) {
@@ -519,9 +535,9 @@ QString Row::generateShortName() {
 	return generateName();
 }
 
-PaintRoundImageCallback Row::generatePaintUserpicCallback() {
+PaintRoundImageCallback Row::generatePaintUserpicCallback(bool forceRound) {
 	return [=](
-			Painter &p,
+			QPainter &p,
 			int x,
 			int y,
 			int outerWidth,
@@ -587,7 +603,7 @@ void Row::elementsPaint(
 			: st::sessionTerminate.icon;
 		icon.paint(p, position.x(), position.y(), outerWidth);
 	}
-	p.setFont(st::msgFont);
+	p.setFont(st::normalFont);
 	p.setPen(st::sessionInfoFg);
 	const auto locationLeft = st::sessionListItem.namePosition.x();
 	const auto available = outerWidth - locationLeft;
@@ -636,7 +652,7 @@ private:
 	Full _data;
 
 	object_ptr<Inner> _inner;
-	QPointer<Ui::ConfirmBox> _terminateBox;
+	QPointer<Ui::BoxContent> _terminateBox;
 
 	base::Timer _shortPollTimer;
 
@@ -823,13 +839,14 @@ void SessionsContent::terminate(Fn<void()> terminateRequest, QString message) {
 		}
 		terminateRequest();
 	});
-	_terminateBox = Ui::show(
-		Box<Ui::ConfirmBox>(
-			message,
-			tr::lng_settings_reset_button(tr::now),
-			st::attentionBoxButton,
-			callback),
-		Ui::LayerOption::KeepOther);
+	auto box = Ui::MakeConfirmBox({
+		.text = message,
+		.confirmed = callback,
+		.confirmText = tr::lng_settings_reset_button(),
+		.confirmStyle = &st::attentionBoxButton,
+	});
+	_terminateBox = Ui::MakeWeak(box.data());
+	_controller->show(std::move(box));
 }
 
 void SessionsContent::terminateOne(uint64 hash) {
@@ -911,7 +928,7 @@ void SessionsContent::Inner::setupContent() {
 		rename->moveToRight(x, y, outer.width());
 	}, rename->lifetime());
 	rename->setClickedCallback([=] {
-		Ui::show(Box(RenameBox), Ui::LayerOption::KeepOther);
+		_controller->show(Box(RenameBox));
 	});
 
 	const auto session = &_controller->session();
@@ -928,10 +945,8 @@ void SessionsContent::Inner::setupContent() {
 		CreateButton(
 			terminateInner,
 			tr::lng_sessions_terminate_all(),
-			st::sessionsTerminateAll,
-			&st::sessionsTerminateAllIcon,
-			st::sessionsTerminateAllIconLeft,
-			&st::attentionButtonFg));
+			st::infoBlockButton,
+			{ .icon = &st::infoIconBlock }));
 	AddSkip(terminateInner);
 	AddDividerText(terminateInner, tr::lng_sessions_terminate_all_about());
 
@@ -968,9 +983,8 @@ void SessionsContent::Inner::setupContent() {
 	AddButtonWithLabel(
 		ttlInner,
 		tr::lng_settings_terminate_if(),
-		_ttlDays.value(
-	) | rpl::map(SelfDestructionBox::DaysLabel),
-		st::settingsButton
+		_ttlDays.value() | rpl::map(SelfDestructionBox::DaysLabel),
+		st::settingsButtonNoIcon
 	)->addClickHandler([=] {
 		_controller->show(Box<SelfDestructionBox>(
 			&_controller->session(),
@@ -1163,6 +1177,10 @@ Sessions::Sessions(
 	not_null<Window::SessionController*> controller)
 : Section(parent) {
 	setupContent(controller);
+}
+
+rpl::producer<QString> Sessions::title() {
+	return tr::lng_settings_sessions_title();
 }
 
 void Sessions::setupContent(not_null<Window::SessionController*> controller) {

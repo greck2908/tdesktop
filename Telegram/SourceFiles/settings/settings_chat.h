@@ -27,10 +27,21 @@ void SetupDefaultThemes(
 void SetupSupport(
 	not_null<Window::SessionController*> controller,
 	not_null<Ui::VerticalLayout*> container);
+void SetupExport(
+	not_null<Window::SessionController*> controller,
+	not_null<Ui::VerticalLayout*> container);
 
-class Chat : public Section {
+void PaintRoundColorButton(
+	QPainter &p,
+	int size,
+	QBrush brush,
+	float64 selected);
+
+class Chat : public Section<Chat> {
 public:
 	Chat(QWidget *parent, not_null<Window::SessionController*> controller);
+
+	[[nodiscard]] rpl::producer<QString> title() override;
 
 private:
 	void setupContent(not_null<Window::SessionController*> controller);

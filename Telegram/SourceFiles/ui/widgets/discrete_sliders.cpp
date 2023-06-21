@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/discrete_sliders.h"
 
 #include "ui/effects/ripple_animation.h"
+#include "ui/painter.h"
 #include "styles/style_widgets.h"
 
 namespace Ui {
@@ -167,6 +168,10 @@ SettingsSlider::SettingsSlider(
 	const style::SettingsSlider &st)
 : DiscreteSlider(parent)
 , _st(st) {
+	if (_st.barRadius > 0) {
+		_bar.emplace(_st.barRadius, _st.barFg);
+		_barActive.emplace(_st.barRadius, _st.barFgActive);
+	}
 	setSelectOnPress(_st.ripple.showDuration == 0);
 }
 
@@ -260,19 +265,32 @@ void SettingsSlider::startRipple(int sectionIndex) {
 	});
 }
 
-QImage SettingsSlider::prepareRippleMask(int sectionIndex, const Section &section) {
+QImage SettingsSlider::prepareRippleMask(
+		int sectionIndex,
+		const Section &section) {
 	auto size = QSize(section.width, height() - _st.rippleBottomSkip);
-	if (!_rippleTopRoundRadius || (sectionIndex > 0 && sectionIndex + 1 < getSectionsCount())) {
-		return RippleAnimation::rectMask(size);
+	if (!_rippleTopRoundRadius
+		|| (sectionIndex > 0 && sectionIndex + 1 < getSectionsCount())) {
+		return RippleAnimation::RectMask(size);
 	}
-	return RippleAnimation::maskByDrawer(size, false, [this, sectionIndex, width = section.width](QPainter &p) {
+	return RippleAnimation::MaskByDrawer(size, false, [&](QPainter &p) {
 		auto plusRadius = _rippleTopRoundRadius + 1;
-		p.drawRoundedRect(0, 0, width, height() + plusRadius, _rippleTopRoundRadius, _rippleTopRoundRadius);
+		p.drawRoundedRect(
+			0,
+			0,
+			section.width,
+			height() + plusRadius,
+			_rippleTopRoundRadius,
+			_rippleTopRoundRadius);
 		if (sectionIndex > 0) {
 			p.fillRect(0, 0, plusRadius, plusRadius, p.brush());
 		}
 		if (sectionIndex + 1 < getSectionsCount()) {
-			p.fillRect(width - plusRadius, 0, plusRadius, plusRadius, p.brush());
+			p.fillRect(
+				section.width - plusRadius,
+				0,
+				plusRadius,
+				plusRadius, p.brush());
 		}
 	});
 }
@@ -283,6 +301,14 @@ void SettingsSlider::paintEvent(QPaintEvent *e) {
 	auto clip = e->rect();
 	auto activeLeft = getCurrentActiveLeft();
 
+	const auto drawRect = [&](QRect rect, bool active = false) {
+		const auto &bar = active ? _barActive : _bar;
+		if (bar) {
+			bar->paint(p, rect);
+		} else {
+			p.fillRect(rect, active ? _st.barFgActive : _st.barFg);
+		}
+	};
 	enumerateSections([&](Section &section) {
 		auto active = 1.
 			- std::clamp(
@@ -299,19 +325,21 @@ void SettingsSlider::paintEvent(QPaintEvent *e) {
 		auto from = section.left, tofill = section.width;
 		if (activeLeft > from) {
 			auto fill = qMin(tofill, activeLeft - from);
-			p.fillRect(myrtlrect(from, _st.barTop, fill, _st.barStroke), _st.barFg);
+			drawRect(myrtlrect(from, _st.barTop, fill, _st.barStroke));
 			from += fill;
 			tofill -= fill;
 		}
 		if (activeLeft + section.width > from) {
 			if (auto fill = qMin(tofill, activeLeft + section.width - from)) {
-				p.fillRect(myrtlrect(from, _st.barTop, fill, _st.barStroke), _st.barFgActive);
+				drawRect(
+					myrtlrect(from, _st.barTop, fill, _st.barStroke),
+					true);
 				from += fill;
 				tofill -= fill;
 			}
 		}
 		if (tofill) {
-			p.fillRect(myrtlrect(from, _st.barTop, tofill, _st.barStroke), _st.barFg);
+			drawRect(myrtlrect(from, _st.barTop, tofill, _st.barStroke));
 		}
 		if (myrtlrect(section.left, _st.labelTop, section.width, _st.labelStyle.font->height).intersects(clip)) {
 			p.setPen(anim::pen(_st.labelFg, _st.labelFgActive, active));

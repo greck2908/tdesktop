@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/ripple_animation.h"
 #include "ui/image/image.h"
 #include "ui/platform/ui_platform_window_title.h"
+#include "ui/painter.h"
 #include "base/platform/base_platform_info.h"
 #include "webrtc/webrtc_video_track.h"
 #include "lang/lang_keys.h"
@@ -22,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <tgcalls/desktop_capturer/DesktopCaptureSourceManager.h>
 #include <tgcalls/desktop_capturer/DesktopCaptureSourceHelper.h>
+#include <QtGui/QGuiApplication>
 #include <QtGui/QWindow>
 
 namespace Calls::Group::Ui::DesktopCapture {
@@ -48,7 +50,7 @@ private:
 };
 
 QImage SourceButton::prepareRippleMask() const {
-	return RippleAnimation::roundRectMask(size(), st::roundRadiusLarge);
+	return RippleAnimation::RoundRectMask(size(), st::roundRadiusLarge);
 }
 
 class Source final {
@@ -573,13 +575,19 @@ void ChooseSourceProcess::setupSourcesGeometry() {
 
 void ChooseSourceProcess::setupGeometryWithParent(
 		not_null<QWidget*> parent) {
-	if (const auto handle = parent->windowHandle()) {
-		_window->createWinId();
-		const auto parentScreen = handle->screen();
-		const auto myScreen = _window->windowHandle()->screen();
-		if (parentScreen && myScreen != parentScreen) {
-			_window->windowHandle()->setScreen(parentScreen);
+	_window->createWinId();
+	const auto parentScreen = [&] {
+		if (!::Platform::IsWayland()) {
+			if (const auto screen = QGuiApplication::screenAt(
+				parent->geometry().center())) {
+				return screen;
+			}
 		}
+		return parent->screen();
+	}();
+	const auto myScreen = _window->screen();
+	if (parentScreen && myScreen != parentScreen) {
+		_window->windowHandle()->setScreen(parentScreen);
 	}
 	_window->move(
 		parent->x() + (parent->width() - _window->width()) / 2,

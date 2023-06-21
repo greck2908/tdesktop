@@ -195,6 +195,16 @@ void Pip::RendererGL::init(
 			FragmentRoundToShadow(),
 		}));
 
+	_nv12Program.emplace();
+	LinkProgram(
+		&*_nv12Program,
+		_texturedVertexShader,
+		FragmentShader({
+			FragmentSampleNV12Texture(),
+			FragmentApplyFade(),
+			FragmentRoundToShadow(),
+		}));
+
 	_imageProgram.emplace();
 	LinkProgram(
 		&*_imageProgram,
@@ -231,6 +241,7 @@ void Pip::RendererGL::deinit(
 	_texturedVertexShader = nullptr;
 	_argb32Program = std::nullopt;
 	_yuv420Program = std::nullopt;
+	_nv12Program = std::nullopt;
 	_controlsProgram = std::nullopt;
 	_contentBuffer = std::nullopt;
 }
@@ -289,10 +300,14 @@ void Pip::RendererGL::paintTransformedVideoFrame(
 		paintTransformedStaticContent(data.image, geometry);
 		return;
 	}
-	Assert(data.format == Streaming::FrameFormat::YUV420);
-	Assert(!data.yuv420->size.isEmpty());
-	const auto yuv = data.yuv420;
-	_yuv420Program->bind();
+	Assert(!data.yuv->size.isEmpty());
+	const auto program = (data.format == Streaming::FrameFormat::NV12)
+		? &*_nv12Program
+		: &*_yuv420Program;
+	program->bind();
+	const auto nv12 = (data.format == Streaming::FrameFormat::NV12);
+	const auto yuv = data.yuv;
+	const auto nv12changed = (_chromaNV12 != nv12);
 
 	const auto upload = (_trackFrameIndex != data.index);
 	_trackFrameIndex = data.index;
@@ -314,31 +329,42 @@ void Pip::RendererGL::paintTransformedVideoFrame(
 	_textures.bind(*_f, 2);
 	if (upload) {
 		uploadTexture(
-			GL_ALPHA,
-			GL_ALPHA,
+			nv12 ? GL_RG : GL_ALPHA,
+			nv12 ? GL_RG : GL_ALPHA,
 			yuv->chromaSize,
-			_chromaSize,
-			yuv->u.stride,
+			nv12changed ? QSize() : _chromaSize,
+			yuv->u.stride / (nv12 ? 2 : 1),
 			yuv->u.data);
+		if (nv12) {
+			_chromaSize = yuv->chromaSize;
+			_f->glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+		}
+		_chromaNV12 = nv12;
 	}
-	_f->glActiveTexture(GL_TEXTURE2);
-	_textures.bind(*_f, 3);
-	if (upload) {
-		uploadTexture(
-			GL_ALPHA,
-			GL_ALPHA,
-			yuv->chromaSize,
-			_chromaSize,
-			yuv->v.stride,
-			yuv->v.data);
-		_chromaSize = yuv->chromaSize;
-		_f->glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+	if (!nv12) {
+		_f->glActiveTexture(GL_TEXTURE2);
+		_textures.bind(*_f, 3);
+		if (upload) {
+			uploadTexture(
+				GL_ALPHA,
+				GL_ALPHA,
+				yuv->chromaSize,
+				_chromaSize,
+				yuv->v.stride,
+				yuv->v.data);
+			_chromaSize = yuv->chromaSize;
+			_f->glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+		}
 	}
-	_yuv420Program->setUniformValue("y_texture", GLint(0));
-	_yuv420Program->setUniformValue("u_texture", GLint(1));
-	_yuv420Program->setUniformValue("v_texture", GLint(2));
+	program->setUniformValue("y_texture", GLint(0));
+	if (nv12) {
+		program->setUniformValue("uv_texture", GLint(1));
+	} else {
+		program->setUniformValue("u_texture", GLint(1));
+		program->setUniformValue("v_texture", GLint(2));
+	}
 
-	paintTransformedContent(&*_yuv420Program, geometry);
+	paintTransformedContent(program, geometry);
 }
 
 void Pip::RendererGL::paintTransformedStaticContent(
@@ -471,7 +497,7 @@ void Pip::RendererGL::uploadTexture(
 void Pip::RendererGL::paintRadialLoading(
 		QRect inner,
 		float64 controlsShown) {
-	paintUsingRaster(_radialImage, inner, [&](Painter &&p) {
+	paintUsingRaster(_radialImage, inner, [&](QPainter &&p) {
 		// Raster renderer paints content, then radial loading, then fade.
 		// Here we paint fade together with the content, so we should emulate
 		// radial loading being under the fade.
@@ -495,14 +521,14 @@ void Pip::RendererGL::paintRadialLoading(
 }
 
 void Pip::RendererGL::paintPlayback(QRect outer, float64 shown) {
-	paintUsingRaster(_playbackImage, outer, [&](Painter &&p) {
+	paintUsingRaster(_playbackImage, outer, [&](QPainter &&p) {
 		const auto newOuter = QRect(QPoint(), outer.size());
 		_owner->paintPlaybackContent(p, newOuter, shown);
 	}, kPlaybackOffset, true);
 }
 
 void Pip::RendererGL::paintVolumeController(QRect outer, float64 shown) {
-	paintUsingRaster(_volumeControllerImage, outer, [&](Painter &&p) {
+	paintUsingRaster(_volumeControllerImage, outer, [&](QPainter &&p) {
 		const auto newOuter = QRect(QPoint(), outer.size());
 		_owner->paintVolumeControllerContent(p, newOuter, shown);
 	}, kVolumeControllerOffset, true);
@@ -672,7 +698,7 @@ void Pip::RendererGL::invalidateControls() {
 void Pip::RendererGL::paintUsingRaster(
 		Ui::GL::Image &image,
 		QRect rect,
-		Fn<void(Painter&&)> method,
+		Fn<void(QPainter&&)> method,
 		int bufferOffset,
 		bool transparent) {
 	auto raster = image.takeImage();
@@ -692,7 +718,7 @@ void Pip::RendererGL::paintUsingRaster(
 	if (transparent) {
 		raster.fill(Qt::transparent);
 	}
-	method(Painter(&raster));
+	method(QPainter(&raster));
 
 	_f->glActiveTexture(GL_TEXTURE0);
 

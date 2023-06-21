@@ -16,6 +16,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class PeerData;
 
+namespace Data {
+struct ReactionId;
+class ForumTopic;
+} // namespace Data
+
 namespace Main {
 class Session;
 } // namespace Main
@@ -40,8 +45,7 @@ enum class Column {
 
 class AbstractSectionWidget
 	: public Ui::RpWidget
-	, public Media::Player::FloatSectionDelegate
-	, protected base::Subscriber {
+	, public Media::Player::FloatSectionDelegate {
 public:
 	AbstractSectionWidget(
 		QWidget *parent,
@@ -55,7 +59,7 @@ public:
 
 	// Tabbed selector management.
 	virtual bool pushTabbedSelectorToThirdSection(
-			not_null<PeerData*> peer,
+			not_null<Data::Thread*> thread,
 			const SectionShow &params) {
 		return false;
 	}
@@ -72,6 +76,8 @@ class SectionMemento;
 
 struct SectionSlideParams {
 	QPixmap oldContentCache;
+	int topSkip = 0;
+	QPixmap topMask;
 	bool withTopBarShadow = false;
 	bool withTabs = false;
 	bool withFade = false;
@@ -111,6 +117,7 @@ public:
 		SlideDirection direction,
 		const SectionSlideParams &params);
 	void showFast();
+	[[nodiscard]] bool animatingShow() const;
 
 	// This can be used to grab with or without top bar shadow.
 	// This will be protected when animation preparation will be done inside.
@@ -133,7 +140,8 @@ public:
 		return false;
 	}
 
-	virtual bool preventsClose(Fn<void()> &&continueCallback) const {
+	[[nodiscard]] virtual bool preventsClose(
+			Fn<void()> &&continueCallback) const {
 		return false;
 	}
 
@@ -143,6 +151,13 @@ public:
 		return SectionActionResult::Ignore;
 	}
 
+	virtual bool confirmSendingFiles(const QStringList &files) {
+		return false;
+	}
+	virtual bool confirmSendingFiles(not_null<const QMimeData*> data) {
+		return false;
+	}
+
 	// Create a memento of that section to store it in the history stack.
 	// This method may modify the section ("take" heavy items).
 	virtual std::shared_ptr<SectionMemento> createMemento();
@@ -150,11 +165,16 @@ public:
 	void setInnerFocus() {
 		doSetInnerFocus();
 	}
+	virtual void checkActivation() {
+	}
 
-	virtual rpl::producer<int> desiredHeight() const;
+	[[nodiscard]] virtual rpl::producer<int> desiredHeight() const;
+	[[nodiscard]] virtual rpl::producer<> removeRequests() const {
+		return rpl::never<>();
+	}
 
 	// Some sections convert to layers on some geometry sizes.
-	virtual object_ptr<Ui::LayerWidget> moveContentToLayer(
+	[[nodiscard]] virtual object_ptr<Ui::LayerWidget> moveContentToLayer(
 			QRect bodyGeometry) {
 		return nullptr;
 	}
@@ -163,6 +183,17 @@ public:
 		not_null<SessionController*> controller,
 		not_null<Ui::ChatTheme*> theme,
 		not_null<QWidget*> widget,
+		QRect clip);
+	static void PaintBackground(
+		not_null<Ui::ChatTheme*> theme,
+		not_null<QWidget*> widget,
+		int fillHeight,
+		int fromy,
+		QRect clip);
+	static void PaintBackground(
+		QPainter &p,
+		not_null<Ui::ChatTheme*> theme,
+		QSize fill,
 		QRect clip);
 
 protected:
@@ -187,10 +218,6 @@ protected:
 		setFocus();
 	}
 
-	bool animating() const {
-		return _showAnimation != nullptr;
-	}
-
 	~SectionWidget();
 
 private:
@@ -207,5 +234,14 @@ private:
 	not_null<SessionController*> controller,
 	not_null<PeerData*> peer)
 -> rpl::producer<std::shared_ptr<Ui::ChatTheme>>;
+
+[[nodiscard]] bool ShowSendPremiumError(
+	not_null<SessionController*> controller,
+	not_null<DocumentData*> document);
+
+[[nodiscard]] bool ShowReactPremiumError(
+	not_null<SessionController*> controller,
+	not_null<HistoryItem*> item,
+	const Data::ReactionId &id);
 
 } // namespace Window

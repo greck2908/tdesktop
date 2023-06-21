@@ -12,14 +12,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/sender.h"
 #include "data/stickers/data_stickers_set.h"
 #include "ui/effects/animations.h"
-#include "ui/special_fields.h"
+#include "ui/widgets/fields/special_fields.h"
 
 namespace style {
 struct RippleAnimation;
 } // namespace style
 
 namespace Ui {
-class ConfirmBox;
 class PlainShadow;
 class RippleAnimation;
 class SettingsSlider;
@@ -28,9 +27,9 @@ class CrossButton;
 class BoxContentDivider;
 } // namespace Ui
 
-namespace Window {
-class SessionController;
-} // namespace Window
+namespace ChatHelpers {
+class Show;
+} // namespace ChatHelpers
 
 namespace Main {
 class Session;
@@ -38,6 +37,7 @@ class Session;
 
 namespace Data {
 class DocumentMedia;
+enum class StickersType : uchar;
 } // namespace Data
 
 namespace Lottie {
@@ -60,17 +60,21 @@ public:
 
 	StickersBox(
 		QWidget*,
-		not_null<Window::SessionController*> controller,
+		std::shared_ptr<ChatHelpers::Show> show,
 		Section section,
 		bool masks = false);
 	StickersBox(
 		QWidget*,
-		not_null<Window::SessionController*> controller,
+		std::shared_ptr<ChatHelpers::Show> show,
 		not_null<ChannelData*> megagroup);
 	StickersBox(
 		QWidget*,
-		not_null<Window::SessionController*> controller,
-		const MTPVector<MTPStickerSetCovered> &attachedSets);
+		std::shared_ptr<ChatHelpers::Show> show,
+		const QVector<MTPStickerSetCovered> &attachedSets);
+	StickersBox(
+		QWidget*,
+		std::shared_ptr<ChatHelpers::Show> show,
+		const std::vector<StickerSetIdentifier> &emojiSets);
 	~StickersBox();
 
 	[[nodiscard]] Main::Session &session() const;
@@ -138,7 +142,8 @@ private:
 
 	std::array<Inner*, 5> widgets() const;
 
-	const not_null<Window::SessionController*> _controller;
+	const std::shared_ptr<ChatHelpers::Show> _show;
+	const not_null<Main::Session*> _session;
 	MTP::Sender _api;
 
 	object_ptr<Ui::SettingsSlider> _tabs = { nullptr };
@@ -150,6 +155,7 @@ private:
 
 	Section _section;
 	const bool _isMasks;
+	const bool _isEmoji;
 
 	Tab _installed;
 	Tab _masks;
@@ -158,7 +164,9 @@ private:
 	Tab _attached;
 	Tab *_tab = nullptr;
 
-	const MTPVector<MTPStickerSetCovered> _attachedSets;
+	const Data::StickersType _attachedType = {};
+	const QVector<MTPStickerSetCovered> _attachedSets;
+	const std::vector<StickerSetIdentifier> _emojiSets;
 
 	ChannelData *_megagroupSet = nullptr;
 

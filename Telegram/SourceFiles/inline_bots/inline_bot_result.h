@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_cloud_file.h"
 #include "api/api_common.h"
 #include "media/view/media_view_open_common.h"
+#include "ui/effects/message_sending_animation_common.h"
 
 class FileLoader;
 class History;
@@ -62,7 +63,7 @@ public:
 	bool hasThumbDisplay() const;
 
 	void addToHistory(
-		History *history,
+		not_null<History*> history,
 		MessageFlags flags,
 		MsgId msgId,
 		PeerId fromId,
@@ -70,7 +71,7 @@ public:
 		UserId viaBotId,
 		MsgId replyToId,
 		const QString &postAuthor) const;
-	QString getErrorOnSend(History *history) const;
+	QString getErrorOnSend(not_null<History*> history) const;
 
 	// interface for Layout:: usage
 	std::optional<Data::LocationPoint> getLocationPoint() const;
@@ -131,7 +132,9 @@ private:
 struct ResultSelected {
 	not_null<Result*> result;
 	not_null<UserData*> bot;
+	PeerData *recipientOverride = nullptr;
 	Api::SendOptions options;
+	Ui::MessageSendingAnimationFrom messageSendingFrom;
 	// Open in OverlayWidget;
 	bool open = false;
 };

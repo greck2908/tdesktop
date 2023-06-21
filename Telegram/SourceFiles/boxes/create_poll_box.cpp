@@ -18,14 +18,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/checkbox.h"
-#include "ui/toast/toast.h"
 #include "ui/text/text_utilities.h"
 #include "main/main_session.h"
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "chat_helpers/emoji_suggestions_widget.h"
 #include "chat_helpers/message_field.h"
-#include "chat_helpers/send_context_menu.h"
+#include "menu/menu_send.h"
 #include "history/view/history_view_schedule_box.h"
 #include "settings/settings_common.h"
 #include "base/unique_qptr.h"
@@ -776,7 +775,7 @@ void CreatePollBox::setInnerFocus() {
 }
 
 void CreatePollBox::submitFailed(const QString &error) {
-	Ui::Toast::Show(error);
+	showToast(error);
 }
 
 not_null<Ui::InputField*> CreatePollBox::setupQuestion(
@@ -851,7 +850,7 @@ not_null<Ui::InputField*> CreatePollBox::setupSolution(
 		Core::App().settings().replaceEmojiValue());
 	solution->setMarkdownReplacesEnabled(rpl::single(true));
 	solution->setEditLinkCallback(
-		DefaultEditLinkCallback(_controller, solution));
+		DefaultEditLinkCallback(_controller->uiShow(), solution));
 	solution->customTab(true);
 
 	const auto warning = CreateWarningLabel(
@@ -986,9 +985,10 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 			|| (_chosen & PollData::Flag::Quiz));
 		multiple->events(
 		) | rpl::filter([=](not_null<QEvent*> e) {
-			return (e->type() == QEvent::MouseButtonPress) && quiz->checked();
-		}) | rpl::start_with_next([=] {
-			Ui::Toast::Show(tr::lng_polls_create_one_answer(tr::now));
+			return (e->type() == QEvent::MouseButtonPress)
+				&& quiz->checked();
+		}) | rpl::start_with_next([show = uiShow()] {
+			show->showToast(tr::lng_polls_create_one_answer(tr::now));
 		}, multiple->lifetime());
 	}
 
@@ -1065,8 +1065,9 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 			*error &= ~Error::Solution;
 		}
 	};
-	const auto showError = [](tr::phrase<> text) {
-		Ui::Toast::Show(text(tr::now));
+	const auto showError = [show = uiShow()](
+			tr::phrase<> text) {
+		show->showToast(text(tr::now));
 	};
 	const auto send = [=](Api::SendOptions sendOptions) {
 		collectError();
@@ -1092,8 +1093,10 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 			HistoryView::PrepareScheduleBox(
 				this,
 				SendMenu::Type::Scheduled,
-				send),
-			Ui::LayerOption::KeepOther);
+				send));
+	};
+	const auto sendWhenOnline = [=] {
+		send(Api::DefaultSendWhenOnlineOptions());
 	};
 
 	options->scrollToWidget(
@@ -1123,7 +1126,8 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 		submit.data(),
 		sendMenuType,
 		sendSilent,
-		sendScheduled);
+		sendScheduled,
+		sendWhenOnline);
 	addButton(tr::lng_cancel(), [=] { closeBox(); });
 
 	return result;

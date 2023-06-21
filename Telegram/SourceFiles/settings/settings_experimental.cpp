@@ -13,13 +13,22 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
 #include "ui/gl/gl_detection.h"
+#include "ui/chat/chat_style_radius.h"
 #include "base/options.h"
 #include "core/application.h"
+#include "core/launcher.h"
 #include "chat_helpers/tabbed_panel.h"
 #include "lang/lang_keys.h"
+#include "mainwindow.h"
+#include "media/player/media_player_instance.h"
+#include "webview/webview_embed.h"
 #include "window/window_peer_menu.h"
 #include "window/window_session_controller.h"
 #include "window/window_controller.h"
+#include "window/notifications_manager.h"
+#include "settings/settings_common.h"
+#include "storage/localimageloader.h"
+#include "data/data_document_resolver.h"
 #include "styles/style_settings.h"
 #include "styles/style_layers.h"
 
@@ -43,7 +52,9 @@ void AddOption(
 	const auto button = AddButton(
 		container,
 		rpl::single(name),
-		option.relevant() ? st::settingsButton : st::settingsOptionDisabled
+		(option.relevant()
+			? st::settingsButtonNoIcon
+			: st::settingsOptionDisabled)
 	)->toggleOn(toggles->events_starting_with(option.value()));
 
 	const auto restarter = (option.relevant() && option.restartRequired())
@@ -51,11 +62,12 @@ void AddOption(
 		: nullptr;
 	if (restarter) {
 		restarter->setCallback([=] {
-			window->show(Box<Ui::ConfirmBox>(
-				tr::lng_settings_need_restart(tr::now),
-				tr::lng_settings_restart_now(tr::now),
-				tr::lng_settings_restart_later(tr::now),
-				[] { Core::Restart(); }));
+			window->show(Ui::MakeConfirmBox({
+				.text = tr::lng_settings_need_restart(),
+				.confirmed = [] { Core::Restart(); },
+				.confirmText = tr::lng_settings_restart_now(),
+				.cancelText = tr::lng_settings_restart_later(),
+			}));
 		});
 	}
 	button->toggledChanges(
@@ -68,7 +80,7 @@ void AddOption(
 		}
 		option.set(toggled);
 		if (restarter) {
-			restarter->callOnce(st::settingsButton.toggle.duration);
+			restarter->callOnce(st::settingsButtonNoIcon.toggle.duration);
 		}
 	}, container->lifetime());
 
@@ -104,7 +116,7 @@ void SetupExperimental(
 		reset = AddButton(
 			inner,
 			tr::lng_settings_experimental_restore(),
-			st::settingsButton);
+			st::settingsButtonNoIcon);
 		reset->addClickHandler([=] {
 			base::options::reset();
 			wrap->hide(anim::type::normal);
@@ -126,8 +138,18 @@ void SetupExperimental(
 	};
 
 	addToggle(ChatHelpers::kOptionTabbedPanelShowOnClick);
+	addToggle(Core::kOptionFractionalScalingEnabled);
 	addToggle(Window::kOptionViewProfileInChatsListContextMenu);
 	addToggle(Ui::GL::kOptionAllowLinuxNvidiaOpenGL);
+	addToggle(Ui::kOptionUseSmallMsgBubbleRadius);
+	addToggle(Media::Player::kOptionDisableAutoplayNext);
+	addToggle(kOptionSendLargePhotos);
+	addToggle(Settings::kOptionMonoSettingsIcons);
+	addToggle(Webview::kOptionWebviewDebugEnabled);
+	addToggle(kOptionAutoScrollInactiveChat);
+	addToggle(Window::Notifications::kOptionGNotification);
+	addToggle(Core::kOptionFreeType);
+	addToggle(Data::kOptionExternalVideoPlayer);
 }
 
 } // namespace
@@ -137,6 +159,10 @@ Experimental::Experimental(
 	not_null<Window::SessionController*> controller)
 : Section(parent) {
 	setupContent(controller);
+}
+
+rpl::producer<QString> Experimental::title() {
+	return tr::lng_settings_experimental();
 }
 
 void Experimental::setupContent(

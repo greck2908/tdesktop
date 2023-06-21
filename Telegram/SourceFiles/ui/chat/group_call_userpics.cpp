@@ -8,6 +8,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/group_call_userpics.h"
 
 #include "ui/paint/blobs.h"
+#include "ui/painter.h"
+#include "ui/power_saving.h"
 #include "base/random.h"
 #include "styles/style_chat.h"
 
@@ -115,10 +117,10 @@ GroupCallUserpics::GroupCallUserpics(
 	});
 
 	rpl::combine(
-		rpl::single(anim::Disabled()) | rpl::then(anim::Disables()),
+		PowerSaving::OnValue(PowerSaving::kCalls),
 		std::move(hideBlobs)
-	) | rpl::start_with_next([=](bool animDisabled, bool deactivated) {
-		const auto hide = animDisabled || deactivated;
+	) | rpl::start_with_next([=](bool disabled, bool deactivated) {
+		const auto hide = disabled || deactivated;
 
 		if (!(hide && _speakingAnimationHideLastTime)) {
 			_speakingAnimationHideLastTime = hide ? crl::now() : 0;
@@ -138,7 +140,7 @@ GroupCallUserpics::GroupCallUserpics(
 
 GroupCallUserpics::~GroupCallUserpics() = default;
 
-void GroupCallUserpics::paint(Painter &p, int x, int y, int size) {
+void GroupCallUserpics::paint(QPainter &p, int x, int y, int size) {
 	const auto factor = style::DevicePixelRatio();
 	const auto &minScale = kUserpicMinScale;
 	for (auto &userpic : ranges::views::reverse(_list)) {
@@ -259,9 +261,9 @@ void GroupCallUserpics::validateCache(Userpic &userpic) {
 	userpic.cacheMasked = !userpic.topMost;
 	userpic.cache.fill(Qt::transparent);
 	{
-		Painter p(&userpic.cache);
+		auto p = QPainter(&userpic.cache);
 		const auto skip = (kWideScale - 1) / 2 * size;
-		p.drawImage(skip, skip, userpic.data.userpic);
+		p.drawImage(QRect(skip, skip, size, size), userpic.data.userpic);
 
 		if (userpic.cacheMasked) {
 			auto hq = PainterHighQualityEnabler(p);

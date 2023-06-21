@@ -33,6 +33,8 @@ public:
 		not_null<DocumentData*> document,
 		FullMsgId context = FullMsgId());
 
+	QString tooltip() const override;
+
 	[[nodiscard]] not_null<DocumentData*> document() const;
 
 private:
@@ -50,6 +52,10 @@ public:
 	using DocumentClickHandler::DocumentClickHandler;
 	static void Save(
 		Data::FileOrigin origin,
+		not_null<DocumentData*> document,
+		Mode mode = Mode::ToCacheOrFile);
+	static void SaveAndTrack(
+		FullMsgId itemId,
 		not_null<DocumentData*> document,
 		Mode mode = Mode::ToCacheOrFile);
 

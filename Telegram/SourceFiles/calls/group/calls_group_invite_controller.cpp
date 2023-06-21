@@ -193,7 +193,7 @@ object_ptr<Ui::BoxContent> PrepareInviteBox(
 		&st::groupCallInviteMembersList,
 		&st::groupCallMultiSelect);
 
-	const auto weak = base::make_weak(call.get());
+	const auto weak = base::make_weak(call);
 	const auto invite = [=](const std::vector<not_null<UserData*>> &users) {
 		const auto call = weak.get();
 		if (!call) {
@@ -219,12 +219,15 @@ object_ptr<Ui::BoxContent> PrepareInviteBox(
 		}
 	};
 	const auto inviteWithAdd = [=](
+			std::shared_ptr<Ui::Show> show,
 			const std::vector<not_null<UserData*>> &users,
 			const std::vector<not_null<UserData*>> &nonMembers,
 			Fn<void()> finish) {
 		peer->session().api().chatParticipants().add(
 			peer,
 			nonMembers,
+			show,
+			true,
 			[=](bool) { invite(users); finish(); });
 	};
 	const auto inviteWithConfirmation = [=](
@@ -237,7 +240,7 @@ object_ptr<Ui::BoxContent> PrepareInviteBox(
 			finish();
 			return;
 		}
-		const auto name = peer->name;
+		const auto name = peer->name();
 		const auto text = (nonMembers.size() == 1)
 			? tr::lng_group_call_add_to_group_one(
 				tr::now,
@@ -256,12 +259,13 @@ object_ptr<Ui::BoxContent> PrepareInviteBox(
 			finish();
 		};
 		const auto done = [=] {
-			inviteWithAdd(users, nonMembers, finishWithConfirm);
+			const auto show = (*shared) ? (*shared)->uiShow() : nullptr;
+			inviteWithAdd(show, users, nonMembers, finishWithConfirm);
 		};
 		auto box = ConfirmBox({
-			.text = { text },
-			.button = tr::lng_participant_invite(),
-			.callback = done,
+			.text = text,
+			.confirmed = done,
+			.confirmText = tr::lng_participant_invite(),
 		});
 		*shared = box.data();
 		parentBox->getDelegate()->showBox(

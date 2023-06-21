@@ -11,6 +11,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_cloud_themes.h"
 #include "ui/style/style_core_palette.h"
 
+class QFileSystemWatcher;
+struct SendMediaReady;
+
 namespace style {
 struct colorizer;
 } // namespace style
@@ -26,6 +29,10 @@ class Controller;
 namespace Ui {
 struct ChatThemeBackground;
 } // namespace Ui
+
+namespace Webview {
+struct ThemeParams;
+} // namespace Webview
 
 namespace Window {
 namespace Theme {
@@ -150,6 +157,7 @@ enum class ClearEditing {
 class ChatBackground final {
 public:
 	ChatBackground();
+	~ChatBackground();
 
 	[[nodiscard]] rpl::producer<BackgroundUpdate> updates() const {
 		return _updates.events();
@@ -236,6 +244,7 @@ private:
 	[[nodiscard]] bool isNonDefaultBackground();
 	void checkUploadWallPaper();
 	[[nodiscard]] QImage postprocessBackgroundImage(QImage image);
+	void refreshThemeWatcher();
 
 	friend bool IsNightMode();
 	friend void SetNightModeValue(bool nightMode);
@@ -272,6 +281,7 @@ private:
 	QImage _themeImage;
 	bool _themeTile = false;
 	std::optional<Data::CloudTheme> _editingTheme;
+	std::unique_ptr<QFileSystemWatcher> _themeWatcher;
 
 	Data::WallPaper _paperForRevert
 		= Data::details::UninitializedWallPaper();
@@ -287,11 +297,17 @@ private:
 
 };
 
+[[nodiscard]] SendMediaReady PrepareWallPaper(
+	MTP::DcId dcId,
+	const QImage &image);
+
 [[nodiscard]] ChatBackground *Background();
 
 bool ReadPaletteValues(
 	const QByteArray &content,
 	Fn<bool(QLatin1String name, QLatin1String value)> callback);
+
+[[nodiscard]] Webview::ThemeParams WebViewParams();
 
 } // namespace Theme
 } // namespace Window

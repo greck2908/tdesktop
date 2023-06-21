@@ -16,6 +16,12 @@ enum class ReportSource {
 	Channel,
 	Group,
 	Bot,
+	ProfilePhoto,
+	ProfileVideo,
+	GroupPhoto,
+	GroupVideo,
+	ChannelPhoto,
+	ChannelVideo,
 };
 
 enum class ReportReason {
@@ -24,6 +30,9 @@ enum class ReportReason {
 	Violence,
 	ChildAbuse,
 	Pornography,
+	Copyright,
+	IllegalDrugs,
+	PersonalDetails,
 	Other,
 };
 

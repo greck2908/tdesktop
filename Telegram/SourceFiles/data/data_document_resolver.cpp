@@ -7,7 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_document_resolver.h"
 
-#include "facades.h"
+#include "base/options.h"
 #include "base/platform/base_platform_info.h"
 #include "ui/boxes/confirm_box.h"
 #include "core/application.h"
@@ -25,7 +25,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/platform_file_utilities.h"
 #include "ui/chat/chat_theme.h"
 #include "ui/text/text_utilities.h"
+#include "ui/widgets/checkbox.h"
 #include "window/window_session_controller.h"
+#include "boxes/abstract_box.h" // Ui::show().
+#include "styles/style_layers.h"
 
 #include <QtCore/QBuffer>
 #include <QtCore/QMimeType>
@@ -33,6 +36,37 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Data {
 namespace {
+
+base::options::toggle OptionExternalVideoPlayer({
+	.id = kOptionExternalVideoPlayer,
+	.name = "External video player",
+});
+
+void ConfirmDontWarnBox(
+		not_null<Ui::GenericBox*> box,
+		rpl::producer<TextWithEntities> &&text,
+		rpl::producer<QString> &&confirm,
+		Fn<void(bool)> callback) {
+	auto checkbox = object_ptr<Ui::Checkbox>(
+		box.get(),
+		tr::lng_launch_exe_dont_ask(),
+		false,
+		st::defaultBoxCheckbox);
+	const auto weak = Ui::MakeWeak(checkbox.data());
+	auto confirmed = crl::guard(weak, [=, callback = std::move(callback)] {
+		const auto checked = weak->checked();
+		box->closeBox();
+		callback(checked);
+	});
+	Ui::ConfirmBox(box, {
+		.text = std::move(text),
+		.confirmed = std::move(confirmed),
+		.confirmText = std::move(confirm),
+	});
+	auto padding = st::boxPadding;
+	padding.setTop(padding.bottom());
+	box->addRow(std::move(checkbox), std::move(padding));
+}
 
 void LaunchWithWarning(
 		// not_null<Window::Controller*> controller,
@@ -80,14 +114,16 @@ void LaunchWithWarning(
 			rpl::single(Ui::Text::Bold(extension)),
 			Ui::Text::WithEntities)
 		: tr::lng_launch_svg_warning(Ui::Text::WithEntities);
-	Ui::show(Box<Ui::ConfirmDontWarnBox>(
+	Ui::show(Box(
+		ConfirmDontWarnBox,
 		std::move(text),
-		tr::lng_launch_exe_dont_ask(tr::now),
 		(isExecutable ? tr::lng_launch_exe_sure : tr::lng_continue)(),
 		callback));
 }
 
 } // namespace
+
+const char kOptionExternalVideoPlayer[] = "external-video-player";
 
 QString FileExtension(const QString &filepath) {
 	const auto reversed = ranges::views::reverse(filepath);
@@ -124,14 +160,14 @@ bool IsExecutableName(const QString &filepath) {
 	static const auto kExtensions = [] {
 		const auto joined =
 #ifdef Q_OS_MAC
-			qsl("\
+			u"\
 applescript action app bin command csh osx workflow terminal url caction \
-mpkg pkg scpt scptd xhtm webarchive");
+mpkg pkg scpt scptd xhtm webarchive"_q;
 #elif defined Q_OS_UNIX // Q_OS_MAC
-			qsl("bin csh deb desktop ksh out pet pkg pup rpm run sh shar \
-slp zsh");
+			u"bin csh deb desktop ksh out pet pkg pup rpm run sh shar \
+slp zsh"_q;
 #else // Q_OS_MAC || Q_OS_UNIX
-			qsl("\
+			u"\
 ad ade adp app application appref-ms asp asx bas bat bin cab cdxml cer cfg \
 chi chm cmd cnt com cpl crt csh der diagcab dll drv eml exe fon fxp gadget \
 grp hlp hpj hta htt inf ini ins inx isp isu its jar jnlp job js jse key ksh \
@@ -142,7 +178,7 @@ php-s pht phtml pif pl plg pm pod prf prg ps1 ps2 ps1xml ps2xml psc1 psc2 \
 psd1 psm1 pssc pst py py3 pyc pyd pyi pyo pyw pywz pyz rb reg rgs scf scr \
 sct search-ms settingcontent-ms sh shb shs slk sys t tmp u3p url vb vbe vbp \
 vbs vbscript vdx vsmacros vsd vsdm vsdx vss vssm vssx vst vstm vstx vsw vsx \
-vtx website ws wsc wsf wsh xbap xll xnk xs");
+vtx website ws wsc wsf wsh xbap xll xnk xs"_q;
 #endif // !Q_OS_MAC && !Q_OS_UNIX
 		const auto list = joined.split(' ');
 		return base::flat_set<QString>(list.begin(), list.end());
@@ -155,7 +191,7 @@ vtx website ws wsc wsf wsh xbap xll xnk xs");
 
 bool IsIpRevealingName(const QString &filepath) {
 	static const auto kExtensions = [] {
-		const auto joined = u"htm html svg"_q;
+		const auto joined = u"htm html svg m4v m3u8"_q;
 		const auto list = joined.split(' ');
 		return base::flat_set<QString>(list.begin(), list.end());
 	}();
@@ -205,19 +241,20 @@ base::binary_guard ReadBackgroundImageAsync(
 void ResolveDocument(
 		Window::SessionController *controller,
 		not_null<DocumentData*> document,
-		HistoryItem *item) {
+		HistoryItem *item,
+		MsgId topicRootId) {
 	if (document->isNull()) {
 		return;
 	}
 	const auto msgId = item ? item->fullId() : FullMsgId();
 
 	const auto showDocument = [&] {
-		if (cUseExternalVideoPlayer()
+		if (OptionExternalVideoPlayer.value()
 			&& document->isVideoFile()
 			&& !document->filepath().isEmpty()) {
 			File::Launch(document->location(false).fname);
 		} else if (controller) {
-			controller->openDocument(document, msgId, true);
+			controller->openDocument(document, msgId, topicRootId, true);
 		}
 	};
 
@@ -257,10 +294,6 @@ void ResolveDocument(
 			|| document->isVoiceMessage()
 			|| document->isVideoMessage()) {
 			::Media::Player::instance()->playPause({ document, msgId });
-		} else if (item
-			&& document->isAnimation()
-			&& HistoryView::Gif::CanPlayInline(document)) {
-			document->owner().requestAnimationPlayInline(item);
 		} else {
 			showDocument();
 		}

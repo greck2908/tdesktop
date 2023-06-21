@@ -9,7 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "core/crash_reports.h"
 #include "core/update_checker.h"
-#include "webview/platform/linux/webview_linux_webkit2gtk.h"
+#include "webview/platform/linux/webview_linux_webkitgtk.h"
 
 #include <QtWidgets/QApplication>
 
@@ -46,15 +46,14 @@ private:
 } // namespace
 
 Launcher::Launcher(int argc, char *argv[])
-: Core::Launcher(argc, argv)
-, _arguments(argv, argv + argc) {
+: Core::Launcher(argc, argv) {
 }
 
 int Launcher::exec() {
-	for (auto i = begin(_arguments), e = end(_arguments); i != e; ++i) {
-		if (*i == "-webviewhelper" && std::distance(i, e) > 1) {
-			Webview::WebKit2Gtk::SetSocketPath(*(i + 1));
-			return Webview::WebKit2Gtk::Exec();
+	for (auto i = arguments().begin(), e = arguments().end(); i != e; ++i) {
+		if (*i == u"-webviewhelper"_q && std::distance(i, e) > 1) {
+			Webview::WebKitGTK::SetSocketPath((i + 1)->toStdString());
+			return Webview::WebKitGTK::Exec();
 		}
 	}
 
@@ -63,25 +62,6 @@ int Launcher::exec() {
 
 void Launcher::initHook() {
 	QApplication::setAttribute(Qt::AA_DisableSessionManager, true);
-	QApplication::setDesktopFileName([] {
-		if (!Core::UpdaterDisabled() && !cExeName().isEmpty()) {
-			const auto appimagePath = qsl("file://%1%2").arg(
-				cExeDir(),
-				cExeName()).toUtf8();
-
-			char md5Hash[33] = { 0 };
-			hashMd5Hex(
-				appimagePath.constData(),
-				appimagePath.size(),
-				md5Hash);
-
-			return qsl("appimagekit_%1-%2.desktop").arg(
-				md5Hash,
-				AppName.utf16().replace(' ', '_'));
-		}
-
-		return qsl(QT_STRINGIFY(TDESKTOP_LAUNCHER_BASENAME) ".desktop");
-	}());
 }
 
 bool Launcher::launchUpdater(UpdaterLaunch action) {
@@ -89,17 +69,23 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 		return false;
 	}
 
-	const auto binaryPath = (action == UpdaterLaunch::JustRelaunch)
-		? (cExeDir() + cExeName())
-		: (cWriteProtected()
-			? (cWorkingDir() + qsl("tupdates/temp/Updater"))
-			: (cExeDir() + qsl("Updater")));
+	const auto justRelaunch = action == UpdaterLaunch::JustRelaunch;
+	const auto writeProtectedUpdate = action == UpdaterLaunch::PerformUpdate
+		&& cWriteProtected();
+
+	const auto binaryPath = justRelaunch
+		? QFile::encodeName(cExeDir() + cExeName())
+		: QFile::encodeName(cWriteProtected()
+			? (cWorkingDir() + u"tupdates/temp/Updater"_q)
+			: (cExeDir() + u"Updater"_q));
 
 	auto argumentsList = Arguments();
-	if (action == UpdaterLaunch::PerformUpdate && cWriteProtected()) {
+	if (writeProtectedUpdate) {
 		argumentsList.push("pkexec");
 	}
-	argumentsList.push(QFile::encodeName(binaryPath));
+	argumentsList.push((justRelaunch && !arguments().isEmpty())
+		? QFile::encodeName(arguments().first())
+		: binaryPath);
 
 	if (cLaunchMode() == LaunchModeAutoStart) {
 		argumentsList.push("-autostart");
@@ -110,12 +96,12 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 	if (cStartInTray()) {
 		argumentsList.push("-startintray");
 	}
-	if (cDataFile() != qsl("data")) {
+	if (cDataFile() != u"data"_q) {
 		argumentsList.push("-key");
 		argumentsList.push(QFile::encodeName(cDataFile()));
 	}
 
-	if (action == UpdaterLaunch::JustRelaunch) {
+	if (justRelaunch) {
 		argumentsList.push("-noupdate");
 		argumentsList.push("-tosettings");
 		if (customWorkingDir()) {
@@ -129,6 +115,10 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 		argumentsList.push(QFile::encodeName(cExeName()));
 		argumentsList.push("-exepath");
 		argumentsList.push(QFile::encodeName(cExeDir()));
+		if (!arguments().isEmpty()) {
+			argumentsList.push("-argv0");
+			argumentsList.push(QFile::encodeName(arguments().first()));
+		}
 		if (customWorkingDir()) {
 			argumentsList.push("-workdir_custom");
 		}
@@ -145,11 +135,15 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 	pid_t pid = fork();
 	switch (pid) {
 	case -1: return false;
-	case 0: execvp(args[0], args); return false;
+	case 0:
+		execvp(
+			writeProtectedUpdate ? args[0] : binaryPath.constData(),
+			args);
+		return false;
 	}
 
 	// pkexec needs an alive parent
-	if (action == UpdaterLaunch::PerformUpdate && cWriteProtected()) {
+	if (writeProtectedUpdate) {
 		waitpid(pid, nullptr, 0);
 		// launch new version in the same environment
 		return launchUpdater(UpdaterLaunch::JustRelaunch);

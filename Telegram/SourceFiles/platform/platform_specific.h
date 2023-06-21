@@ -7,6 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+namespace Core {
+enum class QuitReason;
+} // namespace Core
+
 namespace Platform {
 
 void start();
@@ -41,11 +45,14 @@ void AutostartToggle(bool enabled, Fn<void(bool)> done = nullptr);
 bool TrayIconSupported();
 bool SkipTaskbarSupported();
 void WriteCrashDumpDetails();
+void NewVersionLaunched(int oldVersion);
+[[nodiscard]] QImage DefaultApplicationIcon();
+[[nodiscard]] bool PreventsQuit(Core::QuitReason reason);
+[[nodiscard]] QString ExecutablePathForShortcuts();
 
+#if QT_VERSION < QT_VERSION_CHECK(6, 5, 0)
 [[nodiscard]] std::optional<bool> IsDarkMode();
-[[nodiscard]] inline bool IsDarkModeSupported() {
-	return IsDarkMode().has_value();
-}
+#endif // Qt < 6.5.0
 
 namespace ThirdParty {
 
